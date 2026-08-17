@@ -18,23 +18,26 @@ import Utils
 
 private typealias Operation = GameModels.Operation
 
-private func device(_ code: String) -> Device {
+private func device(_ code: String, updatedAt: Date = Date(timeIntervalSince1970: 0)) -> Device {
     Device(
         deviceCode: code, deviceType: "transport_hauler", replicantCode: "R1",
         status: "idle", location: "SOL-3", locationName: nil, operationalCapacity: 100,
         queueSize: 0, stowedInDeviceCode: nil, controllerDeviceCode: nil,
         attachedToDeviceCode: nil, createdAt: Date(timeIntervalSince1970: 0),
         availableCommands: [], features: [], tags: [], detail: .object([:]),
-        updatedAt: Date(timeIntervalSince1970: 0), firstSeenAt: Date(timeIntervalSince1970: 0)
+        updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
     )
 }
 
-private func op(_ id: String, device: String, status: OperationStatus) -> Operation {
+private func op(
+    _ id: String, device: String, status: OperationStatus, directiveID: String? = nil
+) -> Operation {
     Operation(
         id: id, entityCode: device, kind: OperationKind.travel.rawValue,
         status: status, source: OperationSource.optimistic,
         startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
-        lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+        lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:]),
+        directiveID: directiveID
     )
 }
 
@@ -186,6 +189,58 @@ struct WorldSnapshotTests {
         }
         let world = try await WorldSnapshot.read(from: database, now: Date(timeIntervalSince1970: 0), directive: directive())
         #expect(world.openOperation(for: "VES1")?.id == "OP1")
+    }
+
+    /// A mission asking "is MY op open" must not read a co-tenant's job on the
+    /// same device as its own — the defect `RestockRun`/`EventCourierPrint`
+    /// still carry. A nil owner keeps `openOperation(for:)`'s old meaning.
+    @Test func openOperationWithOwnerFiltersByDirective() {
+        let world = WorldSnapshot(
+            devices: ["PRINTER": device("PRINTER")],
+            openOperations: ["PRINTER": op("OP1", device: "PRINTER", status: .active, directiveID: "OTHER")],
+            now: Date(timeIntervalSince1970: 0)
+        )
+        #expect(world.openOperation(for: "PRINTER", owner: "MINE") == nil)
+        #expect(world.openOperation(for: "PRINTER", owner: "OTHER") != nil)
+        #expect(world.openOperation(for: "PRINTER", owner: nil) != nil)
+    }
+
+    /// The one freshness predicate missions use from now on: a strict watermark
+    /// compare, nothing more.
+    @Test func isFreshComparesUpdatedAtToWatermark() {
+        let watermark = Date(timeIntervalSince1970: 1_000)
+        let world = WorldSnapshot(devices: [:], openOperations: [:], now: watermark)
+        let stale = device("D1", updatedAt: watermark.addingTimeInterval(-1))
+        let fresh = device("D1", updatedAt: watermark)
+        #expect(world.isFresh(stale, since: watermark) == false)
+        #expect(world.isFresh(fresh, since: watermark) == true)
+    }
+
+    /// `dispatchedOperations` reads `operations.directiveID` first, union the
+    /// legacy log join — a row from before that column existed is found only
+    /// through its own `.commandDispatched` entry.
+    @Test func dispatchedOperationsReadsTheOwnerColumn() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert { device("VES1") }.execute(db)
+            try Operation.insert {
+                op("OP-OWNED", device: "VES1", status: .completed, directiveID: "D1")
+            }.execute(db)
+            try Operation.insert {
+                op("OP-LEGACY", device: "VES1", status: .completed)
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "L1", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
+                    summary: "dispatched", step: nil, operationID: "OP-LEGACY", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: directive()
+        )
+        #expect(world.dispatchedOperations.keys.sorted() == ["OP-LEGACY", "OP-OWNED"])
     }
 
     /// An empty database is a valid snapshot, not an error — the engine starts

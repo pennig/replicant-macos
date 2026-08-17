@@ -67,6 +67,7 @@ import Testing
         "Add 'freighterCode' to 'directives'",
         "Add 'chosenOption' to locationEvents",
         "Add 'components' to blueprints",
+        "Add 'directiveID','step','paramsDigest' to 'operations'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

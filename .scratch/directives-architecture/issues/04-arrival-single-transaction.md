@@ -1,7 +1,7 @@
 # 04 — The arrival is one transaction; same-second tolerance
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 01
 Labels: directives-architecture, stage-0
 
@@ -31,7 +31,7 @@ Spec S0.3. `GameSync.deviceRoute` closes the op in one write (`Reconciler.comple
 
 ---
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```swift
 // ReconcilerDeviceEventTests.swift
@@ -57,7 +57,7 @@ Spec S0.3. `GameSync.deviceRoute` closes the op in one write (`Reconciler.comple
 
 Note the seed helper must write the `Device` and `Operation` rows through `Device.upsert`/`Operation.insert` in the test database (`GameDatabase.bootstrap()`), the pattern in `ReconcilerOperationTests.swift`.
 
-- [ ] **Step 2: Implement `applyDeviceEvent`**
+- [x] **Step 2: Implement `applyDeviceEvent`**
 
 One `database.write`:
 1. `completionPlan(for: event)` → if non-nil, run the body of `completeOpenOperation` (kind/skew guards intact) inline; remember `closed: Bool`.
@@ -67,10 +67,28 @@ One `database.write`:
 
 Keep `applyEventFields`' body but change ITS guard to the same 1 s tolerance and ITS stamp to `date.now` so the two paths agree (poll-path callers unaffected).
 
-- [ ] **Step 3: `deviceRoute` uses it**
+- [x] **Step 3: `deviceRoute` uses it**
 
 Replace the `applyOperationEvent` … `applyEventFields` pair with one `applyDeviceEvent(...)` call. The `print.completed` clone read and the post-close `.high` read remain, AFTER the call (ticket 08 moves them off the path).
 
-- [ ] **Step 4: Run `GameServicesTests` + `GameSyncTests` + `DirectiveEngineTests`; commit**
+- [x] **Step 4: Run `GameServicesTests` + `GameSyncTests` + `DirectiveEngineTests`; commit**
 
 `fix(sync): close the op and patch the row in one transaction`. Then write a memory note `app/.claude/memory/arrival-single-transaction.md` (+ index line) recording that the same-second drop is closed and WHY the op-closing patch is unconditional; update `confirm-steps-need-fresh-evidence.md`'s "still-unfixed door" sentence to point at it.
+
+## Comments
+
+Resolved 2026-08-16. Commits: `764f35f` (failing tests, RED — compile error,
+`applyDeviceEvent` not yet defined), `5a2bfe8` (implementation — `applyDeviceEvent`,
+`completionPlan`, `applyEventFields`'s 1s tolerance + `date.now` stamp,
+`deviceRoute` wired to the single call; all four new tests + the whole of
+`GameServicesTests`/`GameSyncTests`/`DirectiveEngineTests`/`GameModelsTests`/
+`DirectivesFeatureTests` green through the JSON event stream), and this
+bookkeeping commit (memory note + ticket status).
+
+Two `ReconcilerFieldApplicationTests` fixtures changed their expected
+`updatedAt` from the event's own timestamp to `date.now`, per the ticket's
+explicit stamp change (ambiguity 3 + step 2's last bullet) — not a tolerance
+side effect, a deliberate part of the fix. No other pre-existing test changed
+behavior. `check-comments.sh` exits 1 on the touched paths, but the four
+flagged lines are byte-identical pre-existing text I did not rewrite (verified
+against `HEAD`); my own new/rewritten comments are all within budget.

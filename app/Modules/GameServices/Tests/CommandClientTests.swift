@@ -45,6 +45,92 @@ private typealias Operation = GameModels.Operation
 
     // MARK: Tests
 
+    /// `dedupKey` is stable across field-assignment order and omits unset fields.
+    @Test func dedupKeyIsOrderIndependentAndOmitsNil() {
+        var a = CommandParams(); a.destination = "SOL"; a.quantity = 2
+        var b = CommandParams(); b.quantity = 2; b.destination = "SOL"
+        #expect(a.dedupKey == b.dedupKey)
+        var c = CommandParams(); c.destination = "SOL"
+        #expect(a.dedupKey != c.dedupKey)
+        #expect(!c.dedupKey.contains("quantity"), "an unset field must be absent, not null")
+    }
+
+    /// An immediate verb dispatched with an owner writes one terminal row
+    /// carrying the owner's `directiveID`/`step`, not just a tracked one.
+    @Test func immediateVerbWritesATerminalOwnedRow() async throws {
+        let database = try GameDatabase.bootstrap()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, #"{"status":"stowed"}"#) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
+        } operation: {
+            let owner = CommandOwner(directiveID: "D1", step: "stowing", since: .distantPast)
+            let outcome = await CommandClient.liveValue.dispatchOwned(
+                .stow, "RELAY1", CommandParams(target: "CARRIER"), owner
+            )
+            #expect(outcome == .accepted(operationID: nil))
+        }
+
+        let rows = try await database.read { db in
+            try Operation.where { $0.entityCode.eq("RELAY1") }.fetchAll(db)
+        }
+        #expect(rows.count == 1)
+        #expect(rows[0].status == OperationStatus.completed)
+        #expect(rows[0].directiveID == "D1" && rows[0].step == "stowing")
+        #expect(rows[0].kind == OperationKind.stow.rawValue)
+    }
+
+    /// A rejected immediate dispatch still writes its terminal row — `.rejected`,
+    /// carrying the server's message in `detail`.
+    @Test func immediateRejectionWritesARejectedRow() async throws {
+        let database = try GameDatabase.bootstrap()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = stubGameClient { _ in jsonResponse(400, #"{"error":"Device is busy"}"#) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "idle") }
+        } operation: {
+            let outcome = await CommandClient.liveValue.dispatch(.scan, "965AC2C3", CommandParams())
+            #expect(outcome == .rejected("Device is busy"))
+        }
+
+        let stored = try await op(database, device: "965AC2C3")
+        #expect(stored?.status == OperationStatus.rejected)
+        #expect(stored?.detail["message"]?.stringValue == "Device is busy")
+    }
+
+    /// A tracked dispatch's optimistic insert carries the owner through too.
+    @Test func trackedDispatchCarriesOwner() async throws {
+        let database = try GameDatabase.bootstrap()
+        let owner = CommandOwner(directiveID: "D1", step: "travelling", since: .distantPast)
+        let body = #"{"status":"travelling","arrives_at":"2026-06-26T01:00:00Z"}"#
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, body) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "travelling") }
+        } operation: {
+            _ = await CommandClient.liveValue.dispatchOwned(
+                .travel, "965AC2C3", CommandParams(destination: "SOL"), owner
+            )
+        }
+
+        let stored = try await op(database, device: "965AC2C3")
+        #expect(stored?.directiveID == "D1")
+        #expect(stored?.step == "travelling")
+        #expect(stored?.paramsDigest == CommandParams(destination: "SOL").dedupKey)
+    }
+
     /// A travel command whose 200 response carries `arrives_at` confirms the op
     /// active with a completion deadline, and takes the post-command device read.
     @Test func travelConfirmsActiveWithDeadline() async throws {
@@ -175,9 +261,10 @@ private typealias Operation = GameModels.Operation
         #expect(try await op(database, device: "32658E70") == nil)   // no op staged
     }
 
-    /// An immediate command (scan) creates no operation row but still takes the
-    /// one authoritative post-command device read.
-    @Test func immediateCommandCreatesNoOpButReads() async throws {
+    /// An immediate command (scan) writes a terminal completed row (no deadline,
+    /// no `completesAt`) and still takes the one authoritative post-command
+    /// device read.
+    @Test func immediateCommandWritesACompletedRowAndReads() async throws {
         let database = try GameDatabase.bootstrap()
         let readCount = LockIsolated(0)
 
@@ -196,7 +283,9 @@ private typealias Operation = GameModels.Operation
             #expect(outcome == .accepted(operationID: nil))
         }
 
-        #expect(try await op(database, device: "965AC2C3") == nil)   // no tracked op
+        let stored = try await op(database, device: "965AC2C3")
+        #expect(stored?.status == OperationStatus.completed)
+        #expect(stored?.kind == OperationKind.scan.rawValue)
         #expect(readCount.value == 1)
     }
 
@@ -259,7 +348,8 @@ private typealias Operation = GameModels.Operation
     }
 
     /// `retarget` is a mid-mining modifier — its valid `resource_type` builds the
-    /// body and it dispatches as immediate (no new op; the mining op continues).
+    /// body and it dispatches as immediate: no new TRACKED op (the mining op
+    /// continues), but its own terminal row lands.
     @Test func retargetIsImmediateWithResource() async throws {
         let database = try GameDatabase.bootstrap()
 
@@ -277,12 +367,14 @@ private typealias Operation = GameModels.Operation
             #expect(outcome == .accepted(operationID: nil))
         }
 
-        #expect(try await op(database, device: "32658E70") == nil)   // no tracked op
+        let stored = try await op(database, device: "32658E70")
+        #expect(stored?.status == OperationStatus.completed)
+        #expect(stored?.kind == OperationKind.retarget.rawValue)
     }
 
-    /// `set_directive` is a synchronous controller config change — its valid
-    /// `directive` builds the body and it dispatches as immediate (no tracked op;
-    /// the post-command read refreshes the controller's `ami_directive`).
+    /// `set_directive` is a synchronous controller config change — it
+    /// dispatches as immediate (a terminal row, no tracked op), and the
+    /// post-command read refreshes the controller's `ami_directive`.
     @Test func setDirectiveIsImmediateWithDirective() async throws {
         let database = try GameDatabase.bootstrap()
         let readCount = LockIsolated(0)
@@ -304,7 +396,9 @@ private typealias Operation = GameModels.Operation
             #expect(outcome == .accepted(operationID: nil))
         }
 
-        #expect(try await op(database, device: "E45C43AB") == nil)   // no tracked op
+        let stored = try await op(database, device: "E45C43AB")
+        #expect(stored?.status == OperationStatus.completed)
+        #expect(stored?.kind == OperationKind.setDirective.rawValue)
         #expect(readCount.value == 1)
     }
 
@@ -461,7 +555,9 @@ private typealias Operation = GameModels.Operation
         }
 
         #expect(devices.value == ["32658E70", "7C79FCE1"])
-        #expect(try await op(database, device: "18CA7C99") == nil)   // no tracked op
+        let stored = try await op(database, device: "18CA7C99")
+        #expect(stored?.status == OperationStatus.completed)
+        #expect(stored?.kind == OperationKind.adopt.rawValue)
         // The authoritative controller read, then a read of each device the
         // response's `adopted` block named (here just 32658E70).
         #expect(readCodes.value == ["18CA7C99", "32658E70"])
@@ -503,7 +599,9 @@ private typealias Operation = GameModels.Operation
 
         #expect(command.value == "release")
         #expect(devices.value == ["CAA6D3EE"])
-        #expect(try await op(database, device: "E45C43AB") == nil)   // no tracked op
+        let stored = try await op(database, device: "E45C43AB")
+        #expect(stored?.status == OperationStatus.completed)
+        #expect(stored?.kind == OperationKind.release.rawValue)
     }
 
     /// `adopt` with no devices fails before any request is sent.
@@ -559,7 +657,9 @@ private typealias Operation = GameModels.Operation
 
         #expect(command.value == "dequeue_print")
         #expect(index.value == 2)
-        #expect(try await op(database, device: "965AC2C3") == nil)   // no tracked op
+        let stored = try await op(database, device: "965AC2C3")
+        #expect(stored?.status == OperationStatus.completed)
+        #expect(stored?.kind == OperationKind.dequeuePrint.rawValue)
     }
 
     /// `dequeue_print` with no index fails before any request is sent.
@@ -634,7 +734,9 @@ private typealias Operation = GameModels.Operation
         #expect(body?["command"]?.stringValue == "collect_resources")
         #expect(body?["resources"]?["structural"]?.numberValue == 30)
         #expect(body?["resources"]?["carbon"]?.numberValue == 20)
-        #expect(try await op(database, device: "51910407") == nil)   // no tracked op
+        let stored = try await op(database, device: "51910407")
+        #expect(stored?.status == OperationStatus.completed)
+        #expect(stored?.kind == OperationKind.collectResources.rawValue)
         #expect(readCount.value == 1)                                // one authoritative read
     }
 
@@ -686,7 +788,9 @@ private typealias Operation = GameModels.Operation
         let body = captured.value
         #expect(body?["command"]?.stringValue == "deposit_resources")
         #expect(body?["resources"] == nil)   // omitted → empty the whole hold
-        #expect(try await op(database, device: "51910407") == nil)   // no tracked op
+        let stored = try await op(database, device: "51910407")
+        #expect(stored?.status == OperationStatus.completed)
+        #expect(stored?.kind == OperationKind.depositResources.rawValue)
     }
 
     /// Regression for the `DeviceCommandResponseSchema` `additionalProperties:false`

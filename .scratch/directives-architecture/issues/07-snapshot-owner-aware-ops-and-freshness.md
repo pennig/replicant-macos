@@ -1,7 +1,7 @@
 # 07 — `WorldSnapshot` owner-aware ops + `isFresh`; fix the two open co-tenant print guards
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 02
 Labels: directives-architecture, stage-0
 
@@ -59,6 +59,25 @@ Extend `RelayReturnAndRestockTests`: with a co-tenant op open on the hub owned b
 
 Mechanical: every `device.updatedAt >= directive.stepStartedAt` / `< stepStartedAt` compare in `DirectiveEngine/Sources` becomes `world.isFresh(device, since: directive.stepStartedAt)` / `!isFresh`. LSP-find them (`updatedAt` references in the module). Do NOT change any compare against `world.now - interval` (those are age gates, not watermarks). Behaviour identical; this is what lets Stage 2's `ConfirmRow` sub-machine be a one-line replacement later.
 
-- [ ] **Step 5: Run `DirectiveEngineTests` in full; commit**
+- [x] **Step 5: Run `DirectiveEngineTests` in full; commit**
 
 `feat(engine): owner-aware open ops, isFresh, and the last two co-tenant print guards`. Close automation-brain ticket 14 (`RestockRun` over-print race) with a comment pointing here.
+
+## Comments
+
+Landed as three commits (small pieces, per the task's interruption-safety
+instruction) rather than one: `6e9d027` (steps 1–2, `WorldSnapshot`),
+`c5c2d3f` (step 3, the two guards), `053b9a4` (step 4, the 13-site `isFresh`
+migration). This bookkeeping commit closes out step 5 under the ticket's own
+named message.
+
+All five targets green through the JSON event stream: DirectiveEngineTests
+1408/1408 (1399 baseline + 9 new), GameServicesTests 280/280, GameSyncTests
+65/65, DirectivesFeatureTests 260/260, GameModelsTests 119/119.
+
+Automation-brain ticket 14 found OPEN (`Status: needs-triage`), not closed or
+absent. Added a comment there rather than marking it resolved: this ticket's
+guard fix (owner-scoping + deadline-above-guard in `RestockRun.printing`) is a
+different defect from ticket 14's over-print race (a printed clone's device
+row racing its op's close), and the race ticket 14 describes is still open —
+see the comment on that ticket for the full account.

@@ -42,6 +42,12 @@ public struct Operation: Identifiable, Equatable, Sendable {
     /// Command params and result (e.g. travel `destination`, print
     /// `new_device_code`), kept loosely typed since they vary by kind.
     @Column(as: JSONValue.JSONRepresentation.self) public var detail: JSONValue
+    /// The dispatching directive, if any — nil for a manually-issued command.
+    public var directiveID: String?
+    /// The directive's step at dispatch time.
+    public var step: String?
+    /// `CommandParams.dedupKey` at dispatch time, for de-dup lookups.
+    public var paramsDigest: String?
 
     public init(
         id: String,
@@ -52,7 +58,10 @@ public struct Operation: Identifiable, Equatable, Sendable {
         startedAt: Date,
         completesAt: Date?,
         lastConfirmedAt: Date,
-        detail: JSONValue
+        detail: JSONValue,
+        directiveID: String? = nil,
+        step: String? = nil,
+        paramsDigest: String? = nil
     ) {
         self.id = id
         self.entityCode = entityCode
@@ -63,6 +72,9 @@ public struct Operation: Identifiable, Equatable, Sendable {
         self.completesAt = completesAt
         self.lastConfirmedAt = lastConfirmedAt
         self.detail = detail
+        self.directiveID = directiveID
+        self.step = step
+        self.paramsDigest = paramsDigest
     }
 }
 
@@ -275,5 +287,13 @@ extension Operation {
             """
         )
         .execute(db)
+    }
+
+    /// Appended, never folded into `createOperations`: that one has shipped.
+    public static let addOwnerColumns = SchemaMigration("Add 'directiveID','step','paramsDigest' to 'operations'") { db in
+        try #sql(#"ALTER TABLE "operations" ADD COLUMN "directiveID" TEXT"#).execute(db)
+        try #sql(#"ALTER TABLE "operations" ADD COLUMN "step" TEXT"#).execute(db)
+        try #sql(#"ALTER TABLE "operations" ADD COLUMN "paramsDigest" TEXT"#).execute(db)
+        try #sql(#"CREATE INDEX "operation_by_directive" ON "operations" ("directiveID", "startedAt")"#).execute(db)
     }
 }

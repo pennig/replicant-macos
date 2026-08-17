@@ -655,7 +655,7 @@ public struct RelayRun: MissionStepMachine {
     private func carrierRetainsAuthority(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
-        if carrier.updatedAt < directive.stepStartedAt
+        if !world.isFresh(carrier, since: directive.stepStartedAt)
             || world.now.timeIntervalSince(carrier.updatedAt) > Self.reclaimFreshness {
             return .refreshDevices(deviceCodes: [carrier.deviceCode], thenStall: .unreachableDevice)
         }
@@ -758,18 +758,22 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// Wait, buy a bounded number of refreshes, then stall — for a `target` whose
-    /// catalogue blob is not cached. `.wait` is the only action leaving
-    /// `stepStartedAt` alone, so refreshing on every pass would reset the clock the
-    /// backstop measures from.
+    /// Wait out `SalvageRun.systemResolutionDeadline`, spend `.refreshSystem`
+    /// in the following `unresolvedReadBand`, wait out the rest of
+    /// `systemUnresolvedRetryWindow`, then stall — for an uncached `target`.
     private func unresolvedSystem(
         _ directive: Directive, _ world: WorldSnapshot, target: String
     ) -> MissionAction {
-        if world.now.timeIntervalSince(directive.stepStartedAt) <= SalvageRun.systemResolutionDeadline {
+        let sinceDeadline = world.now.timeIntervalSince(directive.stepStartedAt)
+            - SalvageRun.systemResolutionDeadline
+        if sinceDeadline <= 0 {
             return .wait
         }
-        if SalvageRun.stepEntryCount(directive, world) <= SalvageRun.systemRefreshAttempts {
+        if sinceDeadline <= SalvageRun.unresolvedReadBand {
             return .refreshSystem(designation: target, nextStep: directive.step)
+        }
+        if sinceDeadline <= SalvageRun.systemUnresolvedRetryWindow {
+            return .wait
         }
         return .stall(.salvageSystemUnresolved)
     }

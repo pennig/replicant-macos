@@ -6,7 +6,7 @@ import Testing
         let retry: [DirectiveAttentionReason] = [
             .surveyIncomplete, .unreachableDevice, .vesselPositionUnconfirmed,
             .salvageSystemUnresolved, .salvageBodyNotDepleted, .commandRejected,
-            .relayActivationFailed, .printStockShort,
+            .commandFailed, .relayActivationFailed, .printStockShort,
         ]
         for r in retry { #expect(r.brainDisposition == .retry, "\(r) should be retry") }
     }

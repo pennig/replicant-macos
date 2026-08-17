@@ -2,27 +2,12 @@
 //  StalenessTracker.swift
 //  Replicould — GameServices (shared clients + command engine)
 //
-//  The device-side half of the V3.5 staleness model. Today's event policy was
-//  binary — read-now or forget — so every thin device event paid an immediate
-//  (if TTL'd) read, catch-up replays paid full price, and a suppressed refresh
-//  was forgotten rather than remembered. This actor is the memory: the device
-//  route *marks* a device stale (free), and the marks are spent as reads only
-//  where they matter —
-//
-//    • a visible (inspected) device drains promptly, so the on-screen row keeps
-//      its live feel;
-//    • op-holding devices drain on the slow loop, so an operation's row can't
-//      quietly rot between deadline confirmations;
-//    • everything else stays marked at zero cost until it's actually looked at
-//      (`refreshIfStale`, wired to the inspector's selection path).
-//
-//  Draining goes through `deviceRefresher.refresh(_, .low)`, so the
-//  coordinator's coalescing, TTL, and budget floor all still apply — a mark is
-//  cleared only when a read actually landed, and a deferred read simply keeps
-//  its mark for the next pass. Exposed via `@Dependency(\.deviceStaleness)`
-//  over one process-shared instance; the sync engine starts/stops the drain
-//  loop with the session.
-//
+//  The device-side staleness model: a device event marks a code stale (free,
+//  no read) rather than reading immediately, and the mark is spent later —
+//  promptly if visible, on the slow loop if op-holding, or when actually
+//  looked at. An urgent mark (a closed live op, or a print's brand-new clone
+//  code) jumps ahead of those tiers at `.high` priority, capped per pass so a
+//  burst can't spike the read budget.
 
 import Dependencies
 import Foundation
@@ -47,7 +32,19 @@ public actor StalenessTracker {
         /// for a mark whose device can't be read (destroyed/traded away), so
         /// it can't hog the tier's single slot every pass.
         var lastAgedAttemptAt: Date?
+        /// When the urgent tier last spent a read on this mark — the same
+        /// pacing, for the tier that skips the coordinator's TTL and floor.
+        var lastUrgentAttemptAt: Date?
+        /// Urgent reads spent on this mark. Never reset: a satisfied mark is
+        /// dropped whole, so a surviving count is a count of reads that did
+        /// not land, and `urgentAttemptLimit` demotes on it.
+        var urgentAttempts: Int = 0
         var reason: String
+        /// Whether this mark drains through the urgent tier (`.high`, ahead of
+        /// visible/op-holding/aged) or the ordinary ones.
+        var tier: Tier = .ordinary
+
+        enum Tier: Sendable { case ordinary, urgent }
     }
 
     private var stale: [String: Mark] = [:]
@@ -64,6 +61,13 @@ public actor StalenessTracker {
     /// over passes instead of spiking (each read is additionally TTL/budget
     /// guarded by the coordinator).
     private let maxPerPass: Int
+    /// Cap on urgent-tier reads per pass, within `maxPerPass` — so an urgent
+    /// burst still leaves the ordinary tiers some room rather than starving
+    /// them outright.
+    private let urgentPerPass: Int
+    /// Slots of `maxPerPass` the urgent tier may never claim, so marks whose
+    /// urgent read cannot land can slow the ordinary tiers but never stop them.
+    private let reservedOrdinarySlots = 1
     /// Minimum age before a hidden, op-less mark qualifies for the slow drain
     /// tier (see `drainPass`).
     private let hiddenMarkDrainAge: TimeInterval
@@ -71,17 +75,31 @@ public actor StalenessTracker {
     /// unreadable device can't monopolize the tier (other aged marks take the
     /// slot in between).
     private let agedRetryBackoff: TimeInterval
+    /// Minimum spacing between urgent attempts for the SAME mark. The urgent
+    /// tier bypasses the coordinator's TTL and budget floor, so this — not the
+    /// drain cadence — is what bounds an unreadable code's `.high` read rate.
+    private let urgentRetryBackoff: TimeInterval
+    /// Urgent attempts a mark gets before it is demoted to `.ordinary`. A read
+    /// that has failed this often is not going to land, and the ordinary tiers
+    /// carry the throttles the urgent one skips.
+    private let urgentAttemptLimit: Int
 
     public init(
         drainInterval: Duration = .seconds(5),
         maxPerPass: Int = 4,
+        urgentPerPass: Int = 4,
         hiddenMarkDrainAge: TimeInterval = 30,
-        agedRetryBackoff: TimeInterval = 60
+        agedRetryBackoff: TimeInterval = 60,
+        urgentRetryBackoff: TimeInterval = 15,
+        urgentAttemptLimit: Int = 3
     ) {
         self.drainInterval = drainInterval
         self.maxPerPass = maxPerPass
+        self.urgentPerPass = urgentPerPass
         self.hiddenMarkDrainAge = hiddenMarkDrainAge
         self.agedRetryBackoff = agedRetryBackoff
+        self.urgentRetryBackoff = urgentRetryBackoff
+        self.urgentAttemptLimit = urgentAttemptLimit
     }
 
     /// Remember that `deviceCode`'s row may be stale. Free — no read happens
@@ -100,12 +118,44 @@ public actor StalenessTracker {
             mark.reason = reason
             stale[deviceCode] = mark
         } else {
-            stale[deviceCode] = Mark(firstMarkedAt: now, markedAt: now, lastAgedAttemptAt: nil, reason: reason)
+            stale[deviceCode] = Mark(
+                firstMarkedAt: now, markedAt: now, lastAgedAttemptAt: nil,
+                lastUrgentAttemptAt: nil, reason: reason
+            )
         }
         logger.debug("marked \(deviceCode, privacy: .public) stale (\(reason, privacy: .public))")
         if visible.contains(deviceCode) {
             drainSoon()
         }
+    }
+
+    /// Mark `deviceCode` urgent: ahead of the ordinary tiers, capped at
+    /// `urgentPerPass`, drained at `.high` priority — promptly if visible,
+    /// otherwise on the next periodic pass. Promotes an existing mark.
+    public func markUrgent(_ deviceCode: String, _ reason: String) {
+        @Dependency(\.date) var date
+        let now = date.now
+        if var mark = stale[deviceCode] {
+            mark.markedAt = now
+            mark.reason = reason
+            mark.tier = .urgent
+            stale[deviceCode] = mark
+        } else {
+            stale[deviceCode] = Mark(
+                firstMarkedAt: now, markedAt: now, lastAgedAttemptAt: nil,
+                lastUrgentAttemptAt: nil, reason: reason, tier: .urgent
+            )
+        }
+        logger.debug("marked \(deviceCode, privacy: .public) urgent (\(reason, privacy: .public))")
+        if visible.contains(deviceCode) {
+            drainSoon()
+        }
+    }
+
+    /// Mark `deviceCode` urgent for a code with no local `Device` row (a
+    /// print's new clone) — the drain reads it in through the same tier.
+    public func markNew(_ deviceCode: String) {
+        markUrgent(deviceCode, "print.completed")
     }
 
     /// Forget marks for devices that left the fleet (called alongside
@@ -143,7 +193,7 @@ public actor StalenessTracker {
     /// for "the user is looking at this row". No mark → no read.
     public func refreshIfStale(_ deviceCode: String) async {
         guard stale[deviceCode] != nil else { return }
-        await drain([deviceCode])
+        await drain([deviceCode], priority: .low)
     }
 
     /// Start the periodic drain loop. Idempotent, and refuses a cancelled
@@ -174,77 +224,100 @@ public actor StalenessTracker {
         visible.removeAll()
     }
 
-    /// One drain pass: spend marks as low-priority reads for the candidates
-    /// that matter now — visible first, then op-holding — FIFO within each
-    /// group, capped per pass. Non-visible devices holding no operation drain
-    /// on a deliberately slow third tier: at most ONE sufficiently aged mark
-    /// per pass, so a hidden device's one-shot transition (a server-driven
-    /// re-task with no follow-up event) still converges eventually without a
-    /// burst of hidden events ever competing with the budget. Fresh hidden
-    /// marks cost nothing.
+    /// One drain pass: urgent marks first (`.high`, capped `urgentPerPass`),
+    /// then visible, then op-holding — FIFO within each tier, all under
+    /// `maxPerPass`; a hidden idle mark fills any leftover slot once aged.
     func drainPass() async {
         guard !stale.isEmpty else { return }
+        @Dependency(\.date) var date
+        let now = date.now
 
-        let visibleCandidates = stale
-            .filter { visible.contains($0.key) }
-            .sorted { $0.value.markedAt < $1.value.markedAt }
-            .map(\.key)
-
-        // Devices with an open operation: their activity row is live UI
-        // (progress, deadline) wherever it appears, so a stale mark there is
-        // worth a budgeted read even off-screen.
-        @Dependency(\.defaultDatabase) var database
-        let opCodes: Set<String> = await {
-            let open = (try? await database.read { db in
-                try Operation
-                    .where { $0.status.in(OperationStatus.liveCases) }
-                    .select(\.entityCode)
-                    .fetchAll(db)
-            }) ?? []
-            return Set(open)
-        }()
-        let opHolding = stale
-            .filter { opCodes.contains($0.key) && !visible.contains($0.key) }
-            .sorted { $0.value.markedAt < $1.value.markedAt }
-            .map(\.key)
-
-        var candidates = Array((visibleCandidates + opHolding).prefix(maxPerPass))
-
-        // Slow tier: the single oldest hidden idle mark past the age gate
-        // (first-marked, NOT last-marked — a busy device must still age in)
-        // that hasn't been attempted within the retry backoff (an unreadable
-        // device's mark yields the slot to the next-oldest between attempts).
-        if candidates.count < maxPerPass {
-            @Dependency(\.date) var date
-            let now = date.now
-            let aged = stale
-                .filter { !visible.contains($0.key) && !opCodes.contains($0.key) }
-                .filter { now.timeIntervalSince($0.value.firstMarkedAt) >= hiddenMarkDrainAge }
+        // `max(1, …)` keeps the urgent tier alive on a one-slot pass, where
+        // there is no room to reserve and still read anything urgently.
+        let urgentCap = min(urgentPerPass, max(1, maxPerPass - reservedOrdinarySlots))
+        let urgentCandidates = Array(
+            stale
+                .filter { $0.value.tier == .urgent }
                 .filter { entry in
-                    entry.value.lastAgedAttemptAt.map { now.timeIntervalSince($0) >= agedRetryBackoff } ?? true
+                    entry.value.lastUrgentAttemptAt.map { now.timeIntervalSince($0) >= urgentRetryBackoff } ?? true
                 }
-                .min { $0.value.firstMarkedAt < $1.value.firstMarkedAt }
-            if let aged {
-                stale[aged.key]?.lastAgedAttemptAt = now
-                candidates.append(aged.key)
+                .sorted { $0.value.markedAt < $1.value.markedAt }
+                .map(\.key)
+                .prefix(urgentCap)
+        )
+        let ordinaryBudget = maxPerPass - urgentCandidates.count
+
+        var ordinaryCandidates: [String] = []
+        if ordinaryBudget > 0 {
+            let visibleCandidates = stale
+                .filter { $0.value.tier == .ordinary && visible.contains($0.key) }
+                .sorted { $0.value.markedAt < $1.value.markedAt }
+                .map(\.key)
+
+            // Devices with an open operation: their activity row is live UI
+            // (progress, deadline) wherever it appears, so a stale mark there is
+            // worth a budgeted read even off-screen.
+            @Dependency(\.defaultDatabase) var database
+            let opCodes: Set<String> = await {
+                let open = (try? await database.read { db in
+                    try Operation
+                        .where { $0.status.in(OperationStatus.liveCases) }
+                        .select(\.entityCode)
+                        .fetchAll(db)
+                }) ?? []
+                return Set(open)
+            }()
+            let opHolding = stale
+                .filter { $0.value.tier == .ordinary && opCodes.contains($0.key) && !visible.contains($0.key) }
+                .sorted { $0.value.markedAt < $1.value.markedAt }
+                .map(\.key)
+
+            ordinaryCandidates = Array((visibleCandidates + opHolding).prefix(ordinaryBudget))
+
+            // Slow tier: the single oldest hidden idle mark past the age gate
+            // (first-marked, NOT last-marked — a busy device must still age in)
+            // that hasn't been attempted within the retry backoff (an unreadable
+            // device's mark yields the slot to the next-oldest between attempts).
+            if ordinaryCandidates.count < ordinaryBudget {
+                let aged = stale
+                    .filter { $0.value.tier == .ordinary && !visible.contains($0.key) && !opCodes.contains($0.key) }
+                    .filter { now.timeIntervalSince($0.value.firstMarkedAt) >= hiddenMarkDrainAge }
+                    .filter { entry in
+                        entry.value.lastAgedAttemptAt.map { now.timeIntervalSince($0) >= agedRetryBackoff } ?? true
+                    }
+                    .min { $0.value.firstMarkedAt < $1.value.firstMarkedAt }
+                if let aged {
+                    stale[aged.key]?.lastAgedAttemptAt = now
+                    ordinaryCandidates.append(aged.key)
+                }
             }
         }
 
-        guard !candidates.isEmpty else { return }
-        await drain(candidates)
+        // Stamped after both tiers are chosen, so a mark demoted by this pass
+        // waits for the next one rather than being read twice in this one.
+        for code in urgentCandidates {
+            guard var mark = stale[code] else { continue }
+            mark.lastUrgentAttemptAt = now
+            mark.urgentAttempts += 1
+            if mark.urgentAttempts >= urgentAttemptLimit { mark.tier = .ordinary }
+            stale[code] = mark
+        }
+
+        guard !urgentCandidates.isEmpty || !ordinaryCandidates.isEmpty else { return }
+        if !urgentCandidates.isEmpty { await drain(urgentCandidates, priority: .high) }
+        if !ordinaryCandidates.isEmpty { await drain(ordinaryCandidates, priority: .low) }
     }
 
-    /// Refresh each candidate through the coordinator. Marks are spent by
-    /// `Reconciler.ingest` → `markSatisfied` when a read actually lands, so a
-    /// suppressed/deferred/failed read keeps its mark for a later pass with no
-    /// bookkeeping here.
-    private func drain(_ deviceCodes: [String]) async {
+    /// Refresh each candidate through the coordinator at the given priority.
+    /// Marks are spent by `Reconciler.ingest` → `markSatisfied` when a read
+    /// lands, so a suppressed/deferred/failed read just keeps its mark.
+    private func drain(_ deviceCodes: [String], priority: RefreshPriority) async {
         @Dependency(\.deviceRefresher) var deviceRefresher
         let entryGeneration = generation
         for code in deviceCodes {
             // A logout (stopDraining) between reads must not keep spending.
             guard generation == entryGeneration else { return }
-            _ = await deviceRefresher.refresh(code, .low)
+            _ = await deviceRefresher.refresh(code, priority)
         }
     }
 
@@ -264,6 +337,12 @@ private typealias Operation = GameModels.Operation
 public struct DeviceStalenessClient: Sendable {
     /// Remember that a device's row may be stale (free; spent later).
     public var markStale: @Sendable (_ deviceCode: String, _ reason: String) async -> Void
+    /// Mark a code urgent — ahead of the ordinary tiers, capped, drained at
+    /// `.high` priority.
+    public var markUrgent: @Sendable (_ deviceCode: String, _ reason: String) async -> Void
+    /// Mark a code with no local `Device` row urgent (a print's new clone) so
+    /// the drain still reads it in.
+    public var markNew: @Sendable (_ deviceCode: String) async -> Void
     /// A successful authoritative snapshot issued at the given time landed —
     /// spend the mark if the read postdates it (called by `Reconciler.ingest`).
     public var markSatisfied: @Sendable (_ deviceCode: String, _ issuedAt: Date) async -> Void
@@ -287,6 +366,8 @@ extension DeviceStalenessClient: DependencyKey {
         let tracker = StalenessTracker()
         return DeviceStalenessClient(
             markStale: { await tracker.markStale($0, reason: $1) },
+            markUrgent: { await tracker.markUrgent($0, $1) },
+            markNew: { await tracker.markNew($0) },
             markSatisfied: { await tracker.markSatisfied($0, asOf: $1) },
             forget: { await tracker.forget($0) },
             setVisible: { await tracker.setVisible($0) },
@@ -302,6 +383,8 @@ extension DeviceStalenessClient: TestDependencyKey {
     /// that never touch staleness shouldn't have to stub it.
     public static let testValue = DeviceStalenessClient(
         markStale: { _, _ in },
+        markUrgent: { _, _ in },
+        markNew: { _ in },
         markSatisfied: { _, _ in },
         forget: { _ in },
         setVisible: { _ in },

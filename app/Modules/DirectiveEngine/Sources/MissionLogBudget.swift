@@ -102,7 +102,7 @@ public enum MissionConfirm {
         if world.now.timeIntervalSince(directive.stepStartedAt) > deadline {
             return .refreshDevices(deviceCodes: codes, thenStall: thenStall)
         }
-        guard rows.contains(where: { $0.updatedAt < directive.stepStartedAt }) else { return .wait }
+        guard rows.contains(where: { !world.isFresh($0, since: directive.stepStartedAt) }) else { return .wait }
         let lastLook = rows.map(\.updatedAt).min() ?? .distantPast
         if world.now.timeIntervalSince(lastLook) > readInterval {
             return .refreshDevices(deviceCodes: codes, thenStall: nil)

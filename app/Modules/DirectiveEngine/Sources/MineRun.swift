@@ -363,7 +363,7 @@ public struct MineRun: MissionStepMachine {
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
         guard let belt = Self.targetBelt(of: directive) else { return .stall(.unreachableDevice) }
-        if carrier.updatedAt >= directive.stepStartedAt, carrier.location == belt {
+        if world.isFresh(carrier, since: directive.stepStartedAt), carrier.location == belt {
             return .advanceStep(nextStep: Step.detaching)
         }
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
@@ -397,7 +397,7 @@ public struct MineRun: MissionStepMachine {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
         let landed = roster.allSatisfy {
-            $0.updatedAt >= directive.stepStartedAt
+            world.isFresh($0, since: directive.stepStartedAt)
                 && $0.attachedToDeviceCode == nil && $0.location == belt
         }
         if landed { return .advanceStep(nextStep: Step.adopting) }

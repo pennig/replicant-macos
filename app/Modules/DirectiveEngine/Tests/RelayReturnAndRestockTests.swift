@@ -125,10 +125,13 @@ private func world(
     )
 }
 
-private func openOp(_ entity: String, kind: OperationKind) -> [String: GameModels.Operation] {
+private func openOp(
+    _ entity: String, kind: OperationKind, directiveID: String? = nil
+) -> [String: GameModels.Operation] {
     [entity: GameModels.Operation(
         id: "OP-1", entityCode: entity, kind: kind.rawValue, status: .active,
-        source: .poll, startedAt: now, completesAt: nil, lastConfirmedAt: now, detail: .object([:])
+        source: .poll, startedAt: now, completesAt: nil, lastConfirmedAt: now, detail: .object([:]),
+        directiveID: directiveID
     )]
 }
 
@@ -575,6 +578,52 @@ struct RestockRunTests {
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
                 == .advanceStep(nextStep: RestockRun.Step.stocking))
     }
+
+    /// Owner-scoped: a co-tenant's print at the hub is invisible to this
+    /// guard, so it must never block starting this run's own.
+    @Test("a co-tenant's print at the hub does not block starting our own")
+    func coTenantPrintDoesNotBlockDispatch() {
+        let directive = restockRun(targets: ["VEGA", "ALTAIR"])
+        let snapshot = world(
+            devices: [hub(), liveRelay("REL0", at: hubLocation)],
+            openOperations: openOp("AF1", kind: .print, directiveID: "OTHER")
+        )
+
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .dispatch(
+            kind: .print, deviceCode: "AF1",
+            params: CommandParams(deviceType: RelayRun.relayDeviceType),
+            nextStep: RestockRun.Step.printing
+        ))
+    }
+
+    /// Our own print, correctly identified as ours through the owner scope,
+    /// still holds the step — owner-scoping must not make the guard toothless.
+    @Test("waiting on the clone holds while OUR OWN print op is open")
+    func printingWaitsOnOwnOp() {
+        let directive = restockRun(step: RestockRun.Step.printing, targets: ["VEGA"])
+        let snapshot = world(
+            devices: [hub(), liveRelay("REL0", at: hubLocation)],
+            openOperations: openOp("AF1", kind: .print, directiveID: directive.id)
+        )
+
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
+    /// **The load-bearing case.** A co-tenant's op standing open at the hub
+    /// must never extend OUR deadline — checking the deadline above the guard
+    /// is what makes that true regardless of who else holds the bench.
+    @Test("a co-tenant's print past the deadline does not extend the wait")
+    func coTenantPrintDoesNotExtendDeadline() {
+        let stale = now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+        let directive = restockRun(step: RestockRun.Step.printing, targets: ["VEGA"], stepStartedAt: stale)
+        let snapshot = world(
+            devices: [hub(), liveRelay("REL0", at: hubLocation)],
+            openOperations: openOp("AF1", kind: .print, directiveID: "OTHER")
+        )
+
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: RestockRun.Step.stocking))
+    }
 }
 
 // MARK: - Restock through the real engine
@@ -680,10 +729,12 @@ struct RestockEngineTests {
             }()
             $0.commandClient = {
                 var client = CommandClient.testValue
-                client.dispatch = { kind, deviceCode, _ in
+                let body: @Sendable (OperationKind, String, CommandParams) async -> CommandOutcome = { kind, deviceCode, _ in
                     printed.withValue { $0.append("\(kind.rawValue)→\(deviceCode)") }
                     return .accepted(operationID: "OP-1")
                 }
+                client.dispatch = body
+                client.dispatchOwned = { kind, deviceCode, params, _ in await body(kind, deviceCode, params) }
                 return client
             }()
             // The real `refreshFootprint()` persistence runs on top of this, so

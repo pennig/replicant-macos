@@ -106,6 +106,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     case launchDeployedNothing
     /// The server rejected the step's command.
     case commandRejected
+    /// A transport error or an undeclared HTTP status kept the last command
+    /// from landing, and the bounded in-step retry ran out.
+    case commandFailed
     /// No AMI mining controller is stowed aboard the vessel. Staging is the
     /// player's job — a Salvage Run uses what is already aboard and adopted.
     case noMiningControllerAboard
@@ -192,6 +195,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .dronesNotRecovered: "Drones not recovered"
         case .launchDeployedNothing: "Launch deployed nothing"
         case .commandRejected: "Command rejected"
+        case .commandFailed: "Command failed"
         case .noMiningControllerAboard: "No mining controller aboard"
         case .noMiningDroneAboard: "No mining drone aboard"
         case .awaitingRelayRestock: "Out of FTL relays"
@@ -241,6 +245,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The controller launched but deployed no drones — check that its adopted drones are stowed aboard the vessel, then retry."
         case .commandRejected:
             "The server refused the last command. Check the device, then retry or skip this target."
+        case .commandFailed:
+            "The server or the connection failed while sending the last command, and the engine has stopped retrying it. Retry once the service is reachable, or skip this target."
         case .noMiningControllerAboard:
             "Stow an AMI mining controller aboard the vessel, then retry."
         case .noMiningDroneAboard:
@@ -305,8 +311,8 @@ public extension DirectiveAttentionReason {
         switch self {
         case .surveyIncomplete, .unreachableDevice, .vesselPositionUnconfirmed,
              .salvageSystemUnresolved, .salvageBodyNotDepleted, .commandRejected,
-             .relayActivationFailed, .printStockShort, .eventCommitRejected,
-             .printBlockedOnComponents:
+             .commandFailed, .relayActivationFailed, .printStockShort,
+             .eventCommitRejected, .printBlockedOnComponents:
             return .retry
         case .noSurveyControllerAboard, .noSurveyDroneAboard, .noMiningControllerAboard,
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,

@@ -32,9 +32,9 @@ struct CommandGovernorTests {
         let governor = CommandGovernor()
         let result = await withDependencies {
             $0.gameClient = budgetGameClient(actionsRemaining: 40)
-            $0.commandClient.dispatch = { _, _, _ in .accepted(operationID: "OP1") }
+            $0.commandClient.dispatchOwned = { _, _, _, _ in .accepted(operationID: "OP1") }
         } operation: {
-            await governor.dispatch(.travel, on: "VES1", params: CommandParams(destination: "SOL"))
+            await governor.dispatch(.travel, on: "VES1", params: CommandParams(destination: "SOL"), owner: nil)
         }
         #expect(result == .dispatched(.accepted(operationID: "OP1")))
     }
@@ -46,12 +46,12 @@ struct CommandGovernorTests {
         let posted = LockIsolated(false)
         let result = await withDependencies {
             $0.gameClient = budgetGameClient(actionsRemaining: 6)
-            $0.commandClient.dispatch = { _, _, _ in
+            $0.commandClient.dispatchOwned = { _, _, _, _ in
                 posted.setValue(true)
                 return .accepted(operationID: nil)
             }
         } operation: {
-            await governor.dispatch(.travel, on: "VES1", params: CommandParams(destination: "SOL"))
+            await governor.dispatch(.travel, on: "VES1", params: CommandParams(destination: "SOL"), owner: nil)
         }
         #expect(result == .deferred(.budgetExhausted))
         #expect(posted.value == false, "a deferred command must never reach the network")
@@ -63,9 +63,9 @@ struct CommandGovernorTests {
         let governor = CommandGovernor(actionFloor: 6)
         let result = await withDependencies {
             $0.gameClient = budgetGameClient(actionsRemaining: 7)
-            $0.commandClient.dispatch = { _, _, _ in .accepted(operationID: nil) }
+            $0.commandClient.dispatchOwned = { _, _, _, _ in .accepted(operationID: nil) }
         } operation: {
-            await governor.dispatch(.travel, on: "VES1", params: CommandParams())
+            await governor.dispatch(.travel, on: "VES1", params: CommandParams(), owner: nil)
         }
         #expect(result == .dispatched(.accepted(operationID: nil)))
     }
@@ -81,14 +81,14 @@ struct CommandGovernorTests {
 
         await withDependencies {
             $0.gameClient = budgetGameClient(actionsRemaining: 40)
-            $0.commandClient.dispatch = { _, _, _ in
+            $0.commandClient.dispatchOwned = { _, _, _, _ in
                 calls.withValue { $0 += 1 }
                 started.continuation.yield()
                 for await _ in release.stream { break }
                 return .accepted(operationID: nil)
             }
         } operation: {
-            async let first = governor.dispatch(.travel, on: "VES1", params: CommandParams())
+            async let first = governor.dispatch(.travel, on: "VES1", params: CommandParams(), owner: nil)
 
             // Wait until the first dispatch is genuinely inside the POST — the
             // device is claimed at that point, so the assertion below is
@@ -96,7 +96,7 @@ struct CommandGovernorTests {
             var startedIterator = started.stream.makeAsyncIterator()
             await startedIterator.next()
 
-            let second = await governor.dispatch(.stow, on: "VES1", params: CommandParams())
+            let second = await governor.dispatch(.stow, on: "VES1", params: CommandParams(), owner: nil)
             #expect(second == .deferred(.commandInFlight))
 
             release.continuation.yield()
@@ -111,10 +111,10 @@ struct CommandGovernorTests {
         let governor = CommandGovernor()
         let results = await withDependencies {
             $0.gameClient = budgetGameClient(actionsRemaining: 40)
-            $0.commandClient.dispatch = { _, _, _ in .accepted(operationID: nil) }
+            $0.commandClient.dispatchOwned = { _, _, _, _ in .accepted(operationID: nil) }
         } operation: {
-            async let a = governor.dispatch(.travel, on: "VES1", params: CommandParams())
-            async let b = governor.dispatch(.travel, on: "VES2", params: CommandParams())
+            async let a = governor.dispatch(.travel, on: "VES1", params: CommandParams(), owner: nil)
+            async let b = governor.dispatch(.travel, on: "VES2", params: CommandParams(), owner: nil)
             return await [a, b]
         }
         #expect(results == [
@@ -129,11 +129,11 @@ struct CommandGovernorTests {
         let governor = CommandGovernor()
         await withDependencies {
             $0.gameClient = budgetGameClient(actionsRemaining: 40)
-            $0.commandClient.dispatch = { _, _, _ in .rejected("device busy") }
+            $0.commandClient.dispatchOwned = { _, _, _, _ in .rejected("device busy") }
         } operation: {
-            let first = await governor.dispatch(.travel, on: "VES1", params: CommandParams())
+            let first = await governor.dispatch(.travel, on: "VES1", params: CommandParams(), owner: nil)
             #expect(first == .dispatched(.rejected("device busy")))
-            let second = await governor.dispatch(.travel, on: "VES1", params: CommandParams())
+            let second = await governor.dispatch(.travel, on: "VES1", params: CommandParams(), owner: nil)
             #expect(second == .dispatched(.rejected("device busy")), "the claim must not survive a rejection")
         }
     }

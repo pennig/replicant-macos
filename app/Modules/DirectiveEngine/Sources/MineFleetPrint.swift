@@ -105,9 +105,9 @@ public struct MineFleetPrint: MissionStepMachine {
         let missing = Self.remaining(at: location, in: world)
         if missing.isEmpty { return .done }
 
-        // One print in flight at a time: `CommandClient` supersedes any other
-        // open op on a device, so a second dispatch orphans the first's row.
-        if world.openOperation(for: hub.deviceCode) != nil { return .wait }
+        // A correctness guard against orphaning our own open op, not a
+        // throttle — owner-scoped, so a co-tenant's job here is never ours to wait on.
+        if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
 
         // The rail, read through `RelayRun`'s own veto so the two cannot drift.
         // Nothing polls `LocationFootprint`, so a stale census buys its own read.

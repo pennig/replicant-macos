@@ -91,6 +91,13 @@ public struct CommandParams: Sendable, Equatable {
         return .object(dict)
     }
 
+    /// Canonical form for de-dup: the SET fields only, keys sorted, no whitespace.
+    public var dedupKey: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return (try? String(decoding: encoder.encode(json), as: UTF8.self)) ?? "{}"
+    }
+
     /// The one field worth naming in a timeline summary, whichever this
     /// dispatch set. For `set_directive`, `configuration`'s `collect` (a
     /// pile) beats the directive name, which rarely varies.

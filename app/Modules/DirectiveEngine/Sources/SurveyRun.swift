@@ -609,7 +609,7 @@ public struct SurveyRun: MissionStepMachine {
     private static func probe(
         _ rows: [Device], _ directive: Directive, _ world: WorldSnapshot
     ) -> MissionAction? {
-        guard rows.contains(where: { $0.updatedAt < directive.stepStartedAt }) else { return nil }
+        guard rows.contains(where: { !world.isFresh($0, since: directive.stepStartedAt) }) else { return nil }
         let lastLook = rows.map(\.updatedAt).min() ?? .distantPast
         if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
         return .refreshDevices(deviceCodes: rows.map(\.deviceCode), thenStall: nil)
@@ -712,7 +712,7 @@ public struct SurveyRun: MissionStepMachine {
         if elapsed > Self.repairDeadline { return .stall(.repairUnfinished) }
         // Bots repair silently server-side; an unread row cannot be trusted to
         // report idle, so treat it as still working until a read says otherwise.
-        let stale = bots.contains { $0.updatedAt < directive.stepStartedAt }
+        let stale = bots.contains { !world.isFresh($0, since: directive.stepStartedAt) }
         if !stale, !bots.contains(where: RepairFleet.isRepairing) {
             return .advanceStep(nextStep: Step.stowingBots)
         }
@@ -772,7 +772,7 @@ public struct SurveyRun: MissionStepMachine {
         // A recall cruises the bot home, so wait out its own arrival time — the
         // shape `recover` uses, for the same reason.
         if let arrival = Self.recallArrival(out), arrival > world.now { return .wait }
-        if out.contains(where: { $0.updatedAt < directive.stepStartedAt }) {
+        if out.contains(where: { !world.isFresh($0, since: directive.stepStartedAt) }) {
             let lastLook = out.map(\.updatedAt).min() ?? .distantPast
             if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
             return .refreshDevices(deviceCodes: out.map(\.deviceCode), thenStall: nil)

@@ -103,10 +103,11 @@ private func world(
     )
 }
 
-private func openPrint(on entity: String) -> [String: GameModels.Operation] {
+private func openPrint(on entity: String, directiveID: String? = nil) -> [String: GameModels.Operation] {
     [entity: GameModels.Operation(
         id: "OP-1", entityCode: entity, kind: OperationKind.print.rawValue, status: .active,
-        source: .poll, startedAt: now, completesAt: nil, lastConfirmedAt: now, detail: .object([:])
+        source: .poll, startedAt: now, completesAt: nil, lastConfirmedAt: now, detail: .object([:]),
+        directiveID: directiveID
     )]
 }
 
@@ -189,6 +190,37 @@ struct MineFleetPrintTests {
         )
 
         #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .wait)
+    }
+
+    /// Owner-scoped: a bench is one serial queue shared by every run that uses
+    /// it, so another run's print there is not this one's to wait on.
+    @Test("a co-tenant's print at the hub does not block starting our own")
+    func aCoTenantsPrintDoesNotBlock() {
+        let snapshot = world(
+            devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
+            openOperations: openPrint(on: "AF1", directiveID: "OTHER")
+        )
+
+        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .dispatch(
+            kind: .print, deviceCode: "AF1",
+            params: CommandParams(
+                deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag]
+            ),
+            nextStep: MineFleetPrint.Step.printing
+        ))
+    }
+
+    /// Our own print still holds the step — owner-scoping must not make the
+    /// guard against orphaning our own operation row toothless.
+    @Test("our own open print still holds the step")
+    func ourOwnPrintStillWaits() {
+        let directive = printRun()
+        let snapshot = world(
+            devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
+            openOperations: openPrint(on: "AF1", directiveID: directive.id)
+        )
+
+        #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot) == .wait)
     }
 
     /// Nothing polls `LocationFootprint`, so a stale census buys its own read
@@ -465,7 +497,7 @@ struct MineFleetPrintEngineTests {
                 queries.withValue { $0.append(designation) }
                 return printedFleet(omitting: "ami_transport_controller") + [hub(), carrier(), clone]
             }
-            $0.commandGovernor.dispatch = { _, _, params in
+            $0.commandGovernor.dispatchOwned = { _, _, params, _ in
                 dispatches.withValue { $0.append(params.deviceType ?? "?") }
                 return .dispatched(.accepted(operationID: nil))
             }
@@ -502,7 +534,7 @@ struct MineFleetPrintEngineTests {
             $0.devicesClient.fetchAtLocation = { _ in
                 printedFleet(omitting: "ami_transport_controller") + [hub(), carrier()]
             }
-            $0.commandGovernor.dispatch = { _, _, params in
+            $0.commandGovernor.dispatchOwned = { _, _, params, _ in
                 dispatches.withValue { $0.append(params.deviceType ?? "?") }
                 return .dispatched(.accepted(operationID: nil))
             }
@@ -537,7 +569,7 @@ struct MineFleetPrintEngineTests {
             $0.date = .constant(now)
             $0.uuid = .incrementing
             $0.devicesClient.fetchAtLocation = { _ in throw ReadFailure() }
-            $0.commandGovernor.dispatch = { _, _, params in
+            $0.commandGovernor.dispatchOwned = { _, _, params, _ in
                 dispatches.withValue { $0.append(params.deviceType ?? "?") }
                 return .dispatched(.accepted(operationID: nil))
             }

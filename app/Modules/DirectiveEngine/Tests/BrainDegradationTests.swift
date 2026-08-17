@@ -100,9 +100,11 @@ private actor RecordingSeam {
 
     nonisolated func seam() -> CommandClient {
         var client = CommandClient.testValue
-        client.dispatch = { [self] kind, deviceCode, _ in
+        let body: @Sendable (OperationKind, String, CommandParams) async -> CommandOutcome = { [self] kind, deviceCode, _ in
             await record(verb: kind.rawValue, deviceCode: deviceCode)
         }
+        client.dispatch = body
+        client.dispatchOwned = { kind, deviceCode, params, _ in await body(kind, deviceCode, params) }
         return client
     }
 

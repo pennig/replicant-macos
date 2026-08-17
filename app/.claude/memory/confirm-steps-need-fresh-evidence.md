@@ -103,11 +103,9 @@ column and no migration. Filter `status == .completed` **exactly**, never `isTer
 `lastConfirmedAt` on accepted travels that never arrived, and would install a non-arrival as the
 watermark.
 
-**Still unfixed, know it before you chase it again:** `Reconciler.swift:256`'s
-`guard eventTime >= device.updatedAt` drops the location write outright when a device read stamps
-`updatedAt` later within the same wall-clock second as the arrival (live `createdAt` is
-second-granularity). The op still closes, so the row reads **fresh-but-wrong** and the gate above
-*passes* — same stall, different door. The fix belongs in `applyEventFields`, not in a mission.
+**CLOSED 2026-08-16**, both the two-transaction race above and the same-second drop this note used
+to warn about: see [[arrival-single-transaction]] for `Reconciler.applyDeviceEvent`, which closes the
+op and patches the row in one `database.write` under a 1s tolerance.
 
 **Sibling exposure CLOSED 2026-08-07**, after it fired live: a roaming Survey Run stalled
 `commandRejected: "Already at destination"` **1.2 s** after its vessel's travel op closed, and sat

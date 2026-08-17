@@ -334,19 +334,15 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
         )
     }
 
-    /// A finished print spawns a device whose code the local fleet has never seen.
-    /// The route reads *just that new device* — named by the event's
-    /// `new_device_code` — through the coordinator at high priority, with no
-    /// full-fleet walk, and does not prune (pruning belongs to the explicit
-    /// cold-load, §5.5). Regression: the old path re-walked `GET /v1/devices` on
-    /// every print completion, bypassing the coordinator. The printer itself
-    /// holds no open op here, so under the mark-mostly policy (V3.5) its row is
-    /// *marked stale*, not read.
-    @Test func printCompleteReadsNewDeviceWithoutFleetWalkOrPrune() async throws {
+    /// A finished print spawns a device the local fleet has never seen. The
+    /// route marks it urgent (`markNew`) rather than reading — no full-fleet
+    /// walk, and the clone's row lands later, off this call, via the drain.
+    @Test func printCompleteMarksTheNewDeviceRatherThanReadingIt() async throws {
         let database = try GameDatabase.bootstrap()
         let now = Date(timeIntervalSince1970: 10_000)
-        let refreshed = LockIsolated<[(code: String, priority: RefreshPriority)]>([])
+        let refreshed = LockIsolated<[String]>([])
         let marked = LockIsolated<[String]>([])
+        let markedNew = LockIsolated<[String]>([])
 
         try await withDependencies {
             $0.defaultDatabase = database
@@ -354,14 +350,12 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
             $0.date = .constant(now)
             // fetchAll must never be touched — a full walk is the regression.
             $0.devicesClient.fetchAll = { Issue.record("should not re-walk the fleet"); return [] }
-            $0.deviceRefresher = DeviceRefreshClient { code, priority in
-                refreshed.withValue { $0.append((code, priority)) }
-                // Stand in for the coordinator's read+reconcile of the named device.
-                guard code == "CLONE" else { return nil }
-                await Reconciler().ingest(device("CLONE", at: now))
-                return device("CLONE", at: now)
+            $0.deviceRefresher = DeviceRefreshClient { code, _ in
+                refreshed.withValue { $0.append(code) }
+                return nil
             }
             $0.deviceStaleness.markStale = { code, _ in marked.withValue { $0.append(code) } }
+            $0.deviceStaleness.markNew = { code in markedNew.withValue { $0.append(code) } }
         } operation: {
             // Printer + an unrelated device are already local.
             await Reconciler().ingest(device("PRNT", at: now))
@@ -378,53 +372,52 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
             let codes = try await database.read { db in
                 try Device.select(\.deviceCode).fetchAll(db)
             }
-            #expect(Set(codes) == ["PRNT", "GONE", "CLONE"])  // clone landed; nothing pruned
-            // The new device was read at high priority; the printer (no open op
-            // closed) was marked stale rather than read.
-            #expect(refreshed.value.contains { $0.code == "CLONE" && $0.priority == .high })
-            #expect(!refreshed.value.contains { $0.code == "PRNT" })
+            #expect(Set(codes) == ["PRNT", "GONE"], "CLONE isn't ingested by the route call itself")
+            #expect(markedNew.value == ["CLONE"])
             #expect(marked.value == ["PRNT"])
+            #expect(refreshed.value.isEmpty, "the route body performs no network read")
         }
     }
 
-    /// Mark-mostly (V3.5): a live event that closes an operation pays one
-    /// high-priority confirm-read; a thin live event and *any* catch-up event
-    /// only mark the device stale — a launch replay costs zero immediate reads.
-    @Test func deviceRouteMarksInsteadOfReadingExceptLiveOpClosings() async throws {
+    /// Mark-mostly (V3.5): a live op-closing event marks the device urgent; a
+    /// thin live event and any catch-up event mark it ordinary — the route
+    /// itself never calls the refresher, for any of the three cases.
+    @Test func deviceRouteMarksInsteadOfReadingIncludingLiveOpClosings() async throws {
         let database = try GameDatabase.bootstrap()
         let now = Date(timeIntervalSince1970: 10_000)
-        let refreshed = LockIsolated<[(code: String, priority: RefreshPriority)]>([])
+        let refreshed = LockIsolated<[String]>([])
         let marked = LockIsolated<[String]>([])
+        let markedUrgent = LockIsolated<[(code: String, reason: String)]>([])
 
         try await withDependencies {
             $0.defaultDatabase = database
             $0.uuid = .incrementing
             $0.date = .constant(now)
-            $0.deviceRefresher = DeviceRefreshClient { code, priority in
-                refreshed.withValue { $0.append((code, priority)) }
+            $0.deviceRefresher = DeviceRefreshClient { code, _ in
+                refreshed.withValue { $0.append(code) }
                 return nil
             }
             $0.deviceStaleness.markStale = { code, _ in marked.withValue { $0.append(code) } }
+            $0.deviceStaleness.markUrgent = { code, reason in markedUrgent.withValue { $0.append((code, reason)) } }
         } operation: {
             let route = GameSync.deviceRoute(reconciler: Reconciler())
 
             // The device exists locally (events can't create rows), stale.
             await Reconciler().ingest(device("SHIP", at: now))
 
-            // 1) Thin live event → payload location applied + mark, no read.
+            // 1) Thin live event → payload location applied + ordinary mark.
             await route.apply(GameEventEnvelope(
                 id: "1-0", category: "travel", event: "travel.cruising",
                 deviceCode: "SHIP", location: "TENEGSHE-7-L4",
                 createdAt: "2026-07-20T01:00:00Z"
             ))
-            #expect(refreshed.value.isEmpty)
             #expect(marked.value == ["SHIP"])
             let moved = try await database.read { db in
                 try Device.where { $0.deviceCode.eq("SHIP") }.fetchOne(db)
             }
             #expect(moved?.location == "TENEGSHE-7-L4", "the envelope's location applies at zero read cost")
 
-            // 2) Live op-closing event → one high-priority read, no mark.
+            // 2) Live op-closing event → urgent mark, not a read.
             try await database.write { db in
                 try Operation.insert {
                     Operation(
@@ -439,11 +432,11 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
                 id: "2-0", category: "travel", event: "travel.arrived",
                 deviceCode: "SHIP", createdAt: "2026-07-20T01:01:00Z"
             ))
-            #expect(refreshed.value.map(\.code) == ["SHIP"])
-            #expect(refreshed.value.first?.priority == .high)
+            #expect(markedUrgent.value.map(\.code) == ["SHIP"])
+            #expect(markedUrgent.value.first?.reason == "travel.arrived")
 
-            // 3) Catch-up replay of an op-closing event → mark only, no read
-            //    (the op is closed from the payload either way).
+            // 3) Catch-up replay of an op-closing event → ordinary mark, not
+            //    urgent (the op is closed from the payload either way).
             try await database.write { db in
                 try Operation.insert {
                     Operation(
@@ -459,13 +452,186 @@ private final class SharedCursorStore: EventCursorStore, @unchecked Sendable {
                 deviceCode: "SHIP", createdAt: "2026-07-20T01:02:00Z",
                 provenance: .catchUp
             ))
-            #expect(refreshed.value.count == 1)   // still just the one live read
+            #expect(markedUrgent.value.map(\.code) == ["SHIP"])   // still just the one urgent mark
             #expect(marked.value == ["SHIP", "SHIP"])
+            #expect(refreshed.value.isEmpty, "the route body never calls the refresher directly")
 
             let closed = try await database.read { db in
                 try Operation.where { $0.status.eq(OperationStatus.completed) }.fetchCount(db)
             }
             #expect(closed == 2)   // both completions folded in from the payload
+        }
+    }
+
+    /// A replayed catch-up burst — thin events, op-closing arrivals, and print
+    /// completions alike — performs zero network calls in the route body; built
+    /// from this file's own fixtures, since no larger canned one exists yet.
+    @Test func catchUpReplayPerformsNoNetworkCalls() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Date(timeIntervalSince1970: 10_000)
+        let refreshed = LockIsolated<[String]>([])
+        let markedOrdinary = LockIsolated<[String]>([])
+        let markedUrgent = LockIsolated<[String]>([])
+        let markedNew = LockIsolated<[String]>([])
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(now)
+            $0.deviceRefresher = DeviceRefreshClient { code, _ in
+                refreshed.withValue { $0.append(code) }
+                return nil
+            }
+            $0.deviceStaleness.markStale = { code, _ in markedOrdinary.withValue { $0.append(code) } }
+            $0.deviceStaleness.markUrgent = { code, _ in markedUrgent.withValue { $0.append(code) } }
+            $0.deviceStaleness.markNew = { code in markedNew.withValue { $0.append(code) } }
+        } operation: {
+            let route = GameSync.deviceRoute(reconciler: Reconciler())
+            let deviceCodes = (0..<40).map { "DEV\(String(format: "%02d", $0))" }
+
+            // Every device holds an open travel op, closeable by its own
+            // catch-up arrival below.
+            try await database.write { db in
+                for code in deviceCodes {
+                    try Operation.insert {
+                        Operation(
+                            id: "op-\(code)", entityCode: code, kind: OperationKind.travel.rawValue,
+                            status: .active, source: OperationSource.poll,
+                            startedAt: now.addingTimeInterval(-60), completesAt: now,
+                            lastConfirmedAt: now.addingTimeInterval(-60), detail: .object([:])
+                        )
+                    }.execute(db)
+                }
+            }
+
+            var events: [GameEventEnvelope] = []
+            for i in 0..<450 {
+                let code = deviceCodes[i % deviceCodes.count]
+                events.append(GameEventEnvelope(
+                    id: "\(i)-0", category: "travel", event: "travel.cruising",
+                    deviceCode: code, location: "SOL-\(i % 9 + 1)",
+                    createdAt: "2026-07-20T01:00:00Z", provenance: .catchUp
+                ))
+            }
+            for code in deviceCodes {
+                events.append(GameEventEnvelope(
+                    id: "arrive-\(code)-0", category: "travel", event: "travel.arrived",
+                    deviceCode: code, createdAt: "2026-07-20T01:01:00Z", provenance: .catchUp
+                ))
+            }
+            for i in 0..<20 {
+                events.append(GameEventEnvelope(
+                    id: "print-\(i)-0", category: "print", event: "print.completed",
+                    deviceCode: "PRNTER",
+                    payload: ["new_device_code": .string("CLONE\(i)"), "device_type": .string("ftl_beacon")],
+                    createdAt: "2026-07-20T01:02:00Z", provenance: .catchUp
+                ))
+            }
+            #expect(events.count >= 500)
+
+            var processed = 0
+            for event in events {
+                await route.apply(event)
+                processed += 1
+            }
+
+            // The route body ran for every event (an honest count, not just an
+            // absence of failures) and issued no network call along the way.
+            #expect(processed == events.count)
+            #expect(markedOrdinary.value.count == events.count)
+            #expect(markedNew.value.count == 20)
+            #expect(markedUrgent.value.isEmpty, "catch-up provenance never earns the urgent tier")
+            #expect(refreshed.value.isEmpty, "the route body must perform zero network calls under catch-up")
+        }
+    }
+
+    /// The bug this ticket fixed lived here, not just in `Reconciler`: an
+    /// arrival driven through `deviceRoute` must close the op AND patch the
+    /// location the caller actually reads.
+    @Test func arrivalThroughDeviceRouteClosesOpAndPatchesLocation() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Date(timeIntervalSince1970: 10_000)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(now)
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
+            $0.deviceStaleness.markStale = { _, _ in }
+        } operation: {
+            await Reconciler().ingest(device("V1", at: now.addingTimeInterval(-60)))
+            try await database.write { db in
+                try Operation.insert {
+                    Operation(
+                        id: "op-arrival", entityCode: "V1", kind: OperationKind.travel.rawValue,
+                        status: .active, source: OperationSource.poll,
+                        startedAt: now.addingTimeInterval(-60), completesAt: now,
+                        lastConfirmedAt: now.addingTimeInterval(-60), detail: .object([:])
+                    )
+                }.execute(db)
+            }
+
+            await GameSync.deviceRoute(reconciler: Reconciler()).apply(GameEventEnvelope(
+                id: "1-0", category: "travel", event: "travel.arrived",
+                deviceCode: "V1", location: "TAU-2",
+                createdAt: "2026-07-20T01:01:00Z"
+            ))
+
+            let op = try await database.read { db in
+                try Operation.where { $0.id.eq("op-arrival") }.fetchOne(db)
+            }
+            let stored = try await database.read { db in
+                try Device.where { $0.deviceCode.eq("V1") }.fetchOne(db)
+            }
+            #expect(op?.status == OperationStatus.completed)
+            #expect(stored?.location == "TAU-2")
+        }
+    }
+
+    /// A malformed `createdAt` (`event.date == nil`) still closes the op —
+    /// unconditionally, exactly like the pre-ticket path — but attempts no
+    /// field patch: no location write, no `updatedAt` stamp.
+    @Test func nilEventTimeClosesOpButLeavesTheDeviceRowAlone() async throws {
+        let database = try GameDatabase.bootstrap()
+        let now = Date(timeIntervalSince1970: 10_000)
+        let seededUpdatedAt = now.addingTimeInterval(-5)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+            $0.date = .constant(now)
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
+            $0.deviceStaleness.markStale = { _, _ in }
+        } operation: {
+            var seeded = device("V1", at: seededUpdatedAt)
+            seeded.location = "SOL-1"
+            await Reconciler().ingest(seeded)
+
+            try await database.write { db in
+                try Operation.insert {
+                    Operation(
+                        id: "op-nil-time", entityCode: "V1", kind: OperationKind.travel.rawValue,
+                        status: .active, source: OperationSource.poll,
+                        startedAt: now.addingTimeInterval(-60), completesAt: now,
+                        lastConfirmedAt: now.addingTimeInterval(-60), detail: .object([:])
+                    )
+                }.execute(db)
+            }
+
+            await GameSync.deviceRoute(reconciler: Reconciler()).apply(GameEventEnvelope(
+                id: "1-0", category: "travel", event: "travel.arrived",
+                deviceCode: "V1", location: "TAU-2", createdAt: nil
+            ))
+
+            let op = try await database.read { db in
+                try Operation.where { $0.id.eq("op-nil-time") }.fetchOne(db)
+            }
+            let stored = try await database.read { db in
+                try Device.where { $0.deviceCode.eq("V1") }.fetchOne(db)
+            }
+            #expect(op?.status == OperationStatus.completed, "the op still closes unconditionally")
+            #expect(stored?.location == "SOL-1", "no field patch without a real eventTime")
+            #expect(stored?.updatedAt == seededUpdatedAt, "the watermark is untouched")
         }
     }
 }

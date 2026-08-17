@@ -173,6 +173,20 @@ public struct WorldSnapshot: Equatable, Sendable {
     public func device(_ code: String) -> Device? { devices[code] }
     /// The single OPEN operation for the device `code` names, if it has one.
     public func openOperation(for code: String) -> GameModels.Operation? { openOperations[code] }
+    /// The device's live op only when it belongs to `owner`; a nil `owner`
+    /// keeps `openOperation(for:)`'s meaning, and an op with no owner of its
+    /// own is never filtered out either way.
+    public func openOperation(for code: String, owner directiveID: String?) -> GameModels.Operation? {
+        guard let op = openOperations[code], let directiveID, let opOwner = op.directiveID else {
+            return openOperations[code]
+        }
+        return opOwner == directiveID ? op : nil
+    }
+    /// `device.updatedAt >= watermark`. The one freshness predicate missions
+    /// use from now on.
+    public func isFresh(_ device: Device, since watermark: Date) -> Bool {
+        device.updatedAt >= watermark
+    }
     /// The decoded blob for the system `designation` names, or nil when it was
     /// out of `wanted` scope or failed to decode — the two are indistinguishable
     /// here, and both mean "this mission cannot prove anything about it".
@@ -269,9 +283,18 @@ public struct WorldSnapshot: Equatable, Sendable {
             let dispatchedIDs = Array(Set(auditLog.compactMap { entry in
                 entry.kind == .commandDispatched ? entry.operationID : nil
             }))
-            let dispatched = dispatchedIDs.isEmpty ? [] : try GameModels.Operation
+            // The owner column is the source of truth; the log join is a
+            // fallback for rows written before it existed.
+            let ownedDispatched = try GameModels.Operation
+                .where { $0.directiveID.eq(directiveID) }
+                .fetchAll(db)
+            let legacyDispatched = dispatchedIDs.isEmpty ? [] : try GameModels.Operation
                 .where { $0.id.in(dispatchedIDs) }
                 .fetchAll(db)
+            let dispatched = Dictionary(
+                (ownedDispatched + legacyDispatched).map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
 
             // The in-force rows, this directive's own included — see `peers`.
             // Status-scoped exactly like `Brain.owningStatuses`: a directive
@@ -357,7 +380,7 @@ public struct WorldSnapshot: Equatable, Sendable {
                 openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
                 log: log,
                 auditLog: auditLog,
-                dispatchedOperations: Dictionary(dispatched.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }),
+                dispatchedOperations: dispatched,
                 systems: systems,
                 siteAssays: siteAssays,
                 footprints: footprints,

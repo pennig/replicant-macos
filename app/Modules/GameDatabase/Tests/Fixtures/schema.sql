@@ -13,6 +13,8 @@ CREATE INDEX "event_logs_by_received_at"
 CREATE INDEX "haul_yields_by_controller"
   ON "haulYields" ("controllerCode");
 
+CREATE INDEX "operation_by_directive" ON "operations" ("directiveID", "startedAt");
+
 CREATE UNIQUE INDEX "operation_one_open_per_device"
   ON "operations" ("entityCode")
   WHERE "status" IN ('enqueued', 'active');
@@ -224,7 +226,7 @@ CREATE TABLE "operations" (
   "completesAt" TEXT,
   "lastConfirmedAt" TEXT NOT NULL,
   "detail" TEXT NOT NULL DEFAULT '{}'
-) STRICT;
+, "directiveID" TEXT, "step" TEXT, "paramsDigest" TEXT) STRICT;
 
 CREATE TABLE "replicants" (
   "replicantCode" TEXT PRIMARY KEY NOT NULL,

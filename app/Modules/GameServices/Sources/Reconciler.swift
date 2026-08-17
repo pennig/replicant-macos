@@ -223,38 +223,9 @@ public struct Reconciler: Sendable {
         }
     }
 
-    /// Apply the payload-complete field change a device event *itself* carries
-    /// (V3.5 row 2): the envelope's first-class `location` is the device's
-    /// position after the event — the arrival's destination, or null while in
-    /// transit / stowed (verified against live traffic 2026-07-21) — so travel
-    /// legs and deploy/stow moves render immediately at zero read cost. The
-    /// caller then marks the device stale; a later authoritative read
-    /// reconciles the rest of the row.
-    ///
-    /// `stow` carries the same treatment for the stowage column, and for the
-    /// same reason it matters more than it looks: `stowed_in_device_code` is
-    /// what every "is this vessel staged?" question reads, and the only repair
-    /// path it used to have was a `.low` confirm-read the budget floor may defer
-    /// indefinitely. A Survey Run's preflight then read a re-stowed controller as
-    /// absent and stalled `noSurveyControllerAboard` while the truth sat unread
-    /// in an event we had already received. Both stowage events name the other
-    /// end of the link in their payload, so the column is now settled from the
-    /// event itself — free, and immune to budget pressure.
-    ///
-    /// Guarded last-writer-wins by event time against the row's synthesized
-    /// event-time (`updatedAt`, the read's request-issue clock): at-or-newer
-    /// (`>=`), because live `createdAt` stamps have second granularity and an
-    /// ordered same-second pair (arrive → deploy) must let the later event win;
-    /// a replayed identical event just re-applies the same value. Applying
-    /// advances `updatedAt` — clamped to the local clock — so an
-    /// *earlier-issued* read landing later is dropped by `ingest`'s guard (the
-    /// same ordering rule reads follow), while a server clock running ahead can
-    /// never stamp the row into the local future (which would make the very
-    /// next read look stale, get dropped whole, and still spend the staleness
-    /// mark — status frozen with its repair signal consumed).
-    ///
-    /// Returns whether the change was applied (an unknown device or a stale
-    /// event is a no-op).
+    /// Apply the event's location/stow (V3.5 row 2) under a 1s-tolerance
+    /// last-writer-wins guard against `device.updatedAt`, stamping
+    /// `updatedAt = date.now` (memory: arrival-single-transaction.md).
     @discardableResult
     public func applyEventFields(
         deviceCode: String,
@@ -265,14 +236,13 @@ public struct Reconciler: Sendable {
         guard let eventTime else { return false }
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
-        let stamp = min(eventTime, date.now)
         return await withErrorReporting {
             try await database.write { db -> Bool in
             guard var device = try Device
                 .where({ $0.deviceCode.eq(deviceCode) })
                 .fetchOne(db)
             else { return false }
-            guard eventTime >= device.updatedAt else { return false }
+            guard eventTime.addingTimeInterval(1) >= device.updatedAt else { return false }
             if device.location != location {
                 device.location = location
                 // The event carries no display name for the new location; the
@@ -287,10 +257,68 @@ public struct Reconciler: Sendable {
             case .deployed: device.stowedInDeviceCode = nil
             case nil: break
             }
-            device.updatedAt = max(device.updatedAt, stamp)
+            device.updatedAt = date.now
             try Device.upsert { device }.execute(db)
             logger.debug("applyEventFields \(deviceCode, privacy: .public): location=\(location ?? "-", privacy: .public) stow=\(String(describing: stow), privacy: .public) @ \(eventTime.ISO8601Format(), privacy: .public)")
             return true
+            }
+        } ?? false
+    }
+
+    /// One transaction: close the open op the event completes (if any) AND
+    /// apply the envelope's location/stow. Returns whether an op was closed.
+    @discardableResult
+    public func applyDeviceEvent(
+        deviceCode: String,
+        event: GameEventEnvelope,
+        location: String?,
+        stow: StowChange?,
+        eventTime: Date
+    ) async -> Bool {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+        let plan = completionPlan(for: event)
+        return await withErrorReporting {
+            try await database.write { db -> Bool in
+                var closed = false
+                if let plan, var op = try Operation.where({
+                    $0.entityCode.eq(deviceCode) && $0.status.in(OperationStatus.liveCases)
+                }).fetchOne(db),
+                   plan.allowedKinds.contains(op.kind),
+                   eventTime >= op.startedAt.addingTimeInterval(-Self.eventTimeSkewTolerance) {
+                    if let result = plan.result {
+                        var dict: [String: JSONValue] = {
+                            if case .object(let existing) = op.detail { return existing }
+                            return [:]
+                        }()
+                        dict["result"] = .object(result)
+                        op.detail = .object(dict)
+                    }
+                    op.status = .completed
+                    op.source = .event
+                    op.lastConfirmedAt = eventTime
+                    try Operation.upsert { op }.execute(db)
+                    closed = true
+                    logger.info("applyDeviceEvent: completed op \(op.id, privacy: .public) (\(op.kind, privacy: .public)) on \(deviceCode, privacy: .public)")
+                }
+
+                guard var device = try Device.where({ $0.deviceCode.eq(deviceCode) }).fetchOne(db)
+                else { return closed }
+                if !closed {
+                    guard eventTime.addingTimeInterval(1) >= device.updatedAt else { return closed }
+                }
+                if device.location != location {
+                    device.location = location
+                    device.locationName = nil
+                }
+                switch stow {
+                case let .stowed(carrier): device.stowedInDeviceCode = carrier
+                case .deployed: device.stowedInDeviceCode = nil
+                case nil: break
+                }
+                device.updatedAt = date.now
+                try Device.upsert { device }.execute(db)
+                return closed
             }
         } ?? false
     }
@@ -336,26 +364,30 @@ public struct Reconciler: Sendable {
     /// be re-read authoritatively, not left to a skippable low-priority refresh).
     @discardableResult
     public func applyOperationEvent(_ event: GameEventEnvelope) async -> Bool {
-        // Message/bobnet events don't concern a device operation.
-        guard
-            event.category != "message",
-            event.category != "bobnet",
-            let deviceCode = event.deviceCode
+        guard let deviceCode = event.deviceCode, let plan = completionPlan(for: event)
         else { return false }
-
-        // Event names that close the device's open operation. The event is truth
-        // for the action it completes (§4.4); the deadline timer is only the
-        // backstop for when one of these is lost. The event also names the
-        // action *family* it closes — passed through as a guard so a stale or
-        // replayed completion can never close an unrelated op (V3.3-S4).
-        guard let allowedKinds = Self.completionEvents[event.event] else { return false }
         return await completeOpenOperation(
             on: deviceCode,
             source: .event,
             eventTime: event.date,
-            result: event.payload,
-            allowedKinds: allowedKinds
+            result: plan.result,
+            allowedKinds: plan.allowedKinds
         )
+    }
+
+    /// The classification `applyOperationEvent`/`applyDeviceEvent` both close
+    /// an op through: which kinds `event` closes, and its result. Nil outside
+    /// `completionEvents`, or for a message/bobnet event.
+    private func completionPlan(
+        for event: GameEventEnvelope
+    ) -> (result: [String: JSONValue]?, allowedKinds: Set<String>)? {
+        guard
+            event.category != "message",
+            event.category != "bobnet",
+            event.deviceCode != nil,
+            let allowedKinds = Self.completionEvents[event.event]
+        else { return nil }
+        return (event.payload, allowedKinds)
     }
 
     /// Dotted event names that complete an operation → the operation kinds each

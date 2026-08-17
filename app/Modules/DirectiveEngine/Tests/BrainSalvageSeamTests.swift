@@ -93,7 +93,7 @@ private func driveSeam(
         $0.date = .constant(seamNow)
         $0.uuid = .incrementing
         $0.deviceRefresher = confirmingRefresher(database)
-        $0.commandGovernor.dispatch = { kind, deviceCode, _ in
+        $0.commandGovernor.dispatchOwned = { kind, deviceCode, _, _ in
             dispatched.withValue { $0.append(SeamDispatch(verb: kind.rawValue, deviceCode: deviceCode)) }
             return .dispatched(.accepted(operationID: nil))
         }

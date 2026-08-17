@@ -29,6 +29,7 @@ import Foundation
 import GameModels
 import GameSession
 import OSLog
+import SQLiteData
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "CommandGovernor")
 
@@ -39,6 +40,8 @@ public enum CommandDeferral: String, Sendable, Equatable {
     case budgetExhausted
     /// Another command for this device is still in flight.
     case commandInFlight
+    /// An identical command already went out in this step entry.
+    case duplicate
 }
 
 /// The result of asking the governor to dispatch.
@@ -71,11 +74,36 @@ actor CommandGovernor {
     func dispatch(
         _ kind: OperationKind,
         on deviceCode: String,
-        params: CommandParams
+        params: CommandParams,
+        owner: CommandOwner?
     ) async -> CommandDispatchResult {
         guard !inFlight.contains(deviceCode) else {
             logger.debug("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): deferred (command in flight)")
             return .deferred(.commandInFlight)
+        }
+
+        if let owner {
+            @Dependency(\.defaultDatabase) var database
+            let digest = params.dedupKey
+            let dup = (try? await database.read { db in
+                try Operation
+                    .where {
+                        $0.directiveID.eq(owner.directiveID)
+                            && $0.step.eq(owner.step)
+                            && $0.entityCode.eq(deviceCode)
+                            && $0.kind.eq(kind.rawValue)
+                            && $0.paramsDigest.eq(digest)
+                            && $0.startedAt >= owner.since
+                            // A `.failed` attempt didn't land, so a repeat is
+                            // a retry rather than a duplicate to refuse.
+                            && $0.status.neq(OperationStatus.failed)
+                    }
+                    .fetchOne(db)
+            }) ?? nil
+            if dup != nil {
+                logger.debug("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): deferred (duplicate in step \(owner.step, privacy: .public))")
+                return .deferred(.duplicate)
+            }
         }
 
         @Dependency(\.gameClient) var gameClient
@@ -97,7 +125,7 @@ actor CommandGovernor {
         defer { inFlight.remove(deviceCode) }
 
         @Dependency(\.commandClient) var commandClient
-        let outcome = await commandClient.dispatch(kind, deviceCode, params)
+        let outcome = await commandClient.dispatchOwned(kind, deviceCode, params, owner)
         logger.info("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public): \(String(describing: outcome), privacy: .public)")
         return .dispatched(outcome)
     }

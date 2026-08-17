@@ -1407,7 +1407,7 @@ struct MineRunEngineTests {
                 reads.withValue { $0.append(code) }
                 return nil
             }
-            $0.commandGovernor.dispatch = { kind, _, params in
+            $0.commandGovernor.dispatchOwned = { kind, _, params, _ in
                 guard kind == .attach, let code = params.devices?.first,
                       let row = carriedFleet().first(where: { $0.deviceCode == code })
                 else { return .dispatched(.accepted(operationID: nil)) }
@@ -1470,7 +1470,7 @@ struct MineRunEngineTests {
                 reads.withValue { $0.append(code) }
                 return nil
             }
-            $0.commandGovernor.dispatch = { kind, controller, params in
+            $0.commandGovernor.dispatchOwned = { kind, controller, params, _ in
                 guard kind == .adopt, let devices = params.devices else {
                     return .dispatched(.accepted(operationID: nil))
                 }
@@ -1541,7 +1541,7 @@ struct MineRunEngineTests {
                 reads.withValue { $0.append(code) }
                 return nil
             }
-            $0.commandGovernor.dispatch = { kind, code, params in
+            $0.commandGovernor.dispatchOwned = { kind, code, params, _ in
                 ordered.withValue { $0.append("\(kind.rawValue) \(code)") }
                 armed.withValue {
                     if let directive = params.directive {

@@ -179,10 +179,12 @@ private actor ScriptedServer {
     /// stub would hide it if something started to.
     nonisolated func seam() -> CommandClient {
         var client = CommandClient.testValue
-        client.dispatch = { [self] kind, deviceCode, params in
+        let body: @Sendable (OperationKind, String, CommandParams) async -> CommandOutcome = { [self] kind, deviceCode, params in
             @Dependency(\.date) var date
             return await dispatch(kind: kind, deviceCode: deviceCode, params: params, now: date.now)
         }
+        client.dispatch = body
+        client.dispatchOwned = { kind, deviceCode, params, _ in await body(kind, deviceCode, params) }
         return client
     }
 

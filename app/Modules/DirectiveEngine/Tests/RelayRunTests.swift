@@ -1232,9 +1232,9 @@ struct RelayRunEmplaceTests {
         #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing), world: snapshot) == .wait)
     }
 
-    /// Past the deadline the backstop spends ONE authoritative catalogue read
-    /// before giving up, so the stall's own guidance ("Retry to fetch it again")
-    /// is true rather than a dead end over an unchanged snapshot.
+    /// Past the deadline the backstop reads the catalogue while
+    /// `systemUnresolvedRetryWindow` still allows it, so the stall's own
+    /// guidance ("Retry to fetch it again") is true rather than a dead end.
     @Test func readsTheCatalogueOnceTheResolutionDeadlinePasses() {
         let snapshot = world(devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")])
         let overdue = running(
@@ -1243,6 +1243,72 @@ struct RelayRunEmplaceTests {
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot)
                 == .refreshSystem(designation: "VEGA", nextStep: RelayRun.Step.emplacing))
+    }
+
+    /// Past `systemUnresolvedRetryWindow` too, the run surfaces rather than
+    /// reading forever — `stepStartedAt` alone bounds it, since a same-step
+    /// `.refreshSystem` leaves it untouched every tick.
+    @Test func stallsWhenTheTargetSystemNeverResolves() {
+        let snapshot = world(devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")])
+        let overdue = running(
+            step: RelayRun.Step.emplacing,
+            stepStartedAt: fixtureNow.addingTimeInterval(
+                -(SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow + 1)
+            )
+        )
+        #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.salvageSystemUnresolved))
+    }
+
+    /// Same invariant as `SalvageRun`'s own copy: the read is confined to
+    /// `unresolvedReadBand`, not spent on every tick of
+    /// `systemUnresolvedRetryWindow` — walked at the engine's 5s cadence.
+    @Test func readsOnlyInsideTheBandAcrossTheWholeRetryWindow() {
+        let stepStartedAt = Date(timeIntervalSince1970: 0)
+        let span = SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow
+        var reads = 0
+        var sawTheStall = false
+        var elapsed = SalvageRun.systemResolutionDeadline - 10
+        while elapsed <= span + 10 {
+            let snapshot = world(
+                devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")],
+                now: stepStartedAt.addingTimeInterval(elapsed)
+            )
+            let directive = running(step: RelayRun.Step.emplacing, stepStartedAt: stepStartedAt)
+            switch RelayRun().nextAction(directive: directive, world: snapshot) {
+            case .refreshSystem: reads += 1
+            case .stall(.salvageSystemUnresolved, nil): sawTheStall = true
+            case .wait: break
+            default: Issue.record("unexpected action at elapsed \(elapsed)")
+            }
+            elapsed += 5
+        }
+        #expect(reads >= 1)
+        #expect(reads <= Int(SalvageRun.unresolvedReadBand / 5))
+        #expect(sawTheStall)
+    }
+
+    /// An engine tick is `5s + evaluation`, so two evaluations can straddle the
+    /// band. Whatever the phase, the read must still fire — a skipped band
+    /// stalls the run without ever spending the read that could clear it.
+    @Test func readsEvenWhenTheTickPeriodStraddlesTheBand() {
+        let stepStartedAt = Date(timeIntervalSince1970: 0)
+        let span = SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow
+        for phase in stride(from: 0.0, to: 5.0, by: 0.5) {
+            var reads = 0
+            var elapsed = SalvageRun.systemResolutionDeadline - 10 + phase
+            while elapsed <= span {
+                let snapshot = world(
+                    devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")],
+                    now: stepStartedAt.addingTimeInterval(elapsed)
+                )
+                let directive = running(step: RelayRun.Step.emplacing, stepStartedAt: stepStartedAt)
+                if case .refreshSystem = RelayRun().nextAction(directive: directive, world: snapshot) {
+                    reads += 1
+                }
+                elapsed += 6.5   // a 5s tick plus a slow evaluation
+            }
+            #expect(reads >= 1, "phase \(phase) skipped the band entirely")
+        }
     }
 }
 

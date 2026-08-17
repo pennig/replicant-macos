@@ -42,7 +42,8 @@ import Testing
     }
 
     /// A strictly newer event applies its location, clears the (now unknown)
-    /// display name, and advances the row's event-time.
+    /// display name, and stamps the row with the client clock (`date.now`),
+    /// not the event's own timestamp.
     @Test func newerEventAppliesLocation() async throws {
         let database = try GameDatabase.bootstrap()
         try await seed(database, updatedAt: Date(timeIntervalSince1970: 1_000))
@@ -62,7 +63,7 @@ import Testing
         let device = try await row(database)
         #expect(device?.location == "TENEGSHE-7-L4")
         #expect(device?.locationName == nil)
-        #expect(device?.updatedAt == Date(timeIntervalSince1970: 1_010))
+        #expect(device?.updatedAt == Date(timeIntervalSince1970: 2_000))
     }
 
     /// A stale event is dropped whole — no field change, no clock advance.
@@ -198,7 +199,7 @@ import Testing
         let device = try await row(database)
         #expect(device?.location == "TENEGSHE-3")
         #expect(device?.locationName == "Tenegshe III")
-        #expect(device?.updatedAt == Date(timeIntervalSince1970: 1_010))
+        #expect(device?.updatedAt == Date(timeIntervalSince1970: 2_000))
     }
 
     /// An unknown device is a no-op — events can't create fleet rows.

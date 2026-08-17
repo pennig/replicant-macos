@@ -26,10 +26,13 @@ struct EventCourierPrintTests {
         )
     }
 
-    private func world(_ devices: [Device], hosts: Set<String> = []) -> WorldSnapshot {
+    private func world(
+        _ devices: [Device], hosts: Set<String> = [],
+        openOperations: [String: GameModels.Operation] = [:]
+    ) -> WorldSnapshot {
         WorldSnapshot(
             devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, l in l }),
-            openOperations: [:],
+            openOperations: openOperations,
             footprints: [
                 "HUB-1": LocationFootprint(
                     location: "HUB-1", devices: devices.count, resources: 500_000,
@@ -182,5 +185,68 @@ struct EventCourierPrintTests {
             directive: directive(step: "stowing"), world: world(standing() + [spareMatrix()])
         )
         #expect(action == .advanceStep(nextStep: EventCourierPrint.Step.replicating))
+    }
+
+    /// Owner-scoped, mirroring `RestockRun`'s guard: a print another directive
+    /// queued at the printer must not block starting this run's own.
+    @Test("a co-tenant's print at the printer does not block starting our own")
+    func coTenantPrintDoesNotBlockDispatch() {
+        let openOperations = ["PRINTER": GameModels.Operation(
+            id: "OP-OTHER", entityCode: "PRINTER", kind: OperationKind.print.rawValue,
+            status: .active, source: .poll, startedAt: now, completesAt: nil,
+            lastConfirmedAt: now, detail: .object([:]), directiveID: "OTHER"
+        )]
+        let action = EventCourierPrint().nextAction(
+            directive: directive(step: EventCourierPrint.Step.printing),
+            world: world(
+                [EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)],
+                openOperations: openOperations
+            )
+        )
+        #expect(action == .dispatch(
+            kind: .print, deviceCode: "PRINTER",
+            params: CommandParams(
+                deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag]
+            ),
+            nextStep: EventCourierPrint.Step.awaitingClone
+        ))
+    }
+
+    /// Our own print, still open, holds the step.
+    @Test("waiting on the clone holds while our own print is open")
+    func awaitingCloneWaitsOnOwnPrint() {
+        let openOperations = ["PRINTER": GameModels.Operation(
+            id: "OP-c1", entityCode: "PRINTER", kind: OperationKind.print.rawValue,
+            status: .active, source: .poll, startedAt: now, completesAt: nil,
+            lastConfirmedAt: now, detail: .object([:]), directiveID: "c1"
+        )]
+        let action = EventCourierPrint().nextAction(
+            directive: directive(step: EventCourierPrint.Step.awaitingClone),
+            world: world(
+                [EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)],
+                openOperations: openOperations
+            )
+        )
+        #expect(action == .wait)
+    }
+
+    /// **The load-bearing case.** Our own print, still nominally open, must not
+    /// extend the wait past the deadline — the deadline is a hard ceiling.
+    @Test("a print that produced no clone past the deadline re-decides")
+    func awaitingCloneReDecidesPastDeadline() {
+        let stale = now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+        let openOperations = ["PRINTER": GameModels.Operation(
+            id: "OP-c1", entityCode: "PRINTER", kind: OperationKind.print.rawValue,
+            status: .active, source: .poll, startedAt: now, completesAt: nil,
+            lastConfirmedAt: now, detail: .object([:]), directiveID: "c1"
+        )]
+        let action = EventCourierPrint().nextAction(
+            directive: directive(step: EventCourierPrint.Step.awaitingClone, entered: stale),
+            world: world(
+                [EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)],
+                openOperations: openOperations
+            )
+        )
+        #expect(action == .advanceStep(nextStep: EventCourierPrint.Step.printing))
     }
 }

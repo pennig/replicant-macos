@@ -24,6 +24,16 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dire
 /// The write half of the engine: every directive-row transition and every
 /// timeline entry the engine makes goes through here.
 enum DirectiveExecutor {
+    /// How many `.failed` dispatches a step tolerates before stalling
+    /// `.commandFailed` — a `.rejected` (4xx) never gets a retry.
+    static let failedDispatchBudget = 3
+
+    /// Verbs where a repeat is not idempotent (queues/dequeues by position,
+    /// or moves a fixed quantity) — stall on the first `.failed`, no retry.
+    static let nonRetryableKinds: Set<OperationKind> = [
+        .print, .dequeuePrint, .collectResources, .depositResources,
+    ]
+
     /// Apply `action` to `directive`, using `machine` for the step vocabulary a
     /// target change needs. Returns whether the directive is still runnable — a
     /// stall or a completion retires its executor.
@@ -45,7 +55,11 @@ enum DirectiveExecutor {
 
         case let .dispatch(kind, deviceCode, params, nextStep):
             @Dependency(\.commandGovernor) var commandGovernor
-            switch await commandGovernor.dispatch(kind, deviceCode, params) {
+            let owner = CommandOwner(directiveID: directive.id, step: directive.step, since: directive.stepStartedAt)
+            // Read before dispatching: a `.failed` that leaves the count where it
+            // was never reached the server, and no repeat of it can (see below).
+            let failuresBefore = await failedDispatches(for: directive)
+            switch await commandGovernor.dispatchOwned(kind, deviceCode, params, owner) {
             case let .deferred(reason):
                 // Not a failure: the governor will let it through on a later
                 // tick, so the step is late rather than lost. No state change.
@@ -57,7 +71,9 @@ enum DirectiveExecutor {
                 case let .accepted(operationID):
                     var updated = directive
                     updated.step = nextStep
-                    updated.stepStartedAt = date.now
+                    // Same-step keeps its stamp, as in `move`: the stamp bounds
+                    // both the step deadline and the governor's dedup window.
+                    if nextStep != directive.step { updated.stepStartedAt = date.now }
                     updated.updatedAt = date.now
                     await commit(updated, [
                         entry(directive, .stepStarted, "Step: \(nextStep)",
@@ -69,8 +85,30 @@ enum DirectiveExecutor {
                     ])
                     return true
 
-                case let .rejected(message), let .failed(message):
+                case let .rejected(message):
                     await stall(directive, reason: .commandRejected, detail: message)
+                    return false
+
+                case let .failed(message):
+                    guard !Self.nonRetryableKinds.contains(kind) else {
+                        await stall(directive, reason: .commandFailed, detail: message)
+                        return false
+                    }
+                    // Counts THIS dispatch's own just-written row too, so `<=`
+                    // yields exactly `failedDispatchBudget` retries.
+                    let failures = await failedDispatches(for: directive)
+                    guard failures > failuresBefore else {
+                        // No row to show for the attempt: a malformed request, or
+                        // a write that failed. Repeating it changes neither.
+                        logger.notice("directive \(directive.id, privacy: .public): \(kind.rawValue, privacy: .public) failed without an operation row — \(message, privacy: .public)")
+                        await stall(directive, reason: .commandFailed, detail: message)
+                        return false
+                    }
+                    if failures <= Self.failedDispatchBudget {
+                        logger.notice("directive \(directive.id, privacy: .public): \(kind.rawValue, privacy: .public) failed (\(failures)/\(Self.failedDispatchBudget)) — \(message, privacy: .public) — will retry")
+                        return true
+                    }
+                    await stall(directive, reason: .commandFailed, detail: message)
                     return false
                 }
             }
@@ -105,7 +143,10 @@ enum DirectiveExecutor {
             // would strand a mission that is fine.
             @Dependency(\.locationsClient) var locationsClient
             try? await locationsClient.hydrateSystem(designation: designation)
-            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                restamp: nextStep != directive.step
+            )
             return true
 
         case let .scanSystem(designation, nextStep):
@@ -122,14 +163,20 @@ enum DirectiveExecutor {
             } else {
                 logger.notice("directive \(directive.id, privacy: .public): no replicant in \(designation, privacy: .public) to scan with")
             }
-            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                restamp: nextStep != directive.step
+            )
             return true
 
         case let .refreshBody(system, body, nextStep):
             // Best-effort by contract, same reasoning as `.refreshSystem` above.
             @Dependency(\.locationsClient) var locationsClient
             try? await locationsClient.hydrateBody(systemDesignation: system, bodyDesignation: body)
-            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                restamp: nextStep != directive.step
+            )
             return true
 
         case let .setDeviceTags(deviceCode, tags, nextStep):
@@ -153,7 +200,10 @@ enum DirectiveExecutor {
             } catch {
                 logger.notice("directive \(directive.id, privacy: .public): tag update for \(deviceCode, privacy: .public) failed: \(error) — advancing anyway")
             }
-            await move(directive, to: nextStep, controllerCode: directive.controllerCode)
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                restamp: nextStep != directive.step
+            )
             return true
 
         case let .refreshDevices(_, thenStall), let .refreshDevicesInSystem(_, thenStall),
@@ -318,9 +368,9 @@ enum DirectiveExecutor {
     /// Move `directive` to `nextStep`, setting its controller to
     /// `controllerCode`, with the matching timeline entry.
     ///
-    /// `stepStartedAt` is re-stamped UNCONDITIONALLY, with no same-step
-    /// exception, so a step that dispatches with `nextStep` equal to its own
-    /// step restarts its own deadline every tick and can never time out.
+    /// `restamp` defaults to true; a same-step read passes false, leaving
+    /// `stepStartedAt` alone so the deadline keeps accumulating — and (per
+    /// `restamp || nextStep != directive.step`) logging nothing, like `.wait`.
     ///
     /// `deviceCode` defaults to nil and is separate from `controllerCode`
     /// (which every caller sets, usually to `directive.controllerCode`
@@ -332,7 +382,8 @@ enum DirectiveExecutor {
         to nextStep: String,
         controllerCode: String?,
         deviceCode: String? = nil,
-        claimedRelayCode: String? = nil
+        claimedRelayCode: String? = nil,
+        restamp: Bool = true
     ) async {
         @Dependency(\.date) var date
         @Dependency(\.uuid) var uuid
@@ -342,13 +393,30 @@ enum DirectiveExecutor {
         // Nil leaves an existing claim standing: every other transition passes
         // nil, and none of them means "the run has let go of its relay".
         if let claimedRelayCode { updated.claimedRelayCode = claimedRelayCode }
-        updated.stepStartedAt = date.now
+        if restamp { updated.stepStartedAt = date.now }
         updated.updatedAt = date.now
-        await commit(updated, [
-            entry(directive, .stepStarted, "Step: \(nextStep)",
-                  step: nextStep, operationID: nil, deviceCode: deviceCode,
-                  id: uuid().uuidString, at: date.now),
-        ])
+        let entries = restamp || nextStep != directive.step
+            ? [entry(directive, .stepStarted, "Step: \(nextStep)",
+                     step: nextStep, operationID: nil, deviceCode: deviceCode,
+                     id: uuid().uuidString, at: date.now)]
+            : []
+        await commit(updated, entries)
+    }
+
+    /// Count of `.failed` `Operation` rows this step has already accrued —
+    /// `directive`'s own budget window, never one a re-stamp can slide.
+    private static func failedDispatches(for directive: Directive) async -> Int {
+        @Dependency(\.defaultDatabase) var database
+        return (try? await database.read { db in
+            try Operation
+                .where {
+                    $0.directiveID.eq(directive.id)
+                        && $0.step.eq(directive.step)
+                        && $0.status.eq(OperationStatus.failed)
+                        && $0.startedAt >= directive.stepStartedAt
+                }
+                .fetchCount(db)
+        }) ?? 0
     }
 
     /// Pause and surface: put `directive` into `.needsAttention` with typed
