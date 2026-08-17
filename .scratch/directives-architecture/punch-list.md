@@ -54,6 +54,25 @@ Small things deliberately not fixed when they were found, kept here so they are 
   `holdingDirective` shedding an O(rows² × devices) loop — but both are UI paths that used to be
   trivial. Measure before assuming.
 
+- [ ] **A scoped-tagged repair bot silently stops answering a bare-tagged row.** Stage 1 ticket 12 made
+  `RepairFleet.answers` one-directionally root-tolerant, as specified. During migration a live row whose
+  `fleetTag` is unscoped loses any bot an operator has already given a per-theatre tag, and the
+  degradation is silent: `deployBots` returns `.advanceStep` and `awaitRepair` advances to stowing, with
+  no stall and no log line, so the run simply never repairs. Needs both a bare-tagged live row and
+  hand-scoped bots, and nothing in the codebase writes scoped tags onto service bots — operator-triggered
+  only. `RepairFleet.swift`; `survey-repair-fleet-tag.md` already warns this failure is silent.
+- [ ] **The tendMesh grow path does not get the per-theatre lease property.** `Brain`'s grow pass and
+  `commitBlocker` both derive leases account-wide, so S1.2's "a scoped lease elsewhere leaves the carrier
+  spendable" does not reach it. Structural for the grow pass — the reserved set is computed before a
+  ranked walk that resolves a different theatre per candidate — but `commitBlocker` had a `Theatre` a
+  frame up. Ticket-11 residue surfaced by ticket 12's review. `Brain.swift`.
+- [ ] **`TagsEditor` accepts free text, so an operator can hand-type an ungrammatical or over-scoped tag.**
+  No grammar validation. `auto:carrier:DEPOT-A` parses as a scoped carrier tag, and `.exact` matching then
+  reads the device as untagged, silently dropping it from the carrier pool. Since ticket 10 closed the
+  `Goal` enum, `auto:other` is likewise no longer a fleet tag anywhere. Pre-existing, not a regression,
+  but it is the case that would make several deliberately-dead scoped branches live.
+  `DevicesFeature/Sources/TagsEditor.swift`.
+
 ## Constants and coupling
 
 - [ ] **`unresolvedReadBand` is tied to the engine tick by comment only.** The band (15 s) must exceed the worst observed tick period; the tick literal lives separately in `DirectiveEngine.swift`. Changing the tick silently breaks the pairing. Give them one shared constant, or a test that fails when they diverge.
