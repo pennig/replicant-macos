@@ -180,14 +180,14 @@ struct RelayRunReturnLegTests {
     /// once.
     @Test("a meshed target advances to returning when the run was asked to come home")
     func settlingAdvancesToReturning() {
-        let directive = relayRun(step: RelayRun.Step.settling, returnToOrigin: true)
+        let directive = relayRun(step: RelayRun.Step.settling.rawValue, returnToOrigin: true)
         let snapshot = world(devices: [
             carrier(location: "VEGA-1-L4"), hub(), liveRelay("REL0", at: hubLocation),
             liveRelay("RLY1", at: "VEGA-1-L4"),
         ])
 
         #expect(RelayRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.returning))
+                == .advanceStep(nextStep: RelayRun.Step.returning.rawValue))
     }
 
     /// …and ONLY when it was asked. `returnToOrigin` is a per-directive
@@ -195,7 +195,7 @@ struct RelayRunReturnLegTests {
     /// run that deliberately chains onward must still be able to.
     @Test("a run that was not asked to come home finishes where it stands")
     func settlingIsDoneWithoutReturnToOrigin() {
-        let directive = relayRun(step: RelayRun.Step.settling, returnToOrigin: false)
+        let directive = relayRun(step: RelayRun.Step.settling.rawValue, returnToOrigin: false)
         let snapshot = world(devices: [
             carrier(location: "VEGA-1-L4"), hub(), liveRelay("REL0", at: hubLocation),
             liveRelay("RLY1", at: "VEGA-1-L4"),
@@ -216,7 +216,7 @@ struct RelayRunReturnLegTests {
     /// still unusable — the manual step moved rather than removed.
     @Test("returning flies to the hub LOCATION, never to the origin SYSTEM")
     func returningTargetsTheHubLocation() {
-        let directive = relayRun(step: RelayRun.Step.returning, returnToOrigin: true)
+        let directive = relayRun(step: RelayRun.Step.returning.rawValue, returnToOrigin: true)
         let snapshot = world(devices: [
             carrier(location: "VEGA-1-L4"), hub(), liveRelay("REL0", at: hubLocation),
         ])
@@ -226,12 +226,12 @@ struct RelayRunReturnLegTests {
         #expect(action == .dispatch(
             kind: .travel, deviceCode: "V1",
             params: CommandParams(destination: hubLocation),
-            nextStep: RelayRun.Step.returning
+            nextStep: RelayRun.Step.returning.rawValue
         ))
         #expect(action != .dispatch(
             kind: .travel, deviceCode: "V1",
             params: CommandParams(destination: directive.originDesignation),
-            nextStep: RelayRun.Step.returning
+            nextStep: RelayRun.Step.returning.rawValue
         ), "the remembered origin is the lossy projection this must not use")
     }
 
@@ -239,7 +239,7 @@ struct RelayRunReturnLegTests {
     /// at all. Mirrors `SurveyRun.returnHome`'s guard.
     @Test("a carrier already standing at the hub skips the leg")
     func alreadyHomeIsDone() {
-        let directive = relayRun(step: RelayRun.Step.returning, returnToOrigin: true)
+        let directive = relayRun(step: RelayRun.Step.returning.rawValue, returnToOrigin: true)
         let snapshot = world(devices: [
             carrier(location: hubLocation), hub(), liveRelay("REL0", at: hubLocation),
         ])
@@ -252,7 +252,7 @@ struct RelayRunReturnLegTests {
     /// travel on top of the first.
     @Test("an open operation on the carrier waits rather than re-issuing the travel")
     func openOperationWaits() {
-        let directive = relayRun(step: RelayRun.Step.returning, returnToOrigin: true)
+        let directive = relayRun(step: RelayRun.Step.returning.rawValue, returnToOrigin: true)
         let snapshot = world(
             devices: [carrier(location: "VEGA-1-L4"), hub(), liveRelay("REL0", at: hubLocation)],
             openOperations: openOp("V1", kind: .travel)
@@ -268,7 +268,7 @@ struct RelayRunReturnLegTests {
     /// loop to tell them nothing had gone wrong.
     @Test("a world with no recognisable hub finishes the run instead of escalating")
     func noHubIsDoneNotStall() {
-        let directive = relayRun(step: RelayRun.Step.returning, returnToOrigin: true)
+        let directive = relayRun(step: RelayRun.Step.returning.rawValue, returnToOrigin: true)
         // The printer is present but its location holds NO stock, so it is not a
         // hub — the recognition rule fixed in `d4d46ea`.
         let snapshot = world(
@@ -311,9 +311,9 @@ struct HubRecognitionSeamTests {
         let view = try await database.read { db in try WorldView.read(from: db, now: now) }
 
         let directives = [
-            relayRun(step: RelayRun.Step.returning, returnToOrigin: true, theatreDepot: hubLocation),
-            relayRun(step: RelayRun.Step.returning, returnToOrigin: true, theatreDepot: nil),
-            relayRun(step: RelayRun.Step.returning, returnToOrigin: true, theatreDepot: "GONE-BELT-1"),
+            relayRun(step: RelayRun.Step.returning.rawValue, returnToOrigin: true, theatreDepot: hubLocation),
+            relayRun(step: RelayRun.Step.returning.rawValue, returnToOrigin: true, theatreDepot: nil),
+            relayRun(step: RelayRun.Step.returning.rawValue, returnToOrigin: true, theatreDepot: "GONE-BELT-1"),
         ]
 
         for directive in directives {

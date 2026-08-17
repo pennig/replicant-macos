@@ -619,15 +619,15 @@ struct BrainGrowLifecycleE2ETests {
         //    split into dispatch + poll, so a machine that collapsed one of
         //    those pairs would show a missing step here.
         #expect(stepPath(ticks) == [
-            RelayRun.Step.printing,
-            RelayRun.Step.stowing,
-            RelayRun.Step.confirmingStow,
-            RelayRun.Step.travelling,
-            RelayRun.Step.emplacing,
-            RelayRun.Step.activating,
-            RelayRun.Step.confirmingRelay,
-            RelayRun.Step.settling,
-            RelayRun.Step.returning,
+            RelayRun.Step.printing.rawValue,
+            RelayRun.Step.stowing.rawValue,
+            RelayRun.Step.confirmingStow.rawValue,
+            RelayRun.Step.travelling.rawValue,
+            RelayRun.Step.emplacing.rawValue,
+            RelayRun.Step.activating.rawValue,
+            RelayRun.Step.confirmingRelay.rawValue,
+            RelayRun.Step.settling.rawValue,
+            RelayRun.Step.returning.rawValue,
         ])
 
         // 3. THE RUN. One row for one target, launched by the brain, finished
@@ -792,7 +792,7 @@ struct BrainGrowLifecycleE2ETests {
         #expect(view.meshSystems == ["SOL"], "the mesh did not grow")
 
         let last = try #require(ticks.last)
-        #expect(last.step == RelayRun.Step.confirmingRelay, "still polling for a relay that never came up")
+        #expect(last.step == RelayRun.Step.confirmingRelay.rawValue, "still polling for a relay that never came up")
         #expect(last.status == .running)
         #expect(last.ranked.contains(target), "an unmeshed target stays a grow candidate")
     }

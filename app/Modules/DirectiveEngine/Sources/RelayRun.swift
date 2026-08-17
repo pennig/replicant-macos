@@ -21,7 +21,7 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dire
 
 public struct RelayRun: MissionStepMachine {
     public let kind: DirectiveKind = .relayRun
-    public var firstStep: String { Step.acquire }
+    public var firstStep: String { Step.acquire.rawValue }
 
     /// Total-stock floor the print step checks before spending; nil leaves the rail
     /// unarmed. A PROXY for `BrainCeiling`'s per-type reserve, since
@@ -36,45 +36,45 @@ public struct RelayRun: MissionStepMachine {
     /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
     /// The dispatch/poll pairs exist because those commands carry no `Operation`
     /// row — see `trackedKinds`. The two sources meet at `stowing`.
-    public enum Step {
+    public enum Step: String, CaseIterable, Sendable {
         /// Decide where the relay comes from, and start it coming. Branches on
         /// `Directive.sourceRelayCode`: nil prints a fresh one at the hub,
         /// non-nil reclaims the existing one it names.
-        public static let acquire = "acquire"
+        case acquire
         /// Poll for the printed clone to appear in the fleet.
-        public static let printing = "printing"
+        case printing
         /// RECLAIM PATH. Fly the carrier to where the source relay stands,
         /// BEFORE anything irreversible happens to it. Travel is a tracked
         /// kind, so this step may re-dispatch into itself.
-        public static let fetching = "fetching"
+        case fetching
         /// RECLAIM PATH. Dispatch `deactivate` at the source relay.
         /// Dispatch-only.
-        public static let deactivating = "deactivating"
+        case deactivating
         /// RECLAIM PATH. Poll for the source relay to stop relaying. Split from
         /// `deactivating` because `deactivate` is classified `.immediate` by
         /// `CommandClient` and carries no `Operation` row.
-        public static let confirmingIdle = "confirmingIdle"
+        case confirmingIdle
         /// Dispatch `stow` at the relay, naming the carrier.
-        public static let stowing = "stowing"
+        case stowing
         /// Poll the relay's own `stowedInDeviceCode`. Split from `stowing`
         /// because `stow` is immediate and carries no `Operation` row.
-        public static let confirmingStow = "confirmingStow"
+        case confirmingStow
         /// Fly the carrier to the target system.
-        public static let travelling = "travelling"
+        case travelling
         /// Fly the last hop to the target's Lagrange point, then `deploy` the
         /// relay there.
-        public static let emplacing = "emplacing"
+        case emplacing
         /// Dispatch `activate` at the just-deployed relay. Dispatch-only.
-        public static let activating = "activating"
+        case activating
         /// Poll for `statusBase == "relaying"`, backstopped by
         /// `SalvageRun.activationDeadline`. Split from `activating` because
         /// `activate` is immediate and carries no `Operation` row.
-        public static let confirmingRelay = "confirmingRelay"
+        case confirmingRelay
         /// Confirm the run's actual deliverable: the TARGET SYSTEM is meshed.
-        public static let settling = "settling"
+        case settling
         /// Fly the carrier back to the hub so the next run can use it. Entered
         /// from `settling` only when the run carries `returnToOrigin`.
-        public static let returning = "returning"
+        case returning
     }
 
     // MARK: - Constants
@@ -117,24 +117,25 @@ public struct RelayRun: MissionStepMachine {
         guard let carrier = world.device(directive.deviceCode) else {
             return .stall(.unreachableDevice)
         }
-        switch directive.step {
-        case Step.acquire: return acquire(directive, carrier, world)
-        case Step.printing: return printing(directive, carrier, world)
-        case Step.fetching: return fetch(directive, carrier, world)
-        case Step.deactivating: return deactivateSource(directive, carrier, world)
-        case Step.confirmingIdle: return confirmIdle(directive, carrier, world)
-        case Step.stowing: return stowing(directive, carrier, world)
-        case Step.confirmingStow: return confirmStow(directive, carrier, world)
-        case Step.travelling: return travel(directive, carrier, world)
-        case Step.emplacing: return emplace(directive, carrier, world)
-        case Step.activating: return activate(directive, carrier, world)
-        case Step.confirmingRelay: return confirmRelay(directive, carrier, world)
-        case Step.settling: return settle(directive, world)
-        case Step.returning: return returnHome(directive, carrier, world)
-        default:
+        guard let step = Step(rawValue: directive.step) else {
             // Waiting is inert and recoverable; guessing would command the fleet.
-            logger.notice("relay run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
+            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
             return .wait
+        }
+        switch step {
+        case .acquire: return acquire(directive, carrier, world)
+        case .printing: return printing(directive, carrier, world)
+        case .fetching: return fetch(directive, carrier, world)
+        case .deactivating: return deactivateSource(directive, carrier, world)
+        case .confirmingIdle: return confirmIdle(directive, carrier, world)
+        case .stowing: return stowing(directive, carrier, world)
+        case .confirmingStow: return confirmStow(directive, carrier, world)
+        case .travelling: return travel(directive, carrier, world)
+        case .emplacing: return emplace(directive, carrier, world)
+        case .activating: return activate(directive, carrier, world)
+        case .confirmingRelay: return confirmRelay(directive, carrier, world)
+        case .settling: return settle(directive, world)
+        case .returning: return returnHome(directive, carrier, world)
         }
     }
 
@@ -362,14 +363,14 @@ public struct RelayRun: MissionStepMachine {
         // A relay already aboard is one this run need not print, and is what makes
         // a relaunch mid-run idempotent.
         if let aboard = SalvageRun.relay(aboard: carrier, in: world) {
-            return .claimRelay(deviceCode: aboard.deviceCode, nextStep: Step.travelling)
+            return .claimRelay(deviceCode: aboard.deviceCode, nextStep: Step.travelling.rawValue)
         }
         // Before the hub lookup, so it holds even where the printer has gone away,
         // and before the rail, since existing stock spends nothing.
         if let location = carrier.location,
            let spare = Self.claimableRelay(directive, at: location, in: world) {
             logger.notice("relay run \(directive.id, privacy: .public): claiming idle relay \(spare.deviceCode, privacy: .public) at \(location, privacy: .public) — no print needed")
-            return .advanceStep(nextStep: Step.stowing)
+            return .advanceStep(nextStep: Step.stowing.rawValue)
         }
         guard let hub = Self.hub(near: carrier, in: world) else {
             // Guessing at another location would be a fabrication.
@@ -386,7 +387,7 @@ public struct RelayRun: MissionStepMachine {
         // because this gates an irreversible spend, so a persistently-unreadable
         // census must reach bounded-retry-then-escalate instead of retrying forever.
         if reserveFloor != nil, footprintCensusIsStale(world) {
-            return .refreshFootprint(nextStep: Step.acquire, thenStall: .printStockShort)
+            return .refreshFootprint(nextStep: Step.acquire.rawValue, thenStall: .printStockShort)
         }
         if let location = hub.location, printStockIsShort(at: location, world) {
             // The most safety-relevant veto here, so it names the condition that
@@ -400,7 +401,7 @@ public struct RelayRun: MissionStepMachine {
         return .dispatch(
             kind: .print, deviceCode: hub.deviceCode,
             params: CommandParams(deviceType: Self.relayDeviceType),
-            nextStep: Step.printing
+            nextStep: Step.printing.rawValue
         )
     }
 
@@ -411,7 +412,7 @@ public struct RelayRun: MissionStepMachine {
     private func printing(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         // The type check is what stops a shared-queue mix-up being adopted.
         if Self.printedRelay(in: world) != nil {
-            return .advanceStep(nextStep: Step.stowing)
+            return .advanceStep(nextStep: Step.stowing.rawValue)
         }
         // A run whose print was superseded can never resolve a clone by code even
         // though the server printed it and it is standing right there. Claiming off
@@ -419,7 +420,7 @@ public struct RelayRun: MissionStepMachine {
         if let location = carrier.location,
            let spare = Self.claimableRelay(directive, at: location, in: world) {
             logger.notice("relay run \(directive.id, privacy: .public): claiming relay \(spare.deviceCode, privacy: .public) from the hub pool at \(location, privacy: .public)")
-            return .advanceStep(nextStep: Step.stowing)
+            return .advanceStep(nextStep: Step.stowing.rawValue)
         }
         // Deadline BEFORE the read (`confirm-steps-need-fresh-evidence`): the
         // read below only advances on success, so a staleness-first ordering
@@ -532,12 +533,12 @@ public struct RelayRun: MissionStepMachine {
         if let aboard = world.device(code),
            aboard.deviceType == Self.relayDeviceType,
            aboard.stowedInDeviceCode == carrier.deviceCode {
-            return .advanceStep(nextStep: Step.travelling)
+            return .advanceStep(nextStep: Step.travelling.rawValue)
         }
         switch Self.confirmSource(directive, code, world) {
         case let .act(action): return action
         // The carrier must be standing with it before anything is done to it.
-        case .confirmed: return .advanceStep(nextStep: Step.fetching)
+        case .confirmed: return .advanceStep(nextStep: Step.fetching.rawValue)
         }
     }
 
@@ -550,7 +551,7 @@ public struct RelayRun: MissionStepMachine {
     /// every tick for the whole trip; the confirm sits at the two decision points.
     private func fetch(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let code = directive.sourceRelayCode else {
-            return .advanceStep(nextStep: Step.acquire)
+            return .advanceStep(nextStep: Step.acquire.rawValue)
         }
         guard let source = world.device(code) else {
             return .refreshDevices(deviceCodes: [code], thenStall: .unreachableDevice)
@@ -559,7 +560,7 @@ public struct RelayRun: MissionStepMachine {
             logger.notice("relay run \(directive.id, privacy: .public): cannot fetch — \(Self.reclaimDiagnosis(code, world), privacy: .public)")
             return .stall(.unreachableDevice)
         }
-        if carrier.location == point { return .advanceStep(nextStep: Step.deactivating) }
+        if carrier.location == point { return .advanceStep(nextStep: Step.deactivating.rawValue) }
         // An open op means the trip is under way — travel is TRACKED, which is
         // what makes re-dispatching into this same step safe.
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
@@ -568,7 +569,7 @@ public struct RelayRun: MissionStepMachine {
         if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: point), nextStep: Step.fetching
+            params: CommandParams(destination: point), nextStep: Step.fetching.rawValue
         )
     }
 
@@ -579,7 +580,7 @@ public struct RelayRun: MissionStepMachine {
     private func deactivateSource(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let code = directive.sourceRelayCode else { return .advanceStep(nextStep: Step.acquire) }
+        guard let code = directive.sourceRelayCode else { return .advanceStep(nextStep: Step.acquire.rawValue) }
         // Fresh evidence immediately before the irreversible act — the confirm
         // `acquire` bought may be a whole interstellar trip old by now.
         let source: Device
@@ -593,11 +594,11 @@ public struct RelayRun: MissionStepMachine {
             // Re-entered without the carrier having made the trip (a directive
             // relaunched at this step, a carrier sent elsewhere in between).
             // Go and fetch it rather than deactivating something out of reach.
-            return .advanceStep(nextStep: Step.fetching)
+            return .advanceStep(nextStep: Step.fetching.rawValue)
         }
         return .dispatch(
             kind: OperationKind.simple("deactivate"), deviceCode: source.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingIdle
+            params: CommandParams(), nextStep: Step.confirmingIdle.rawValue
         )
     }
 
@@ -611,12 +612,12 @@ public struct RelayRun: MissionStepMachine {
     private func confirmIdle(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let code = directive.sourceRelayCode else { return .advanceStep(nextStep: Step.acquire) }
+        guard let code = directive.sourceRelayCode else { return .advanceStep(nextStep: Step.acquire.rawValue) }
         guard let source = world.device(code) else { return .stall(.unreachableDevice) }
         // The stow already took (a lost step move, a relaunch). Nothing left to
         // confirm about a relay that is cargo.
         if source.stowedInDeviceCode == carrier.deviceCode {
-            return .advanceStep(nextStep: Step.travelling)
+            return .advanceStep(nextStep: Step.travelling.rawValue)
         }
         // The success condition, stated as the inverse of the ONE mesh authority
         // this file recognises (`Device.isActiveRelay` and
@@ -663,7 +664,7 @@ public struct RelayRun: MissionStepMachine {
             logger.notice("relay run \(directive.id, privacy: .public): \(carrier.deviceCode, privacy: .public) reports out of control range at \(carrier.location ?? "nowhere", privacy: .public) — the deactivate took this system off the mesh and nothing here can be commanded, so the stow is not dispatched")
             return .stall(.unreachableDevice)
         }
-        return .advanceStep(nextStep: Step.stowing)
+        return .advanceStep(nextStep: Step.stowing.rawValue)
     }
 
     // MARK: - Stowing
@@ -680,7 +681,7 @@ public struct RelayRun: MissionStepMachine {
         // Already aboard — either the co-located carrier took the clone by
         // itself (the composition's premise) or this step is being re-entered.
         if relay.stowedInDeviceCode == carrier.deviceCode {
-            return .claimRelay(deviceCode: relay.deviceCode, nextStep: Step.travelling)
+            return .claimRelay(deviceCode: relay.deviceCode, nextStep: Step.travelling.rawValue)
         }
         guard let location = carrier.location, relay.location == location else {
             // A relay somewhere else cannot be stowed onto this carrier;
@@ -693,7 +694,7 @@ public struct RelayRun: MissionStepMachine {
         return .dispatch(
             kind: .stow, deviceCode: relay.deviceCode,
             params: CommandParams(target: carrier.deviceCode),
-            nextStep: Step.confirmingStow
+            nextStep: Step.confirmingStow.rawValue
         )
     }
 
@@ -707,7 +708,7 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.noRelayCoLocated)
         }
         if relay.stowedInDeviceCode == carrier.deviceCode {
-            return .claimRelay(deviceCode: relay.deviceCode, nextStep: Step.travelling)
+            return .claimRelay(deviceCode: relay.deviceCode, nextStep: Step.travelling.rawValue)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.stowDeadline {
             return .stall(.noRelayCoLocated)
@@ -742,7 +743,7 @@ public struct RelayRun: MissionStepMachine {
             if meshed, let loss = Self.meshRaceLoss(directive, target: target) {
                 logger.warning("relay run \(directive.id, privacy: .public): \(loss, privacy: .public)")
             }
-            return .advanceStep(nextStep: meshed ? Step.settling : Step.emplacing)
+            return .advanceStep(nextStep: meshed ? Step.settling.rawValue : Step.emplacing.rawValue)
         }
         // An open op means the trip is under way — the guard that stops a second
         // travel landing on top of the first, which is exactly what a `.simple`
@@ -754,7 +755,7 @@ public struct RelayRun: MissionStepMachine {
         if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: target), nextStep: Step.travelling
+            params: CommandParams(destination: target), nextStep: Step.travelling.rawValue
         )
     }
 
@@ -806,19 +807,19 @@ public struct RelayRun: MissionStepMachine {
             if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
             return .dispatch(
                 kind: .travel, deviceCode: carrier.deviceCode,
-                params: CommandParams(destination: point), nextStep: Step.emplacing
+                params: CommandParams(destination: point), nextStep: Step.emplacing.rawValue
             )
         }
         // Re-entry after a `deploy` whose step move was lost: re-issuing `deploy`
         // at a deployed relay is rejected, so hand off to activation instead.
         if relay.stowedInDeviceCode == nil, relay.location == point {
-            return .advanceStep(nextStep: Step.activating)
+            return .advanceStep(nextStep: Step.activating.rawValue)
         }
         // No `openOperation` guard — `deploy` is untracked, so the lookup is always
         // nil. The safety is that this hands off to a DIFFERENT step.
         return .dispatch(
             kind: OperationKind.simple("deploy"), deviceCode: relay.deviceCode,
-            params: CommandParams(), nextStep: Step.activating
+            params: CommandParams(), nextStep: Step.activating.rawValue
         )
     }
 
@@ -846,7 +847,7 @@ public struct RelayRun: MissionStepMachine {
         // Read the STATE, not the server's prose, which the backend may reword.
         if relay.statusBase == Self.relayingStatus {
             logger.info("relay run \(directive.id, privacy: .public): \(relay.deviceCode, privacy: .public) is already relaying — confirming rather than re-activating")
-            return .advanceStep(nextStep: Step.confirmingRelay)
+            return .advanceStep(nextStep: Step.confirmingRelay.rawValue)
         }
         // The window that check exists for is exactly the one where its row is
         // WRONG, so a row too old to trust buys a read before it buys a command:
@@ -856,7 +857,7 @@ public struct RelayRun: MissionStepMachine {
         }
         return .dispatch(
             kind: OperationKind.simple("activate"), deviceCode: relay.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingRelay
+            params: CommandParams(), nextStep: Step.confirmingRelay.rawValue
         )
     }
 
@@ -869,7 +870,7 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.relayActivationFailed)
         }
         // `statusBase`, not `status` — a raw comparison reads a live relay as dead.
-        if relay.statusBase == Self.relayingStatus { return .advanceStep(nextStep: Step.settling) }
+        if relay.statusBase == Self.relayingStatus { return .advanceStep(nextStep: Step.settling.rawValue) }
         if world.now.timeIntervalSince(directive.stepStartedAt) > SalvageRun.activationDeadline {
             return .stall(.relayActivationFailed)
         }
@@ -895,7 +896,7 @@ public struct RelayRun: MissionStepMachine {
         }
         logger.info("relay run \(directive.id, privacy: .public): \(target, privacy: .public) is meshed")
         guard directive.returnToOrigin else { return .done }
-        return .advanceStep(nextStep: Step.returning)
+        return .advanceStep(nextStep: Step.returning.rawValue)
     }
 
     /// Fly `carrier` back to the hub so the next run can use it. **The destination
@@ -918,7 +919,7 @@ public struct RelayRun: MissionStepMachine {
         if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: hub), nextStep: Step.returning
+            params: CommandParams(destination: hub), nextStep: Step.returning.rawValue
         )
     }
 

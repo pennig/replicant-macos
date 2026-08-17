@@ -148,7 +148,7 @@ private func targetSystem(_ designation: String = "VEGA") -> StarSystem {
 }
 
 private func running(
-    step: String = RelayRun.Step.acquire,
+    step: String = RelayRun.Step.acquire.rawValue,
     targets: [String] = ["VEGA"],
     targetIndex: Int = 0,
     sourceRelayCode: String? = nil,
@@ -173,7 +173,15 @@ struct RelayRunRegistrationTests {
     /// one-line edit that turns the whole run live.
     @Test func isRegisteredWithTheEngine() {
         #expect(MissionRegistry.machine(for: .relayRun) is RelayRun)
-        #expect(MissionRegistry.firstStep(for: .relayRun) == RelayRun.Step.acquire)
+        #expect(MissionRegistry.firstStep(for: .relayRun) == RelayRun.Step.acquire.rawValue)
+    }
+
+    @Test func stepVocabularyIsFrozen() {
+        #expect(RelayRun.Step.allCases.map(\.rawValue) == [
+            "acquire", "printing", "fetching", "deactivating", "confirmingIdle", "stowing",
+            "confirmingStow", "travelling", "emplacing", "activating", "confirmingRelay",
+            "settling", "returning",
+        ])
     }
 }
 
@@ -189,7 +197,7 @@ struct RelayRunAcquireTests {
         // this fixture must clear it with real stock — otherwise the test
         // would be exercising the veto, not the dispatch shape it names.
         let action = RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.acquire),
+            directive: running(step: RelayRun.Step.acquire.rawValue),
             world: world(
                 devices: [carrier(), hub()],
                 footprints: [hubLocation: footprint(hubLocation, resources: 999_999)]
@@ -206,7 +214,7 @@ struct RelayRunAcquireTests {
         // takes a device type and nothing else.
         #expect(params.destination == nil)
         #expect(params.resources == nil)
-        #expect(next == RelayRun.Step.printing)
+        #expect(next == RelayRun.Step.printing.rawValue)
     }
 
     /// A step whose precondition isn't met stalls rather than proceeding: with
@@ -243,7 +251,7 @@ struct RelayRunAcquireTests {
             devices: [carrier(), hub()],
             footprints: [hubLocation: footprint(hubLocation, resources: 900)]
         )
-        guard case .dispatch(_, _, _, RelayRun.Step.printing) =
+        guard case .dispatch(_, _, _, RelayRun.Step.printing.rawValue) =
                 RelayRun(reserveFloor: 500).nextAction(directive: running(), world: stocked)
         else {
             Issue.record("stock above the floor must still print")
@@ -276,7 +284,7 @@ struct RelayRunAcquireTests {
         // `RefreshFootprintTests.persistentlyFailingFootprintRefreshEscalatesAfterOneRound`
         // in `DirectiveEngineTests.swift`.
         #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
-                == .refreshFootprint(nextStep: RelayRun.Step.acquire, thenStall: .printStockShort))
+                == .refreshFootprint(nextStep: RelayRun.Step.acquire.rawValue, thenStall: .printStockShort))
     }
 
     /// A footprint that IS present but older than the shared poll interval is
@@ -292,7 +300,7 @@ struct RelayRunAcquireTests {
             )]
         )
         #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
-                == .refreshFootprint(nextStep: RelayRun.Step.acquire, thenStall: .printStockShort))
+                == .refreshFootprint(nextStep: RelayRun.Step.acquire.rawValue, thenStall: .printStockShort))
     }
 
     /// **The stale-hub-row Minor from review round 3.** A hub whose OWN row
@@ -434,7 +442,7 @@ struct RelayRunAcquireTests {
     /// holds, and only because the rail itself is off.
     @Test func unarmedRailNeverVetoesEvenOnUnknownStock() {
         let snapshot = world(devices: [carrier(), hub()])
-        guard case .dispatch(.print, "AF1", _, RelayRun.Step.printing) =
+        guard case .dispatch(.print, "AF1", _, RelayRun.Step.printing.rawValue) =
                 RelayRun(reserveFloor: nil).nextAction(directive: running(), world: snapshot)
         else {
             Issue.record("an explicitly unarmed rail must not veto, even on unknown stock")
@@ -458,7 +466,7 @@ struct RelayRunAcquireTests {
     @Test func skipsPrintingWhenARelayIsAlreadyAboard() {
         let snapshot = world(devices: [carrier(), hub(), relay(stowedIn: "V1")])
         #expect(RelayRun().nextAction(directive: running(), world: snapshot)
-                == .claimRelay(deviceCode: "RLY1", nextStep: RelayRun.Step.travelling))
+                == .claimRelay(deviceCode: "RLY1", nextStep: RelayRun.Step.travelling.rawValue))
     }
 
     /// A row carrying `sourceRelayCode` must never fall through into the print
@@ -475,7 +483,7 @@ struct RelayRunAcquireTests {
         }
         // …and it is not merely inert either: it routes into the reclaim
         // sub-sequence.
-        #expect(action == .advanceStep(nextStep: RelayRun.Step.fetching))
+        #expect(action == .advanceStep(nextStep: RelayRun.Step.fetching.rawValue))
     }
 }
 
@@ -522,15 +530,15 @@ struct RelayRunReclaimTests {
         // already standing with the relay here) to the `deactivate` dispatch.
         let fresh = world(devices: [Self.source(), carrier(location: "DEAD-1-L4")])
         #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: fresh)
-                == .advanceStep(nextStep: RelayRun.Step.fetching))
+                == .advanceStep(nextStep: RelayRun.Step.fetching.rawValue))
         #expect(RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.fetching, sourceRelayCode: "R9"), world: fresh
-        ) == .advanceStep(nextStep: RelayRun.Step.deactivating))
+            directive: running(step: RelayRun.Step.fetching.rawValue, sourceRelayCode: "R9"), world: fresh
+        ) == .advanceStep(nextStep: RelayRun.Step.deactivating.rawValue))
         #expect(RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world: fresh
+            directive: running(step: RelayRun.Step.deactivating.rawValue, sourceRelayCode: "R9"), world: fresh
         ) == .dispatch(
             kind: OperationKind.simple("deactivate"), deviceCode: "R9",
-            params: CommandParams(), nextStep: RelayRun.Step.confirmingIdle
+            params: CommandParams(), nextStep: RelayRun.Step.confirmingIdle.rawValue
         ))
     }
 
@@ -540,7 +548,7 @@ struct RelayRunReclaimTests {
     @Test func reclaimUsesDeactivateAndNeverDecommission() {
         let fresh = world(devices: [Self.source(), carrier(location: "DEAD-1-L4")])
         guard case let .dispatch(kind, _, _, _) = RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world: fresh
+            directive: running(step: RelayRun.Step.deactivating.rawValue, sourceRelayCode: "R9"), world: fresh
         ) else {
             Issue.record("expected a dispatch")
             return
@@ -559,12 +567,12 @@ struct RelayRunReclaimTests {
         // stop it is the rail.
         let broke = world(devices: [Self.source(), carrier(), hub()])
         #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: broke)
-                == .advanceStep(nextStep: RelayRun.Step.fetching))
+                == .advanceStep(nextStep: RelayRun.Step.fetching.rawValue))
 
         // The SAME world, differing only in the plan hint, does veto — so the
         // bypass above is the source's doing and not the fixture's.
         #expect(RelayRun().nextAction(directive: running(sourceRelayCode: nil), world: broke)
-                == .refreshFootprint(nextStep: RelayRun.Step.acquire, thenStall: .printStockShort))
+                == .refreshFootprint(nextStep: RelayRun.Step.acquire.rawValue, thenStall: .printStockShort))
     }
 
     /// A source the confirm-read DISQUALIFIES must not proceed and must not
@@ -598,7 +606,7 @@ struct RelayRunReclaimTests {
         // committed the trip.
         let moved = world(devices: [Self.source(status: "inactive"), carrier(location: "DEAD-1-L4")])
         #expect(RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world: moved
+            directive: running(step: RelayRun.Step.deactivating.rawValue, sourceRelayCode: "R9"), world: moved
         ) == .stall(.unreachableDevice))
     }
 
@@ -642,16 +650,16 @@ struct RelayRunReclaimTests {
     @Test func fliesToTheSourceRelayBeforeDeactivatingIt() {
         let away = world(devices: [Self.source(), carrier(location: hubLocation)])
         #expect(RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.fetching, sourceRelayCode: "R9"), world: away
+            directive: running(step: RelayRun.Step.fetching.rawValue, sourceRelayCode: "R9"), world: away
         ) == .dispatch(
             kind: .travel, deviceCode: "V1", params: CommandParams(destination: "DEAD-1-L4"),
-            nextStep: RelayRun.Step.fetching
+            nextStep: RelayRun.Step.fetching.rawValue
         ))
         // And the dispatch step refuses to act on a relay the carrier is not
         // standing with, whatever step it is entered from.
         #expect(RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world: away
-        ) == .advanceStep(nextStep: RelayRun.Step.fetching))
+            directive: running(step: RelayRun.Step.deactivating.rawValue, sourceRelayCode: "R9"), world: away
+        ) == .advanceStep(nextStep: RelayRun.Step.fetching.rawValue))
     }
 
     /// Travel is tracked, so the open op is the guard that stops a second trip
@@ -666,7 +674,7 @@ struct RelayRunReclaimTests {
             devices: [Self.source(), carrier(location: hubLocation)], openOperations: ["V1": trip]
         )
         #expect(RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.fetching, sourceRelayCode: "R9"), world: snapshot
+            directive: running(step: RelayRun.Step.fetching.rawValue, sourceRelayCode: "R9"), world: snapshot
         ) == .wait)
     }
 
@@ -675,12 +683,12 @@ struct RelayRunReclaimTests {
     /// row for the whole deadline and then stall on a relay that is actually
     /// down. Throttled on the row's own `updatedAt`.
     @Test func confirmingIdlePollsAdvancesAndBacksStops() {
-        let idle = running(step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9")
+        let idle = running(step: RelayRun.Step.confirmingIdle.rawValue, sourceRelayCode: "R9")
 
         // Down: the relay has stopped relaying, so it may be stowed.
         let down = world(devices: [Self.source(status: "inactive"), carrier(location: "DEAD-1-L4")])
         #expect(RelayRun().nextAction(directive: idle, world: down)
-                == .advanceStep(nextStep: RelayRun.Step.stowing))
+                == .advanceStep(nextStep: RelayRun.Step.stowing.rawValue))
 
         // Still relaying and the row is fresh: wait.
         let up = world(devices: [Self.source(), carrier(location: "DEAD-1-L4")])
@@ -697,7 +705,7 @@ struct RelayRunReclaimTests {
         // …and a `deactivate` that never takes is backstopped rather than
         // waited on forever.
         let overdue = running(
-            step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9",
+            step: RelayRun.Step.confirmingIdle.rawValue, sourceRelayCode: "R9",
             stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.reclaimDeadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: up) == .stall(.unreachableDevice))
@@ -714,7 +722,7 @@ struct RelayRunReclaimTests {
     /// reads that instead — the shape `brain-primitive-contracts` already
     /// mandates for `deliver`'s tail.
     @Test func refusesToStowWhenTheCarrierIsOutOfControlRangeAfterTheDeactivate() {
-        let idle = running(step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9")
+        let idle = running(step: RelayRun.Step.confirmingIdle.rawValue, sourceRelayCode: "R9")
         let down = Self.source(status: "inactive")
 
         // Out of range: `stow` would be dispatched into the void, stranding
@@ -728,14 +736,14 @@ struct RelayRunReclaimTests {
         #expect(RelayRun().nextAction(
             directive: idle,
             world: world(devices: [down, carrier(location: "DEAD-1-L4", controlRange: true)])
-        ) == .advanceStep(nextStep: RelayRun.Step.stowing))
+        ) == .advanceStep(nextStep: RelayRun.Step.stowing.rawValue))
 
         // Field absent: `Device.isOutOfControlRange` treats a missing field as
         // "not out of range" — a device type that never reports it must not be
         // read as stranded — so the gate is permissive here by construction.
         #expect(RelayRun().nextAction(
             directive: idle, world: world(devices: [down, carrier(location: "DEAD-1-L4")])
-        ) == .advanceStep(nextStep: RelayRun.Step.stowing))
+        ) == .advanceStep(nextStep: RelayRun.Step.stowing.rawValue))
     }
 
     /// The gate is only worth as much as the row behind it, and this is the
@@ -753,7 +761,7 @@ struct RelayRunReclaimTests {
             ),
         ])
         #expect(RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9"),
+            directive: running(step: RelayRun.Step.confirmingIdle.rawValue, sourceRelayCode: "R9"),
             world: snapshot
         ) == .refreshDevices(deviceCodes: ["V1"], thenStall: .unreachableDevice))
     }
@@ -784,7 +792,7 @@ struct RelayRunReclaimTests {
     /// `stepStartedAt`, so it is pre-deactivate evidence. A wall-clock-only
     /// gate advances to `stowing` here; a watermark gate buys the read.
     @Test func aFreshButPreDeactivateCarrierRowIsNotEvidence() {
-        let directive = running(step: RelayRun.Step.confirmingIdle, sourceRelayCode: "R9")
+        let directive = running(step: RelayRun.Step.confirmingIdle.rawValue, sourceRelayCode: "R9")
         // Sanity-pin the fixture's own premise, so this test cannot quietly
         // stop discriminating if the shared fixtures move.
         let carrierRow = carrier(
@@ -811,7 +819,7 @@ struct RelayRunReclaimTests {
         #expect(RelayRun().nextAction(
             directive: directive,
             world: world(devices: [Self.source(status: "inactive"), after])
-        ) == .advanceStep(nextStep: RelayRun.Step.stowing))
+        ) == .advanceStep(nextStep: RelayRun.Step.stowing.rawValue))
     }
 
     /// **The mesh race, which costs a RECLAIM run something it costs a print
@@ -830,8 +838,8 @@ struct RelayRunReclaimTests {
             relay("OTHER", location: "VEGA-1-L4", status: "relaying"),
         ])
         #expect(RelayRun().nextAction(
-            directive: running(step: RelayRun.Step.travelling, sourceRelayCode: "R9"), world: snapshot
-        ) == .advanceStep(nextStep: RelayRun.Step.settling))
+            directive: running(step: RelayRun.Step.travelling.rawValue, sourceRelayCode: "R9"), world: snapshot
+        ) == .advanceStep(nextStep: RelayRun.Step.settling.rawValue))
 
         // The outcome is named rather than passed over…
         let loss = RelayRun.meshRaceLoss(running(sourceRelayCode: "R9"), target: "VEGA")
@@ -855,7 +863,7 @@ struct RelayRunReclaimTests {
     @Test func reEnteringAcquireWithTheRelayAboardSkipsStraightToTravel() {
         let snapshot = world(devices: [Self.source(location: nil, stowedIn: "V1"), carrier()])
         #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.travelling))
+                == .advanceStep(nextStep: RelayRun.Step.travelling.rawValue))
     }
 
     /// **The shared tail is REUSED, not forked.** Every step after the stow is
@@ -897,7 +905,7 @@ struct RelayRunReclaimTests {
         #expect(RelayRun().nextAction(directive: running(sourceRelayCode: nil), world: snapshot)
                 == .dispatch(
                     kind: .print, deviceCode: "AF1",
-                    params: CommandParams(deviceType: "ftl_relay"), nextStep: RelayRun.Step.printing
+                    params: CommandParams(deviceType: "ftl_relay"), nextStep: RelayRun.Step.printing.rawValue
                 ))
         // …and its relay lookup still ignores the deployed relay standing
         // elsewhere, exactly as it did before the reclaim branch existed.
@@ -909,9 +917,9 @@ struct RelayRunReclaimTests {
     /// acting on a source it does not have.
     @Test func reclaimStepsWithoutASourceReturnToAcquire() {
         let snapshot = world(devices: [carrier(), hub()])
-        for step in [RelayRun.Step.fetching, RelayRun.Step.deactivating, RelayRun.Step.confirmingIdle] {
+        for step in [RelayRun.Step.fetching.rawValue, RelayRun.Step.deactivating.rawValue, RelayRun.Step.confirmingIdle.rawValue] {
             #expect(RelayRun().nextAction(directive: running(step: step), world: snapshot)
-                    == .advanceStep(nextStep: RelayRun.Step.acquire),
+                    == .advanceStep(nextStep: RelayRun.Step.acquire.rawValue),
                     Comment(rawValue: "step \(step) without a source must return to acquire"))
         }
     }
@@ -927,7 +935,7 @@ struct RelayRunPrintingTests {
             devices: [carrier(), hub()],
             dispatchedOperations: [open.id: open]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing), world: snapshot) == .wait)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing.rawValue), world: snapshot) == .wait)
     }
 
     /// Completion is detected off the print op's `new_device_code` result, not
@@ -940,8 +948,8 @@ struct RelayRunPrintingTests {
             devices: [carrier(), hub(), relay(location: hubLocation)],
             dispatchedOperations: [done.id: done]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.stowing))
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing.rawValue), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.stowing.rawValue))
     }
 
     /// The clone's row arrives by a `.high` read that `GameSync` fires off
@@ -952,7 +960,7 @@ struct RelayRunPrintingTests {
     @Test func readsTheCloneWhenItsCodeIsKnownButItsRowIsNot() {
         let done = printOp()
         let snapshot = world(devices: [carrier(), hub()], dispatchedOperations: [done.id: done])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing.rawValue), world: snapshot)
                 == .refreshDevices(deviceCodes: ["RLY1"], thenStall: .noRelayCoLocated))
     }
 
@@ -970,7 +978,7 @@ struct RelayRunPrintingTests {
             dispatchedOperations: [foreign.id: foreign]
         )
         // Inside the deadline it keeps waiting — it does NOT advance to stowing.
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing), world: snapshot) == .wait)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing.rawValue), world: snapshot) == .wait)
         // And it does not burn reads on a row that is present and simply is not
         // ours: re-reading a mining drone will never make it a relay.
         #expect(RelayRun.printedRelay(in: snapshot) == nil)
@@ -985,7 +993,7 @@ struct RelayRunPrintingTests {
             devices: [carrier(), hub(), device("DRONE9", type: "mining_drone", location: hubLocation)],
             dispatchedOperations: [foreign.id: foreign]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing.rawValue), world: snapshot)
                 == .stall(.noRelayCoLocated))
     }
 
@@ -1010,7 +1018,7 @@ struct RelayRunPrintingTests {
     @Test func stallsWhenThePrintDeadlinePasses() {
         let snapshot = world(devices: [carrier(), hub()], now: fixtureNow)
         let overdue = running(
-            step: RelayRun.Step.printing,
+            step: RelayRun.Step.printing.rawValue,
             stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.printDeadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.noRelayCoLocated))
@@ -1020,7 +1028,7 @@ struct RelayRunPrintingTests {
     /// stall above is the deadline's doing.
     @Test func waitsInsideThePrintDeadline() {
         let snapshot = world(devices: [carrier(), hub()])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing), world: snapshot) == .wait)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing.rawValue), world: snapshot) == .wait)
     }
 
     /// A superseded print op is fail-safe — no loop, no spend — but it is
@@ -1055,7 +1063,7 @@ struct RelayRunPrintingTests {
         let superseded = printOp(status: .superseded, newDeviceCode: nil)
         let snapshot = world(devices: [carrier(), hub()], dispatchedOperations: [superseded.id: superseded])
         let overdue = running(
-            step: RelayRun.Step.printing,
+            step: RelayRun.Step.printing.rawValue,
             stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.printDeadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.noRelayCoLocated))
@@ -1072,7 +1080,7 @@ struct RelayRunStowingTests {
             devices: [carrier(), hub(), relay(location: hubLocation)],
             dispatchedOperations: [done.id: done]
         )
-        let action = RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing), world: snapshot)
+        let action = RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing.rawValue), world: snapshot)
         guard case let .dispatch(kind, deviceCode, params, next) = action else {
             Issue.record("expected a stow dispatch, got \(action)")
             return
@@ -1082,7 +1090,7 @@ struct RelayRunStowingTests {
         // its `target` — the inverse would stow the vessel into the relay.
         #expect(deviceCode == "RLY1")
         #expect(params.target == "V1")
-        #expect(next == RelayRun.Step.confirmingStow)
+        #expect(next == RelayRun.Step.confirmingStow.rawValue)
     }
 
     /// The composition's premise: a co-located HEAVEN carrier may take the clone
@@ -1094,8 +1102,8 @@ struct RelayRunStowingTests {
             devices: [carrier(), hub(), relay(stowedIn: "V1")],
             dispatchedOperations: [done.id: done]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing), world: snapshot)
-                == .claimRelay(deviceCode: "RLY1", nextStep: RelayRun.Step.travelling))
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing.rawValue), world: snapshot)
+                == .claimRelay(deviceCode: "RLY1", nextStep: RelayRun.Step.travelling.rawValue))
     }
 
     /// A relay that is neither aboard nor anywhere near the carrier cannot be
@@ -1106,7 +1114,7 @@ struct RelayRunStowingTests {
             devices: [carrier(), hub(), relay(location: "FAR-BELT-9")],
             dispatchedOperations: [done.id: done]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.stowing.rawValue), world: snapshot)
                 == .stall(.noRelayCoLocated))
     }
 }
@@ -1124,8 +1132,8 @@ struct RelayRunConfirmStowTests {
             devices: [carrier(), hub(), relay(stowedIn: "V1")],
             dispatchedOperations: [done.id: done]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.confirmingStow), world: snapshot)
-                == .claimRelay(deviceCode: "RLY1", nextStep: RelayRun.Step.travelling))
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.confirmingStow.rawValue), world: snapshot)
+                == .claimRelay(deviceCode: "RLY1", nextStep: RelayRun.Step.travelling.rawValue))
     }
 
     /// Nothing else moves this row: `stow` is immediate and emits no operation,
@@ -1141,7 +1149,7 @@ struct RelayRunConfirmStowTests {
             ],
             dispatchedOperations: [done.id: done]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.confirmingStow), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.confirmingStow.rawValue), world: snapshot)
                 == .refreshDevices(deviceCodes: ["RLY1"], thenStall: nil))
     }
 
@@ -1152,7 +1160,7 @@ struct RelayRunConfirmStowTests {
             dispatchedOperations: [done.id: done]
         )
         let overdue = running(
-            step: RelayRun.Step.confirmingStow,
+            step: RelayRun.Step.confirmingStow.rawValue,
             stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.stowDeadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.noRelayCoLocated))
@@ -1165,10 +1173,10 @@ struct RelayRunConfirmStowTests {
 struct RelayRunTravelTests {
     @Test func dispatchesTravelToTheTargetSystem() {
         let snapshot = world(devices: [carrier(), hub(), relay(stowedIn: "V1")])
-        let action = RelayRun().nextAction(directive: running(step: RelayRun.Step.travelling), world: snapshot)
+        let action = RelayRun().nextAction(directive: running(step: RelayRun.Step.travelling.rawValue), world: snapshot)
         #expect(action == .dispatch(
             kind: .travel, deviceCode: "V1", params: CommandParams(destination: "VEGA"),
-            nextStep: RelayRun.Step.travelling
+            nextStep: RelayRun.Step.travelling.rawValue
         ))
     }
 
@@ -1185,13 +1193,13 @@ struct RelayRunTravelTests {
             devices: [carrier(), hub(), relay(stowedIn: "V1")],
             openOperations: ["V1": travelling]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.travelling), world: snapshot) == .wait)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.travelling.rawValue), world: snapshot) == .wait)
     }
 
     @Test func advancesToEmplacingOnArrival() {
         let snapshot = world(devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.travelling), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.emplacing))
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.travelling.rawValue), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.emplacing.rawValue))
     }
 }
 
@@ -1204,11 +1212,11 @@ struct RelayRunEmplaceTests {
             devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")],
             systems: ["VEGA": targetSystem()]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing.rawValue), world: snapshot)
                 == .dispatch(
                     kind: .travel, deviceCode: "V1",
                     params: CommandParams(destination: "VEGA-1-L4"),
-                    nextStep: RelayRun.Step.emplacing
+                    nextStep: RelayRun.Step.emplacing.rawValue
                 ))
     }
 
@@ -1217,10 +1225,10 @@ struct RelayRunEmplaceTests {
             devices: [carrier(location: "VEGA-1-L4"), relay(stowedIn: "V1")],
             systems: ["VEGA": targetSystem()]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing.rawValue), world: snapshot)
                 == .dispatch(
                     kind: OperationKind.simple("deploy"), deviceCode: "RLY1",
-                    params: CommandParams(), nextStep: RelayRun.Step.activating
+                    params: CommandParams(), nextStep: RelayRun.Step.activating.rawValue
                 ))
     }
 
@@ -1229,7 +1237,7 @@ struct RelayRunEmplaceTests {
     /// unstructured, and acting on the second would silently forfeit the mesh.
     @Test func waitsWhenTheTargetSystemIsNotCachedYet() {
         let snapshot = world(devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing), world: snapshot) == .wait)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing.rawValue), world: snapshot) == .wait)
     }
 
     /// Past the deadline the backstop reads the catalogue while
@@ -1238,11 +1246,11 @@ struct RelayRunEmplaceTests {
     @Test func readsTheCatalogueOnceTheResolutionDeadlinePasses() {
         let snapshot = world(devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")])
         let overdue = running(
-            step: RelayRun.Step.emplacing,
+            step: RelayRun.Step.emplacing.rawValue,
             stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.systemResolutionDeadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot)
-                == .refreshSystem(designation: "VEGA", nextStep: RelayRun.Step.emplacing))
+                == .refreshSystem(designation: "VEGA", nextStep: RelayRun.Step.emplacing.rawValue))
     }
 
     /// Past `systemUnresolvedRetryWindow` too, the run surfaces rather than
@@ -1251,7 +1259,7 @@ struct RelayRunEmplaceTests {
     @Test func stallsWhenTheTargetSystemNeverResolves() {
         let snapshot = world(devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")])
         let overdue = running(
-            step: RelayRun.Step.emplacing,
+            step: RelayRun.Step.emplacing.rawValue,
             stepStartedAt: fixtureNow.addingTimeInterval(
                 -(SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow + 1)
             )
@@ -1273,7 +1281,7 @@ struct RelayRunEmplaceTests {
                 devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")],
                 now: stepStartedAt.addingTimeInterval(elapsed)
             )
-            let directive = running(step: RelayRun.Step.emplacing, stepStartedAt: stepStartedAt)
+            let directive = running(step: RelayRun.Step.emplacing.rawValue, stepStartedAt: stepStartedAt)
             switch RelayRun().nextAction(directive: directive, world: snapshot) {
             case .refreshSystem: reads += 1
             case .stall(.salvageSystemUnresolved, nil): sawTheStall = true
@@ -1301,7 +1309,7 @@ struct RelayRunEmplaceTests {
                     devices: [carrier(location: "VEGA"), relay(stowedIn: "V1")],
                     now: stepStartedAt.addingTimeInterval(elapsed)
                 )
-                let directive = running(step: RelayRun.Step.emplacing, stepStartedAt: stepStartedAt)
+                let directive = running(step: RelayRun.Step.emplacing.rawValue, stepStartedAt: stepStartedAt)
                 if case .refreshSystem = RelayRun().nextAction(directive: directive, world: snapshot) {
                     reads += 1
                 }
@@ -1321,16 +1329,16 @@ struct RelayRunActivateTests {
     /// stops working at exactly the point this step needs it.
     @Test func dispatchesActivateAtTheDeployedRelay() {
         let snapshot = world(devices: [carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4")])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating.rawValue), world: snapshot)
                 == .dispatch(
                     kind: OperationKind.simple("activate"), deviceCode: "RLY1",
-                    params: CommandParams(), nextStep: RelayRun.Step.confirmingRelay
+                    params: CommandParams(), nextStep: RelayRun.Step.confirmingRelay.rawValue
                 ))
     }
 
     @Test func stallsWhenTheDeployedRelayCannotBeFound() {
         let snapshot = world(devices: [carrier(location: "VEGA-1-L4")])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating.rawValue), world: snapshot)
                 == .stall(.relayActivationFailed))
     }
 
@@ -1346,7 +1354,7 @@ struct RelayRunActivateTests {
             devices: [carrier(location: "VEGA-1-L4"), relay(stowedIn: "V1")],
             dispatchedOperations: [done.id: done]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating.rawValue), world: snapshot)
                 == .stall(.relayActivationFailed))
     }
 
@@ -1368,8 +1376,8 @@ struct RelayRunActivateTests {
         let snapshot = world(devices: [
             carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4", status: "relaying"),
         ])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.confirmingRelay),
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating.rawValue), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.confirmingRelay.rawValue),
                 "an active relay must be handed to the step that verifies it, never re-commanded")
     }
 
@@ -1379,8 +1387,8 @@ struct RelayRunActivateTests {
         let snapshot = world(devices: [
             carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4", status: "relaying (ACRUB)"),
         ])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.confirmingRelay))
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating.rawValue), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.confirmingRelay.rawValue))
     }
 
     /// **The race the status check alone cannot close.** The command lands, the
@@ -1397,7 +1405,7 @@ struct RelayRunActivateTests {
             carrier(location: "VEGA-1-L4"),
             relay(location: "VEGA-1-L4", status: "inactive", updatedAt: stale),
         ])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.activating.rawValue), world: snapshot)
                 == .refreshDevices(deviceCodes: ["RLY1"], thenStall: nil))
     }
 
@@ -1411,8 +1419,8 @@ struct RelayRunActivateTests {
             dispatchedOperations: [done.id: done],
             systems: ["VEGA": targetSystem()]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.activating))
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.emplacing.rawValue), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.activating.rawValue))
     }
 }
 
@@ -1424,8 +1432,8 @@ struct RelayRunConfirmRelayTests {
         let snapshot = world(
             devices: [carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4", status: "relaying")]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.confirmingRelay), world: snapshot)
-                == .advanceStep(nextStep: RelayRun.Step.settling))
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.confirmingRelay.rawValue), world: snapshot)
+                == .advanceStep(nextStep: RelayRun.Step.settling.rawValue))
     }
 
     @Test func confirmRelayReadsTheRelayWhileItPolls() {
@@ -1433,14 +1441,14 @@ struct RelayRunConfirmRelayTests {
             carrier(location: "VEGA-1-L4"),
             relay(location: "VEGA-1-L4", updatedAt: fixtureNow.addingTimeInterval(-120)),
         ])
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.confirmingRelay), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.confirmingRelay.rawValue), world: snapshot)
                 == .refreshDevices(deviceCodes: ["RLY1"], thenStall: nil))
     }
 
     @Test func confirmRelayStallsAtTheActivationDeadline() {
         let snapshot = world(devices: [carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4")])
         let overdue = running(
-            step: RelayRun.Step.confirmingRelay,
+            step: RelayRun.Step.confirmingRelay.rawValue,
             stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.activationDeadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.relayActivationFailed))
@@ -1458,7 +1466,7 @@ struct RelayRunSettleTests {
         let snapshot = world(
             devices: [carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4", status: "relaying")]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.settling), world: snapshot) == .done)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.settling.rawValue), world: snapshot) == .done)
     }
 
     /// A relay reporting `relaying` somewhere that is NOT the target system
@@ -1468,7 +1476,7 @@ struct RelayRunSettleTests {
         let snapshot = world(
             devices: [carrier(location: "VEGA-1-L4"), relay(location: "ORION-1-L4", status: "relaying")]
         )
-        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.settling), world: snapshot)
+        #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.settling.rawValue), world: snapshot)
                 == .stall(.relayActivationFailed))
     }
 }
@@ -1495,24 +1503,24 @@ struct RelayRunSimpleVerbTests {
             // `deadlineCommands`, so `completion(for:)` classifies it
             // `.immediate` and the dispatch returns `.accepted(operationID: nil)`
             // — no `Operation` row at all.
-            (RelayRun.Step.deactivating, running(step: RelayRun.Step.deactivating, sourceRelayCode: "R9"), world(
+            (RelayRun.Step.deactivating.rawValue, running(step: RelayRun.Step.deactivating.rawValue, sourceRelayCode: "R9"), world(
                 devices: [
                     carrier(location: "DEAD-1-L4"),
                     relay("R9", location: "DEAD-1-L4", status: "relaying"),
                 ]
             )),
             // `stow` at the printed relay, naming the carrier.
-            (RelayRun.Step.stowing, running(step: RelayRun.Step.stowing), world(
+            (RelayRun.Step.stowing.rawValue, running(step: RelayRun.Step.stowing.rawValue), world(
                 devices: [carrier(), hub(), relay(location: hubLocation)],
                 dispatchedOperations: [done.id: done]
             )),
             // `deploy` at the relay, at the target's Lagrange point.
-            (RelayRun.Step.emplacing, running(step: RelayRun.Step.emplacing), world(
+            (RelayRun.Step.emplacing.rawValue, running(step: RelayRun.Step.emplacing.rawValue), world(
                 devices: [carrier(location: "VEGA-1-L4"), relay(stowedIn: "V1")],
                 systems: ["VEGA": targetSystem()]
             )),
             // `activate` at the just-deployed relay.
-            (RelayRun.Step.activating, running(step: RelayRun.Step.activating), world(
+            (RelayRun.Step.activating.rawValue, running(step: RelayRun.Step.activating.rawValue), world(
                 devices: [carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4")]
             )),
         ]
@@ -1543,13 +1551,13 @@ struct RelayRunSimpleVerbTests {
     @Test func trackedDispatchesMayReenterTheirOwnStep() {
         let snapshot = world(devices: [carrier(), hub(), relay(stowedIn: "V1")])
         guard case let .dispatch(kind, _, _, next) =
-                RelayRun().nextAction(directive: running(step: RelayRun.Step.travelling), world: snapshot)
+                RelayRun().nextAction(directive: running(step: RelayRun.Step.travelling.rawValue), world: snapshot)
         else {
             Issue.record("expected a travel dispatch")
             return
         }
         #expect(RelayRun.trackedKinds.contains(kind))
-        #expect(next == RelayRun.Step.travelling)
+        #expect(next == RelayRun.Step.travelling.rawValue)
     }
 }
 
@@ -1630,22 +1638,22 @@ struct RelayRunSequenceTests {
 
         #expect(finished, "the run never reached .done")
         #expect(visited == [
-            RelayRun.Step.acquire,
-            RelayRun.Step.printing,
-            RelayRun.Step.stowing,
-            RelayRun.Step.confirmingStow,
+            RelayRun.Step.acquire.rawValue,
+            RelayRun.Step.printing.rawValue,
+            RelayRun.Step.stowing.rawValue,
+            RelayRun.Step.confirmingStow.rawValue,
             // Two visits: the first dispatches the interstellar hop, the second
             // sees the carrier arrived. Travel is a TRACKED kind, so re-entering
             // its own step is the safe shape.
-            RelayRun.Step.travelling,
-            RelayRun.Step.travelling,
+            RelayRun.Step.travelling.rawValue,
+            RelayRun.Step.travelling.rawValue,
             // Two visits again: the first flies the carrier from the system's
             // entry point to its Lagrange point, the second deploys.
-            RelayRun.Step.emplacing,
-            RelayRun.Step.emplacing,
-            RelayRun.Step.activating,
-            RelayRun.Step.confirmingRelay,
-            RelayRun.Step.settling,
+            RelayRun.Step.emplacing.rawValue,
+            RelayRun.Step.emplacing.rawValue,
+            RelayRun.Step.activating.rawValue,
+            RelayRun.Step.confirmingRelay.rawValue,
+            RelayRun.Step.settling.rawValue,
         ])
     }
 
@@ -1716,24 +1724,24 @@ struct RelayRunSequenceTests {
 
         #expect(finished, "the reclaim run never reached .done")
         #expect(visited == [
-            RelayRun.Step.acquire,
+            RelayRun.Step.acquire.rawValue,
             // Two visits: the first dispatches the trip out to the source
             // relay, the second sees the carrier standing with it.
-            RelayRun.Step.fetching,
-            RelayRun.Step.fetching,
-            RelayRun.Step.deactivating,
-            RelayRun.Step.confirmingIdle,
+            RelayRun.Step.fetching.rawValue,
+            RelayRun.Step.fetching.rawValue,
+            RelayRun.Step.deactivating.rawValue,
+            RelayRun.Step.confirmingIdle.rawValue,
             // From here on, every step is the print path's own — reused, not
             // forked.
-            RelayRun.Step.stowing,
-            RelayRun.Step.confirmingStow,
-            RelayRun.Step.travelling,
-            RelayRun.Step.travelling,
-            RelayRun.Step.emplacing,
-            RelayRun.Step.emplacing,
-            RelayRun.Step.activating,
-            RelayRun.Step.confirmingRelay,
-            RelayRun.Step.settling,
+            RelayRun.Step.stowing.rawValue,
+            RelayRun.Step.confirmingStow.rawValue,
+            RelayRun.Step.travelling.rawValue,
+            RelayRun.Step.travelling.rawValue,
+            RelayRun.Step.emplacing.rawValue,
+            RelayRun.Step.emplacing.rawValue,
+            RelayRun.Step.activating.rawValue,
+            RelayRun.Step.confirmingRelay.rawValue,
+            RelayRun.Step.settling.rawValue,
         ])
         // The relay the run planted is the one it reclaimed — no print
         // happened, and no second relay was created.

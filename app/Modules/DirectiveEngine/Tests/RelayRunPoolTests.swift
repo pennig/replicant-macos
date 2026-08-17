@@ -75,7 +75,7 @@ private func run(
     _ id: String,
     carrier code: String,
     createdAt: TimeInterval,
-    step: String = RelayRun.Step.acquire,
+    step: String = RelayRun.Step.acquire.rawValue,
     status: DirectiveStatus = .running
 ) -> Directive {
     Directive(
@@ -131,21 +131,21 @@ struct RelayRunPoolTests {
 
         let action = RelayRun().nextAction(directive: directive, world: snapshot)
 
-        #expect(action == .advanceStep(nextStep: RelayRun.Step.stowing))
+        #expect(action == .advanceStep(nextStep: RelayRun.Step.stowing.rawValue))
     }
 
     /// …and the relay the run then stows is that spare, not something else the
     /// resolution chain might have reached for.
     @Test("the claimed relay is the one stowing issues its command at")
     func claimedRelayIsTheOneStowed() {
-        let directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.stowing)
+        let directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.stowing.rawValue)
         let snapshot = world(devices: [carrier("V1"), hub(), spare("RLY1")], peers: [directive])
 
         let action = RelayRun().nextAction(directive: directive, world: snapshot)
 
         #expect(action == .dispatch(
             kind: .stow, deviceCode: "RLY1",
-            params: CommandParams(target: "V1"), nextStep: RelayRun.Step.confirmingStow
+            params: CommandParams(target: "V1"), nextStep: RelayRun.Step.confirmingStow.rawValue
         ))
     }
 
@@ -165,7 +165,7 @@ struct RelayRunPoolTests {
 
         #expect(action == .dispatch(
             kind: .print, deviceCode: "AF1",
-            params: CommandParams(deviceType: "ftl_relay"), nextStep: RelayRun.Step.printing
+            params: CommandParams(deviceType: "ftl_relay"), nextStep: RelayRun.Step.printing.rawValue
         ), "\(label) must not be claimable")
     }
 
@@ -180,7 +180,7 @@ struct RelayRunPoolTests {
 
         #expect(action == .dispatch(
             kind: .print, deviceCode: "AF1",
-            params: CommandParams(deviceType: "ftl_relay"), nextStep: RelayRun.Step.printing
+            params: CommandParams(deviceType: "ftl_relay"), nextStep: RelayRun.Step.printing.rawValue
         ))
     }
 }
@@ -194,7 +194,7 @@ struct RelayRunSupersededPrintTests {
     /// relay is standing at the hub, and the run may now take it.
     @Test("printing claims from the pool when its own op was superseded")
     func supersededPrintRecoversFromPool() {
-        let directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.printing)
+        let directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.printing.rawValue)
         let snapshot = world(
             devices: [carrier("V1"), hub(), spare("RLY1")],
             peers: [directive],
@@ -203,7 +203,7 @@ struct RelayRunSupersededPrintTests {
 
         let action = RelayRun().nextAction(directive: directive, world: snapshot)
 
-        #expect(action == .advanceStep(nextStep: RelayRun.Step.stowing))
+        #expect(action == .advanceStep(nextStep: RelayRun.Step.stowing.rawValue))
     }
 
     /// Before this change that same world stalled. Pin the regression: with no
@@ -211,7 +211,7 @@ struct RelayRunSupersededPrintTests {
     /// — the pool must not have papered over a genuinely stuck run.
     @Test("a superseded print with no stock still stalls at the deadline")
     func supersededPrintWithNoStockStillStalls() {
-        var directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.printing)
+        var directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.printing.rawValue)
         directive.stepStartedAt = Date(timeIntervalSince1970: 0)  // long past the print deadline
         let snapshot = world(
             devices: [carrier("V1"), hub()],
@@ -235,7 +235,7 @@ struct RelayRunClaimOutranksPrintTests {
     /// is standing on the ground and can never come aboard.
     @Test("confirmStow follows the relay aboard, not the clone the print named")
     func stowedRelayOutranksThePrintedClone() {
-        var directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.confirmingStow)
+        var directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.confirmingStow.rawValue)
         directive.stepStartedAt = Date(timeIntervalSince1970: 0)  // long past the stow deadline
         let snapshot = world(
             devices: [
@@ -249,7 +249,7 @@ struct RelayRunClaimOutranksPrintTests {
 
         let action = RelayRun().nextAction(directive: directive, world: snapshot)
 
-        #expect(action == .claimRelay(deviceCode: "RLY-POOL", nextStep: RelayRun.Step.travelling))
+        #expect(action == .claimRelay(deviceCode: "RLY-POOL", nextStep: RelayRun.Step.travelling.rawValue))
     }
 
     /// …and the claim is what makes that survive `deploy`, which empties the
@@ -257,7 +257,7 @@ struct RelayRunClaimOutranksPrintTests {
     /// need to know which relay this run is planting.
     @Test("a stamped claim outlives the deploy that empties the hold")
     func claimOutlivesTheDeploy() {
-        var directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.activating)
+        var directive = run("D1", carrier: "V1", createdAt: 0, step: RelayRun.Step.activating.rawValue)
         directive.claimedRelayCode = "RLY-POOL"
         let point = "VEGA-1-L4"
         let snapshot = world(
@@ -274,7 +274,7 @@ struct RelayRunClaimOutranksPrintTests {
 
         #expect(action == .dispatch(
             kind: OperationKind.simple("activate"), deviceCode: "RLY-POOL",
-            params: CommandParams(), nextStep: RelayRun.Step.confirmingRelay
+            params: CommandParams(), nextStep: RelayRun.Step.confirmingRelay.rawValue
         ))
     }
 }
@@ -288,8 +288,8 @@ struct RelayRunPoolFIFOTests {
     /// runs are independent executors that can evaluate in the same instant.
     @Test("concurrent runs claim disjoint relays, oldest first")
     func concurrentRunsClaimDisjointRelays() {
-        let older = run("D-OLD", carrier: "V1", createdAt: 100, step: RelayRun.Step.stowing)
-        let younger = run("D-NEW", carrier: "V2", createdAt: 200, step: RelayRun.Step.stowing)
+        let older = run("D-OLD", carrier: "V1", createdAt: 100, step: RelayRun.Step.stowing.rawValue)
+        let younger = run("D-NEW", carrier: "V2", createdAt: 200, step: RelayRun.Step.stowing.rawValue)
         let devices = [carrier("V1"), carrier("V2"), hub(), spare("RLY-A"), spare("RLY-B")]
         let peers = [older, younger]
 
@@ -298,11 +298,11 @@ struct RelayRunPoolFIFOTests {
 
         #expect(olderAction == .dispatch(
             kind: .stow, deviceCode: "RLY-A",
-            params: CommandParams(target: "V1"), nextStep: RelayRun.Step.confirmingStow
+            params: CommandParams(target: "V1"), nextStep: RelayRun.Step.confirmingStow.rawValue
         ), "the older run takes the lowest-code relay")
         #expect(youngerAction == .dispatch(
             kind: .stow, deviceCode: "RLY-B",
-            params: CommandParams(target: "V2"), nextStep: RelayRun.Step.confirmingStow
+            params: CommandParams(target: "V2"), nextStep: RelayRun.Step.confirmingStow.rawValue
         ), "the younger run takes a DIFFERENT relay, not the same one")
     }
 
@@ -319,10 +319,10 @@ struct RelayRunPoolFIFOTests {
         let olderAction = RelayRun().nextAction(directive: older, world: world(devices: devices, peers: peers))
         let youngerAction = RelayRun().nextAction(directive: younger, world: world(devices: devices, peers: peers))
 
-        #expect(olderAction == .advanceStep(nextStep: RelayRun.Step.stowing))
+        #expect(olderAction == .advanceStep(nextStep: RelayRun.Step.stowing.rawValue))
         #expect(youngerAction == .dispatch(
             kind: .print, deviceCode: "AF1",
-            params: CommandParams(deviceType: "ftl_relay"), nextStep: RelayRun.Step.printing
+            params: CommandParams(deviceType: "ftl_relay"), nextStep: RelayRun.Step.printing.rawValue
         ))
     }
 
@@ -342,7 +342,7 @@ struct RelayRunPoolFIFOTests {
         #expect(RelayRun.queuePosition(younger, at: hubLocation, in: world(devices: devices, peers: [older, younger])) == 0)
         #expect(RelayRun().nextAction(
             directive: younger, world: world(devices: devices, peers: [older, younger])
-        ) == .advanceStep(nextStep: RelayRun.Step.stowing))
+        ) == .advanceStep(nextStep: RelayRun.Step.stowing.rawValue))
     }
 
     /// A paused run is stopped by operator choice and may stay stopped for good,
