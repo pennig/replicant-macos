@@ -47,11 +47,6 @@ struct Brain: Sendable {
     /// the hub stands, so a hub-measured cutoff caps nothing.
     static let reclaimRangeLY: Double = 2 * SalvageTargetPlanner.relayRangeLY
 
-    /// Statuses in which a directive still OWNS its devices — a stall the operator
-    /// is about to resolve must find its fleet intact. `DirectiveRow.owningStatuses`
-    /// is a verbatim copy; neither module can import the other's, so they drift.
-    static let owningStatuses: Set<DirectiveStatus> = [.running, .needsAttention, .paused]
-
     /// Read the world, decide what is worth doing, and do it. Reporting priority
     /// when a tick did several things: a launch outranks an escalation, which
     /// outranks idling. Every irreversible act re-checks `Task.isCancelled`
@@ -244,7 +239,7 @@ struct Brain: Sendable {
             try await database.write { db in
                 for move in moves {
                     guard var row = try Directive.where({ $0.id.eq(move.id) }).fetchOne(db),
-                          Self.owningStatuses.contains(row.status)
+                          DirectiveStatus.openCases.contains(row.status)
                     else { continue }
                     if let code = move.deviceCode { row.deviceCode = code }
                     if move.clearsController { row.controllerCode = nil }
@@ -297,7 +292,7 @@ struct Brain: Sendable {
                 .filter { !inFlight.contains($0) && view.theatre(nearest: $0)?.depot == theatre.depot }
 
             let existing = snapshot.directives.first {
-                $0.kind == .restockRun && Self.owningStatuses.contains($0.status)
+                $0.kind == .restockRun && DirectiveStatus.openCases.contains($0.status)
                     && $0.theatreDepot == theatre.depot
             }
             // No targets, nothing to print FOR, so no run is created. An existing
@@ -349,7 +344,7 @@ struct Brain: Sendable {
                     let live = try Directive
                         .where { $0.kind.eq(DirectiveKind.restockRun) }
                         .fetchAll(db)
-                        .contains { Self.owningStatuses.contains($0.status) && $0.theatreDepot == theatre.depot }
+                        .contains { DirectiveStatus.openCases.contains($0.status) && $0.theatreDepot == theatre.depot }
                     guard !live else { return }
                     try Directive.insert { directive }.execute(db)
                     logger.info(
@@ -380,7 +375,7 @@ struct Brain: Sendable {
         let owns: @Sendable (Directive) -> Bool = {
             // Unstamped belongs to no theatre in particular, so it blocks
             // every theatre's launch rather than being invisible to all of them.
-            $0.kind == kind && Self.owningStatuses.contains($0.status)
+            $0.kind == kind && DirectiveStatus.openCases.contains($0.status)
                 && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil) && matching($0)
         }
         let live = snapshot.directives.contains(where: owns)
@@ -768,7 +763,7 @@ struct Brain: Sendable {
     /// ONE transaction — a carrier freed between two separate reads would look
     /// free to the ranking and reserved to the reservation pass. Holds
     /// `Directive.all` rather than a status filter, because which statuses own
-    /// their devices is a rule (`owningStatuses`) that must not live in two places.
+    /// their devices is a rule (`DirectiveStatus.openCases`) that must not live in two places.
     struct Snapshot: Sendable {
         let view: WorldView
         let directives: [Directive]
@@ -854,7 +849,7 @@ struct Brain: Sendable {
     /// `noHaulControllerTagged` path, and blanking it would strand the run.
     static func rehomedHaulRuns(directives: [Directive], view: WorldView) -> [HaulRehome] {
         directives.compactMap { row in
-            guard row.kind == .haulRun, owningStatuses.contains(row.status),
+            guard row.kind == .haulRun, DirectiveStatus.openCases.contains(row.status),
                   isGeneralHaul(row), HaulRun.pinnedSource(of: row) == nil,
                   let depot = row.theatreDepot
             else { return nil }
@@ -1043,7 +1038,7 @@ struct Brain: Sendable {
     static func inFlightSources(_ directives: [Directive]) -> Set<String> {
         Set(
             directives
-                .filter { owningStatuses.contains($0.status) }
+                .filter { DirectiveStatus.openCases.contains($0.status) }
                 .compactMap(\.sourceRelayCode)
         )
     }
@@ -1212,62 +1207,22 @@ struct Brain: Sendable {
 
     // MARK: - Reservation
 
-    /// Every device code an in-force directive owns — the set a launch must not
-    /// allocate out of. `devices` must be the UNFILTERED fleet, since a tagged
-    /// device is usually stowed. Seeded from each row's carrier, controller,
-    /// freighter and fleet tag, then closed to a fixpoint over stow (both directions) and
-    /// adoption. Over-reserves by design: spreading through a containment
-    /// component costs a tick of patience, the other direction strands a fleet.
+    /// Every device code an in-force directive owns, account-wide — the set a
+    /// launch must not allocate out of. `devices` must be the UNFILTERED fleet,
+    /// since a held device is usually stowed. A view over `Ownership.resolve`.
     static func reservedDevices(directives: [Directive], devices: [String: Device]) -> Set<String> {
-        let owning = directives.filter { owningStatuses.contains($0.status) }
-        guard !owning.isEmpty else { return [] }
+        Ownership.resolve(directives: directives, devices: devices, theatres: []).reserved
+    }
 
-        var reserved = Set<String>()
-        for directive in owning {
-            reserved.insert(directive.deviceCode)
-            if let controller = directive.controllerCode { reserved.insert(controller) }
-            // Seeded, never dragged: an event convoy's freighter flies its own
-            // leg, so no stow or attach edge reaches it from the carrier.
-            if let freighter = directive.freighterCode { reserved.insert(freighter) }
-            if let tag = directive.fleetTag {
-                for device in devices.values where device.hasTag(tag) {
-                    reserved.insert(device.deviceCode)
-                }
-            }
-        }
-
-        // `code → everything reserving `code` also reserves`. Every edge TARGET
-        // must be a device the fleet holds — a dangling reference names nothing
-        // allocatable, and admitting it puts phantom codes in the set.
-        var drags: [String: [String]] = [:]
-        func link(_ from: String, _ to: String) {
-            guard devices[to] != nil else { return }
-            drags[from, default: []].append(to)
-        }
-        for device in devices.values {
-            if let hull = device.stowedInDeviceCode {
-                link(hull, device.deviceCode)   // downward: the cargo aboard it
-                link(device.deviceCode, hull)   // upward: the hull it rides in
-            }
-            if let controller = device.controllerDeviceCode {
-                link(controller, device.deviceCode)
-            }
-            for adopted in device.controlledDeviceCodes {
-                link(device.deviceCode, adopted)
-            }
-            if let hull = device.attachedToDeviceCode {
-                link(hull, device.deviceCode)   // downward: the load on its grid
-                link(device.deviceCode, hull)   // upward: the hull carrying it
-            }
-        }
-
-        var frontier = Array(reserved)
-        while let code = frontier.popLast() {
-            for next in drags[code] ?? [] where reserved.insert(next).inserted {
-                frontier.append(next)
-            }
-        }
-        return reserved
+    /// The devices leased INSIDE `theatre`: the account-wide hold, less the
+    /// scoped-tag leases another theatre's rows hold. Every other join binds
+    /// everywhere, because a physical device is in one place.
+    static func reservedDevices(
+        directives: [Directive], view: WorldView, theatre: Theatre
+    ) -> Set<String> {
+        Ownership
+            .resolve(directives: directives, devices: view.devices, theatres: view.theatres)
+            .reserved(in: theatre)
     }
 
     /// A carrier this tick may spend: right type, tagged, standing WITH the print
@@ -1404,10 +1359,9 @@ struct Brain: Sendable {
     static func holdingDirective(
         of code: String, directives: [Directive], devices: [String: Device]
     ) -> Directive? {
-        directives
-            .filter { owningStatuses.contains($0.status) }
-            .sorted { $0.id < $1.id }
-            .first { reservedDevices(directives: [$0], devices: devices).contains(code) }
+        let ownership = Ownership.resolve(directives: directives, devices: devices, theatres: [])
+        guard let holder = ownership.holder(of: code) else { return nil }
+        return directives.first { $0.id == holder.directiveID }
     }
 
     /// Every first hop a Relay Run is already flying to. Reserving the CARRIER
@@ -1416,7 +1370,7 @@ struct Brain: Sendable {
     static func inFlightTargets(_ directives: [Directive]) -> Set<String> {
         Set(
             directives
-                .filter { $0.kind == .relayRun && owningStatuses.contains($0.status) }
+                .filter { $0.kind == .relayRun && DirectiveStatus.openCases.contains($0.status) }
                 .flatMap(\.targets)
         )
     }
@@ -1445,7 +1399,7 @@ struct Brain: Sendable {
     /// `SurveyRun`'s own fleet queries; the carrier pool is scoped to devices
     /// `theatre` owns and free of any other kind's hold.
     static func surveyReadiness(view: WorldView, directives: [Directive], theatre: Theatre) -> SurveyReadiness {
-        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        let reserved = reservedDevices(directives: directives, view: view, theatre: theatre)
         guard let carrier = surveyCarrier(view: view, theatre: theatre, reserved: reserved) else {
             return .idle(reason: surveyCarrierBlocker(view: view, theatre: theatre, reserved: reserved, directives: directives))
         }
@@ -1485,7 +1439,7 @@ struct Brain: Sendable {
     /// must be free of any other kind's hold — and the pool is scoped to
     /// devices `theatre` owns, so two theatres never fight over one vessel.
     static func salvageReadiness(view: WorldView, directives: [Directive], theatre: Theatre) -> SalvageReadiness {
-        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        let reserved = reservedDevices(directives: directives, view: view, theatre: theatre)
         let candidates = view.devices.values
             .filter { $0.isCarrierHull && SalvageRun.isFleetTagged($0, at: theatre.depot) }
             .filter { owningTheatre(of: $0, view: view)?.depot == theatre.depot }
@@ -1569,7 +1523,7 @@ struct Brain: Sendable {
     /// code, so the choice is reproducible; the pool is scoped to devices
     /// `theatre` owns, so two theatres never fight over one controller.
     static func haulReadiness(view: WorldView, directives: [Directive], theatre: Theatre) -> HaulReadiness {
-        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        let reserved = reservedDevices(directives: directives, view: view, theatre: theatre)
         let theatreTag = HaulRun.fleetTag(forTheatre: theatre.depot)
         let candidates = HaulRun.controllers(in: view.devices.values, tag: theatreTag)
             .filter { haulFleet($0, tag: theatreTag, depot: theatre.depot, view: view) }
@@ -1650,7 +1604,7 @@ struct Brain: Sendable {
             )
         }
 
-        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        let reserved = reservedDevices(directives: directives, view: view, theatre: theatre)
         guard let carrier = MineRecipe.idleCarrier(
             at: hub, in: fleet.filter { !reserved.contains($0.deviceCode) }
         ) else {
@@ -1726,7 +1680,7 @@ struct Brain: Sendable {
     static func liveMineBelts(_ directives: [Directive]) -> Set<String> {
         Set(
             directives
-                .filter { $0.kind == .mineRun && owningStatuses.contains($0.status) }
+                .filter { $0.kind == .mineRun && DirectiveStatus.openCases.contains($0.status) }
                 .flatMap(\.targets)
         )
     }
@@ -1787,7 +1741,7 @@ struct Brain: Sendable {
     /// verdict. A live row in another theatre must never mask this one's.
     static func salvageStatus(directives: [Directive], view: WorldView, theatre: Theatre) -> BrainGoalStatus {
         if let live = directives.first(where: {
-            $0.kind == .salvageRun && owningStatuses.contains($0.status)
+            $0.kind == .salvageRun && DirectiveStatus.openCases.contains($0.status)
                 && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil)
         }) {
             return .launched(
@@ -1816,7 +1770,7 @@ struct Brain: Sendable {
     /// theatre's own idle or halted state.
     static func haulStatus(directives: [Directive], view: WorldView, theatre: Theatre) -> BrainGoalStatus {
         if let live = directives.first(where: {
-            $0.kind == .haulRun && owningStatuses.contains($0.status) && isGeneralHaul($0)
+            $0.kind == .haulRun && DirectiveStatus.openCases.contains($0.status) && isGeneralHaul($0)
                 && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil)
         }) {
             return .launched(
@@ -1851,7 +1805,7 @@ struct Brain: Sendable {
     /// blocker), else the readiness verdict — never masked by another theatre.
     static func mineStatus(directives: [Directive], view: WorldView, theatre: Theatre) -> MineStatusResult {
         if let live = directives.first(where: {
-            $0.kind == .mineRun && owningStatuses.contains($0.status)
+            $0.kind == .mineRun && DirectiveStatus.openCases.contains($0.status)
                 && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil)
         }) {
             return MineStatusResult(
@@ -1929,7 +1883,7 @@ struct Brain: Sendable {
     /// verdict. A live row elsewhere must never mask this theatre's state.
     static func surveyStatus(directives: [Directive], view: WorldView, theatre: Theatre) -> BrainSurveyStatus {
         if let live = directives.first(where: {
-            $0.kind == .surveyRun && owningStatuses.contains($0.status)
+            $0.kind == .surveyRun && DirectiveStatus.openCases.contains($0.status)
                 && ($0.theatreDepot == theatre.depot || $0.theatreDepot == nil)
         }) {
             return .launched(carrier: live.deviceCode, roamCentre: live.roamCentre, status: launchedStatus(live.status))
@@ -1940,9 +1894,9 @@ struct Brain: Sendable {
         }
     }
 
-    /// `owningStatuses`' three members, narrowed from the column's five — the
-    /// other two never reach here, since the caller above only matches rows
-    /// `owningStatuses.contains` already accepted.
+    /// `DirectiveStatus.openCases`' three members, narrowed from the column's
+    /// five — the other two never reach here, since the caller above only
+    /// matches rows that set already accepted.
     private static func launchedStatus(_ status: DirectiveStatus) -> BrainSurveyStatus.LaunchedStatus {
         switch status {
         case .running: .running
@@ -2052,7 +2006,7 @@ struct Brain: Sendable {
 
         let working = Set(
             directives
-                .filter { $0.kind == .eventRun && owningStatuses.contains($0.status) }
+                .filter { $0.kind == .eventRun && DirectiveStatus.openCases.contains($0.status) }
                 .compactMap { EventRun.targetEvent(of: $0) }
         )
         let chosen = view.locationEvents.reduce(into: [String: String]()) { picks, event in
@@ -2065,7 +2019,7 @@ struct Brain: Sendable {
         )
         guard let candidate = ranked.first else { return .idle(reason: "no event worth working") }
 
-        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        let reserved = reservedDevices(directives: directives, view: view, theatre: theatre)
         guard let carrier = freeHull(
             type: EventRun.carrierDeviceType, tag: MineRecipe.carrierTag,
             theatre: theatre, view: view, reserved: reserved

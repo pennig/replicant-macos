@@ -210,7 +210,7 @@ public struct RelayRun: MissionStepMachine {
     /// relay at its own position. Ordered by `createdAt`, id as tie-break.
     ///
     /// **`.paused` holds no place in line** — the one status where this and
-    /// `Brain.owningStatuses` disagree, because a paused run at the head would
+    /// `DirectiveStatus.openCases` disagree, because a paused run at the head would
     /// otherwise starve every other run at that hub. `.needsAttention` IS counted.
     static func queuePosition(_ directive: Directive, at location: String, in world: WorldSnapshot) -> Int {
         let waiting = world.peers

@@ -92,6 +92,10 @@ public struct WorldView: Equatable, Sendable {
     /// Device type → the other printed devices its blueprint consumes. Empty
     /// until the catalog is fetched, which makes every device read as a leaf.
     public let blueprintComponents: [String: [String: Int]]
+    /// The one theatre rule, over this tick's geometry — `WorldSnapshot` holds
+    /// the identical value, so the brain and a mission cannot disagree.
+    public let theatreResolver: TheatreResolver
+
     /// The moment this snapshot was taken. Brain logic compares against this
     /// rather than `Date()`, keeping ranking passes pure and their tests
     /// deterministic.
@@ -135,6 +139,9 @@ public struct WorldView: Equatable, Sendable {
         self.blueprintBills = blueprintBills
         self.blueprintComponents = blueprintComponents
         self.now = now
+        self.theatreResolver = TheatreResolver(
+            theatres: theatres, starPositions: starPositions, components: components
+        )
     }
 
     /// One consistent, galaxy-wide read of everything the brain reasons over,
@@ -266,44 +273,25 @@ public struct WorldView: Equatable, Sendable {
 
     /// Inward: same mesh component, then nearest. Operational only.
     public func theatre(servicing system: String) -> Theatre? {
-        let component = components[system]
-        return nearestTheatre(to: system) { components[$0.system] != nil && components[$0.system] == component }
+        theatreResolver.theatre(servicing: system)
     }
 
     /// Outward: nearest by straight-line distance, no component filter. Operational only.
     public func theatre(nearest system: String) -> Theatre? {
-        nearestTheatre(to: system) { _ in true }
+        theatreResolver.theatre(nearest: system)
     }
 
-    /// `device`'s theatre, if any — a partition: at most one per device. Nil
-    /// for a stowed/cruising device or a system outside the census.
+    /// `device`'s theatre, by location alone. Ticket 12 threads the caller's
+    /// goal through so an explicit scoped tag can outrank where it stands.
     public func owningTheatre(of device: Device) -> Theatre? {
-        guard let location = device.location else { return nil }
-        return owningTheatre(ofSystem: SiteAssay.system(of: location))
+        theatreResolver.owningTheatre(of: device, goal: nil)
     }
 
     /// `system`'s theatre — the rule `owningTheatre(of:)` applies to a
     /// device's location, for a caller reasoning about a SYSTEM (a belt
     /// candidate) rather than a device.
     public func owningTheatre(ofSystem system: String) -> Theatre? {
-        theatre(servicing: system) ?? theatre(nearest: system)
-    }
-
-    /// Ranks both resolvers; they differ only by `admits`. Orders by
-    /// (distance, depot) for a stable result.
-    private func nearestTheatre(
-        to system: String, admits: (Theatre) -> Bool
-    ) -> Theatre? {
-        guard let origin = starPositions[system] else { return nil }
-        return theatres
-            .filter { $0.isOperational && admits($0) }
-            .compactMap { theatre -> (Double, Theatre)? in
-                guard let position = starPositions[theatre.system] else { return nil }
-                return (origin.distance(to: position), theatre)
-            }
-            .min { lhs, rhs in
-                lhs.0 == rhs.0 ? lhs.1.depot < rhs.1.depot : lhs.0 < rhs.0
-            }?.1
+        theatreResolver.owningTheatre(ofSystem: system)
     }
 
     /// One belt as SQLite projects it out of the blob: the three fields

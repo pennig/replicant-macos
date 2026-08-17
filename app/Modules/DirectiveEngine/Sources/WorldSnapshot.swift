@@ -124,6 +124,10 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// tests deterministic.
     public let now: Date
 
+    /// The one theatre rule, over this snapshot's own geometry — `WorldView`
+    /// holds the identical value, so a mission and the brain cannot disagree.
+    public let theatreResolver: TheatreResolver
+
     /// Newest entries kept for `log`. HaulRun's `dispatchAttemptCount` — the
     /// deepest `world.log` walk-back — stays under a few hundred entries even
     /// with many interleaved controllers; 500 leaves headroom.
@@ -167,6 +171,9 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.replicantHostDevices = replicantHostDevices
         self.peers = peers
         self.now = now
+        self.theatreResolver = TheatreResolver(
+            theatres: theatres, starPositions: starPositions, components: components
+        )
     }
 
     /// The row for the device `code` names, or nil when the fleet read has none.
@@ -210,39 +217,10 @@ public struct WorldSnapshot: Equatable, Sendable {
         return theatres.contains { $0.depot != depot && $0.isOperational }
     }
 
-    /// `device`'s theatre — mirrors `WorldView.owningTheatre(of:)`'s rule, off
-    /// this snapshot's own fields since a mission never holds a `WorldView`.
-    /// Nil for a stowed/cruising device or a system outside the census.
+    /// `device`'s theatre, by location alone. Ticket 12 threads the caller's
+    /// goal through so an explicit scoped tag can outrank where it stands.
     public func owningTheatre(of device: Device) -> Theatre? {
-        guard let location = device.location else { return nil }
-        let system = SiteAssay.system(of: location)
-        return theatre(servicing: system) ?? theatre(nearest: system)
-    }
-
-    /// Inward: same mesh component, then nearest. Operational only.
-    private func theatre(servicing system: String) -> Theatre? {
-        let component = components[system]
-        return nearestTheatre(to: system) { components[$0.system] != nil && components[$0.system] == component }
-    }
-
-    /// Outward: nearest by straight-line distance, no component filter. Operational only.
-    private func theatre(nearest system: String) -> Theatre? {
-        nearestTheatre(to: system) { _ in true }
-    }
-
-    /// Ranks both resolvers; they differ only by `admits`. Orders by
-    /// (distance, depot) for a stable result.
-    private func nearestTheatre(to system: String, admits: (Theatre) -> Bool) -> Theatre? {
-        guard let origin = starPositions[system] else { return nil }
-        return theatres
-            .filter { $0.isOperational && admits($0) }
-            .compactMap { theatre -> (Double, Theatre)? in
-                guard let position = starPositions[theatre.system] else { return nil }
-                return (origin.distance(to: position), theatre)
-            }
-            .min { lhs, rhs in
-                lhs.0 == rhs.0 ? lhs.1.depot < rhs.1.depot : lhs.0 < rhs.0
-            }?.1
+        theatreResolver.owningTheatre(of: device, goal: nil)
     }
 
     /// One consistent read of everything a mission reasons over, taken from
@@ -297,11 +275,11 @@ public struct WorldSnapshot: Equatable, Sendable {
             )
 
             // The in-force rows, this directive's own included — see `peers`.
-            // Status-scoped exactly like `Brain.owningStatuses`: a directive
+            // Status-scoped by `DirectiveStatus.openCases`: a directive
             // still owning its carrier is still competing for stock; a finished
             // one is not.
             let peers = try Directive
-                .where { $0.status.in(Array(Brain.owningStatuses)) }
+                .where { $0.status.in(DirectiveStatus.openCases) }
                 .fetchAll(db)
 
             var wanted = baseWanted

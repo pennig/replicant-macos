@@ -241,12 +241,6 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
         }
     }
 
-    /// Statuses that still hold a controller. `paused` and `needsAttention`
-    /// KEEP ownership: the directive is still in force server-side, and a user
-    /// resolving a stall expects to find it intact. Only a finished mission
-    /// gives the row back.
-    static let owningStatuses: Set<DirectiveStatus> = [.running, .needsAttention, .paused]
-
     /// Merge the two sources into one ordered list. `devices` contributes a row
     /// for each device with a directive in force; `directives` contributes one
     /// per custom mission. A built-in row the engine owns — by a live mission's
@@ -257,13 +251,19 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
     /// that cross-reference can be made without the row model reaching for the
     /// database.
     public static func merge(devices: [Device], directives: [Directive]) -> [DirectiveRow] {
-        let owners: [String: DirectiveOwner] = directives.reduce(into: [:]) { owners, directive in
-            guard let controller = directive.controllerCode,
-                  owningStatuses.contains(directive.status)
+        // The engine's own lease ledger decides this, not a second copy of the
+        // status rule: a row drives a device it names as its CONTROLLER.
+        let fleet = Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { first, _ in first })
+        let ownership = Ownership.resolve(directives: directives, devices: fleet, theatres: [])
+        let rows = Dictionary(directives.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let owners: [String: DirectiveOwner] = devices.reduce(into: [:]) { owners, device in
+            guard let holder = ownership.holders(of: device.deviceCode)
+                .first(where: { $0.via == .controllerCode }),
+                let row = rows[holder.directiveID]
             else { return }
-            owners[controller] = DirectiveOwner(
-                holder: .mission(id: directive.id),
-                title: directive.kind.title
+            owners[device.deviceCode] = DirectiveOwner(
+                holder: .mission(id: row.id),
+                title: row.kind.title
             )
         }
         let custom = directives.map { directive -> DirectiveRow in

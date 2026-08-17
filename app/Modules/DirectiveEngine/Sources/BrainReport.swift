@@ -232,7 +232,7 @@ public enum BrainSurveyStatus: Equatable, Sendable {
     /// screen and the log cannot disagree.
     case idle(reason: String)
 
-    /// `Brain.owningStatuses`' three members. A dedicated type, not
+    /// `DirectiveStatus.openCases`' three members. A dedicated type, not
     /// `DirectiveStatus` itself, so `.launched` can never carry `.completed`/
     /// `.cancelled` — the two values that already mean not-live.
     public enum LaunchedStatus: Equatable, Sendable {
@@ -253,7 +253,7 @@ public enum BrainGoalStatus: Equatable, Sendable {
     /// The verdict's own reason, carried verbatim so screen and log agree.
     case idle(reason: String)
 
-    /// `Brain.owningStatuses`' three members, so `.launched` can never carry
+    /// `DirectiveStatus.openCases`' three members, so `.launched` can never carry
     /// the two that already mean not-live.
     public enum LaunchedStatus: Equatable, Sendable {
         case running

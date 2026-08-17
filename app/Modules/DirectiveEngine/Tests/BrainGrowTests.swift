@@ -297,8 +297,8 @@ struct BrainGrowTests {
     /// A finished run holds nothing. The mirror of the tests above: the same
     /// world, the same directive naming V1 — but `.completed`, so the carrier
     /// is free and the launch goes ahead. Without this, every "reserved →
-    /// idle" test above would still pass if `owningStatuses` were widened to
-    /// every status, which would freeze the brain permanently after one run.
+    /// idle" test above would still pass if `DirectiveStatus.openCases` were
+    /// widened to every status, freezing the brain permanently after one run.
     @Test func aCompletedRunReleasesItsCarrier() async throws {
         let database = try GameDatabase.bootstrap()
         let uuid = UUIDGenerator.incrementing

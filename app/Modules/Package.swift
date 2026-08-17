@@ -201,6 +201,7 @@ let package = Package(
             name: "DevicesFeature",
             dependencies: [
                 "DirectiveComposerFeature",
+                "DirectiveEngine",
                 "GameModels",
                 "GameServices",
                 "PrintingUI",

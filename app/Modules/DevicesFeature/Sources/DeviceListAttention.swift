@@ -5,6 +5,7 @@
 //  Which devices need the operator right now, and in what order they read.
 //
 
+import DirectiveEngine
 import Foundation
 import GameModels
 
@@ -65,13 +66,13 @@ extension DeviceListLayout {
         return flags
     }
 
-    /// The three join paths from a flagged directive to a device.
+    /// Whether `directive` holds `device`, by the engine's own lease rule.
+    /// Resolved over this device alone, so only the joins off the row's own
+    /// columns can fire — the stow closure needs a fleet this caller lacks.
     static func covers(_ directive: Directive, _ device: Device) -> Bool {
-        if directive.deviceCode == device.deviceCode { return true }
-        if directive.controllerCode == device.deviceCode { return true }
-        if let tag = directive.fleetTag.flatMap(FleetTag.init(parsing:)),
-           device.carries(tag, policy: .exact) { return true }
-        return false
+        Ownership
+            .resolve(directives: [directive], devices: [device.deviceCode: device], theatres: [])
+            .holder(of: device.deviceCode) != nil
     }
 
     /// The Needs Attention section's own order: out-of-control-range (0),
