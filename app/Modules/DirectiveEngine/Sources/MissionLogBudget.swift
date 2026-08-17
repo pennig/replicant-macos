@@ -29,8 +29,8 @@ public enum MissionLogBudget {
     }
 
     /// How often the CURRENT run of the `dispatch`/`confirm` loop sent `kind`,
-    /// counted off the same summary line `lastDispatch` parses. A loop whose legs
-    /// are immediate commands has no tracked op to count instead.
+    /// counted off the entry's own `commandKind`. A loop whose legs are
+    /// immediate commands has no tracked op to count instead.
     public static func dispatchRounds(
         _ world: WorldSnapshot, dispatch: String, confirm: String, kind: OperationKind
     ) -> Int {
@@ -41,28 +41,25 @@ public enum MissionLogBudget {
                 guard let step = entry.step, step == dispatch || step == confirm else { break }
                 continue
             }
-            guard entry.kind == .commandDispatched, entry.step == confirm else { continue }
-            let words = entry.summary.split(separator: " ")
-            guard words.count >= 2, words[0] == "Dispatched", words[1] == kind.rawValue else { continue }
+            guard entry.kind == .commandDispatched, entry.step == confirm,
+                  entry.commandKind == kind.rawValue
+            else { continue }
             count += 1
         }
         return count
     }
 
     /// What the newest command entry in a dispatch/confirm loop run says. The
-    /// three cases are three different demands: judge it, dispatch afresh, or
-    /// refuse to read evidence that does not parse.
+    /// two cases are two different demands: judge it, or dispatch afresh.
     public enum LastDispatch: Equatable, Sendable {
         case dispatched(kind: String, deviceCode: String)
         /// Nothing sent since this run of the loop began — the state a resolved
         /// stall re-enters on, where only the dispatch step can make progress.
         case nothingSent
-        case unreadable
     }
 
-    /// The newest command this `dispatch`/`confirm` loop sent, read off the line
-    /// `DirectiveExecutor.dispatchSummary` writes — the only record of which
-    /// verb went to which device.
+    /// The newest command this `dispatch`/`confirm` loop sent, read off the
+    /// entry's own `commandKind`/`targetDeviceCode` columns.
     public static func lastDispatch(
         _ world: WorldSnapshot, dispatch: String, confirm: String
     ) -> LastDispatch {
@@ -75,9 +72,13 @@ public enum MissionLogBudget {
                 continue
             }
             guard entry.kind == .commandDispatched, entry.step == confirm else { continue }
+            if let kind = entry.commandKind, let deviceCode = entry.targetDeviceCode {
+                return .dispatched(kind: kind, deviceCode: deviceCode)
+            }
+            // Legacy row written before the columns existed; Stage 2 deletes this.
             let words = entry.summary.split(separator: " ")
             guard words.count >= 4, words[0] == "Dispatched", words[2] == "to" else {
-                return .unreadable
+                return .nothingSent
             }
             return .dispatched(kind: String(words[1]), deviceCode: String(words[3]))
         }

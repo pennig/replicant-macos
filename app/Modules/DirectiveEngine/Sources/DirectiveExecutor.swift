@@ -81,7 +81,8 @@ enum DirectiveExecutor {
                               id: uuid().uuidString, at: date.now),
                         entry(directive, .commandDispatched, dispatchSummary(kind, deviceCode, params),
                               step: nextStep, operationID: operationID,
-                              id: uuid().uuidString, at: date.now),
+                              id: uuid().uuidString, at: date.now,
+                              commandKind: kind.rawValue, targetDeviceCode: deviceCode),
                     ])
                     return true
 
@@ -437,7 +438,7 @@ enum DirectiveExecutor {
         await commit(updated, [
             entry(directive, .stalled, summary,
                   step: directive.step, operationID: nil,
-                  id: uuid().uuidString, at: date.now),
+                  id: uuid().uuidString, at: date.now, detail: detail),
         ])
         logger.notice("directive \(directive.id, privacy: .public) stalled: \(summary, privacy: .public)")
     }
@@ -467,12 +468,16 @@ enum DirectiveExecutor {
         operationID: String?,
         deviceCode: String? = nil,
         id: String,
-        at occurredAt: Date
+        at occurredAt: Date,
+        commandKind: String? = nil,
+        targetDeviceCode: String? = nil,
+        detail: String? = nil
     ) -> DirectiveLogEntry {
         DirectiveLogEntry(
             id: id, directiveID: directive.id, deviceCode: deviceCode, kind: kind,
             summary: summary, step: step, operationID: operationID,
-            eventID: nil, occurredAt: occurredAt
+            eventID: nil, occurredAt: occurredAt, commandKind: commandKind,
+            targetDeviceCode: targetDeviceCode, detail: detail
         )
     }
 

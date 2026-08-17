@@ -192,7 +192,8 @@ enum EventRunFixtures {
         )
     }
 
-    /// A `.commandDispatched` entry, in `DirectiveExecutor.dispatchSummary`'s wording.
+    /// A `.commandDispatched` entry as `DirectiveExecutor` writes one: typed
+    /// columns, plus the summary wording that is now display only.
     static func dispatched(
         _ kind: OperationKind, to deviceCode: String, step: String, at occurredAt: Date
     ) -> DirectiveLogEntry {
@@ -200,7 +201,8 @@ enum EventRunFixtures {
             id: "C-\(kind.rawValue)-\(occurredAt.timeIntervalSince1970)", directiveID: "d1",
             deviceCode: nil, kind: .commandDispatched,
             summary: "Dispatched \(kind.rawValue) to \(deviceCode)",
-            step: step, operationID: nil, eventID: nil, occurredAt: occurredAt
+            step: step, operationID: nil, eventID: nil, occurredAt: occurredAt,
+            commandKind: kind.rawValue, targetDeviceCode: deviceCode
         )
     }
 

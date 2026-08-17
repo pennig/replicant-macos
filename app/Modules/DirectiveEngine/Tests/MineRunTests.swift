@@ -182,7 +182,7 @@ private func loopLog(_ dispatch: String, _ confirm: String, rounds: Int) -> [Dir
 }
 
 /// One arm round per entry, as the executor records it: the two step stamps
-/// plus the command line `DirectiveExecutor.dispatchSummary` writes.
+/// plus the command entry, typed columns and all.
 private func armLog(_ sent: [(kind: OperationKind, deviceCode: String)]) -> [DirectiveLogEntry] {
     var out: [DirectiveLogEntry] = []
     for (i, command) in sent.enumerated() {
@@ -193,7 +193,8 @@ private func armLog(_ sent: [(kind: OperationKind, deviceCode: String)]) -> [Dir
             id: "C-\(i)", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
             summary: "Dispatched \(command.kind.rawValue) to \(command.deviceCode)",
             step: MineRun.Step.confirmingArm.rawValue, operationID: nil, eventID: nil,
-            occurredAt: base.addingTimeInterval(1)
+            occurredAt: base.addingTimeInterval(1),
+            commandKind: command.kind.rawValue, targetDeviceCode: command.deviceCode
         ))
     }
     return out
@@ -211,9 +212,9 @@ private func markerEntry(
     )
 }
 
-/// A dispatch entry whose summary does not read as one — the shape a drift in
-/// `DirectiveExecutor.dispatchSummary` would produce.
-private let unreadableDispatch = DirectiveLogEntry(
+/// A legacy dispatch entry — no typed columns — whose summary does not read as
+/// one either, so neither the columns nor the fallback name an order.
+private let unnamedDispatch = DirectiveLogEntry(
     id: "C-X", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
     summary: "sent something somewhere", step: MineRun.Step.confirmingArm.rawValue,
     operationID: nil, eventID: nil, occurredAt: now.addingTimeInterval(-5)
@@ -1215,16 +1216,17 @@ struct MineRunTests {
         )
     }
 
-    /// Fail closed on evidence that does not parse: a summary the reader cannot
-    /// read is not permission to advance.
-    @Test("an unreadable dispatch line takes the ladder")
-    func unreadableDispatchTakesTheLadder() {
-        let snapshot = armedWorld([:], log: [unreadableDispatch])
+    /// An entry that names no order is no evidence of one: the run hands back
+    /// to `arming`, which is the only step that can send one (and will write
+    /// the typed columns when it does).
+    @Test("a dispatch entry naming no order re-dispatches")
+    func unnamedDispatchReturnsToArming() {
+        let snapshot = armedWorld([:], log: [unnamedDispatch])
 
         #expect(
             MineRun().nextAction(
                 directive: mineRunRow(step: MineRun.Step.confirmingArm.rawValue), world: snapshot
-            ) == .wait
+            ) == .advanceStep(nextStep: MineRun.Step.arming.rawValue)
         )
     }
 

@@ -9,9 +9,9 @@
 import GameModels
 
 public enum DirectiveStallDetail {
-    /// The detail of the newest `.stalled` entry in `entries`, or nil.
-    /// The executor writes the summary as `"<reason.rawValue>: <detail>"`, so the
-    /// suffix counts only when the prefix names the row's CURRENT `reason`.
+    /// The `detail` of the newest `.stalled` entry in `entries`, or nil. The
+    /// summary is what still names the reason, so an entry recording some
+    /// earlier stall never speaks under the row's CURRENT `reason`.
     public static func detail(
         for reason: DirectiveAttentionReason,
         in entries: [DirectiveLogEntry]
@@ -19,10 +19,12 @@ public enum DirectiveStallDetail {
         let newest = entries
             .filter { $0.kind == .stalled }
             .max { $0.occurredAt < $1.occurredAt }
-        guard let summary = newest?.summary else { return nil }
+        guard let newest else { return nil }
         let prefix = "\(reason.rawValue): "
-        guard summary.hasPrefix(prefix) else { return nil }
-        let detail = String(summary.dropFirst(prefix.count))
+        guard newest.summary.hasPrefix(prefix) else { return nil }
+        if let detail = newest.detail { return detail.isEmpty ? nil : detail }
+        // Legacy row written before the columns existed; Stage 2 deletes this.
+        let detail = String(newest.summary.dropFirst(prefix.count))
         return detail.isEmpty ? nil : detail
     }
 }

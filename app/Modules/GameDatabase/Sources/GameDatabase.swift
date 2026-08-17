@@ -90,6 +90,7 @@ public enum GameDatabase {
         LocationEvent.addChosenOption,
         Blueprint.addComponents,
         GameModels.Operation.addOwnerColumns,
+        DirectiveLogEntry.addCommandColumns,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

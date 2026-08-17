@@ -68,6 +68,7 @@ import Testing
         "Add 'chosenOption' to locationEvents",
         "Add 'components' to blueprints",
         "Add 'directiveID','step','paramsDigest' to 'operations'",
+        "Add 'commandKind','targetDeviceCode','detail' to 'directiveLogEntries'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

@@ -95,7 +95,7 @@ CREATE TABLE "directiveLogEntries" (
   "operationID" TEXT,
   "eventID" TEXT,
   "occurredAt" TEXT NOT NULL
-) STRICT;
+, "commandKind" TEXT, "targetDeviceCode" TEXT, "detail" TEXT) STRICT;
 
 CREATE TABLE "directives" (
   "id" TEXT PRIMARY KEY NOT NULL,

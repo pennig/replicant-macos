@@ -119,6 +119,10 @@ struct DirectiveEngineTests {
             #expect(entries.last?.operationID == "OP1")
             #expect(entries.last?.summary == "Dispatched travel to VES1 — SOL",
                      "a travel's dispatch entry names its destination")
+            #expect(entries.last?.commandKind == "travel")
+            #expect(entries.last?.targetDeviceCode == "VES1")
+            #expect(entries.first?.commandKind == nil, "a step stamp dispatched nothing")
+            #expect(entries.last?.detail == nil, "the detail column is the stall's, not a dispatch's")
         }
 
         // The owner reaches the governor before the step advances, so it names
@@ -318,6 +322,7 @@ struct DirectiveEngineTests {
             let entries = try await database.read { db in try DirectiveLogEntry.all.fetchAll(db) }
             #expect(entries.map(\.kind) == [.stalled])
             #expect(entries.first?.summary.contains("device busy") == true)
+            #expect(entries.first?.detail == "device busy", "the detail is a column, not a prefix to strip")
         }
     }
 

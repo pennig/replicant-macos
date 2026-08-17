@@ -535,6 +535,15 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
     public var operationID: String?
     /// The SSE event that produced this entry, when there is one.
     public var eventID: String?
+    /// The `OperationKind.rawValue` this entry dispatched, for
+    /// `.commandDispatched`. The summary names it too, but only for the reader.
+    public var commandKind: String?
+    /// The device the command went to — NOT `deviceCode`, which keys a
+    /// built-in AMI directive's row.
+    public var targetDeviceCode: String?
+    /// The stall detail, for `.stalled`. The summary carries it too, prefixed
+    /// by the reason, but only for the reader.
+    public var detail: String?
     public var occurredAt: Date
 
     public init(
@@ -546,7 +555,10 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
         step: String?,
         operationID: String?,
         eventID: String?,
-        occurredAt: Date
+        occurredAt: Date,
+        commandKind: String? = nil,
+        targetDeviceCode: String? = nil,
+        detail: String? = nil
     ) {
         self.id = id
         self.directiveID = directiveID
@@ -556,6 +568,9 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
         self.step = step
         self.operationID = operationID
         self.eventID = eventID
+        self.commandKind = commandKind
+        self.targetDeviceCode = targetDeviceCode
+        self.detail = detail
         self.occurredAt = occurredAt
     }
 }
@@ -752,5 +767,16 @@ extension DirectiveLogEntry {
             """
         )
         .execute(db)
+    }
+
+    /// Appended, never folded into `createDirectiveLogEntries`: that one has
+    /// shipped. What a command sent and what it stalled on stop being facts
+    /// only the summary prose carries.
+    public static let addCommandColumns = SchemaMigration(
+        "Add 'commandKind','targetDeviceCode','detail' to 'directiveLogEntries'"
+    ) { db in
+        try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "commandKind" TEXT"#).execute(db)
+        try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "targetDeviceCode" TEXT"#).execute(db)
+        try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "detail" TEXT"#).execute(db)
     }
 }
