@@ -19,28 +19,28 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dire
 
 public struct HaulRun: MissionStepMachine {
     public let kind: DirectiveKind = .haulRun
-    public var firstStep: String { Step.preflight }
+    public var firstStep: String { Step.preflight.rawValue }
 
     public init() {}
 
-    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
-    public enum Step {
+    /// This mission's step vocabulary, as `Directive.step` holds it (D6).
+    public enum Step: String, CaseIterable, Sendable {
         /// Prove the tagged fleet exists before anything is commanded.
-        public static let preflight = "preflight"
+        case preflight
         /// Refresh the stockpile census the target ranking is read from.
-        public static let surveying = "surveying"
+        case surveying
         /// Pin the one controller this evaluation wants to repoint.
-        public static let assigning = "assigning"
+        case assigning
         /// Issue the command `assigning` chose, against the controller it pinned.
         /// Must dispatch with `nextStep: .confirming`, never itself — `set_directive`
         /// creates no tracked `Operation`, so a self-naming step re-issues forever.
-        public static let dispatching = "dispatching"
+        case dispatching
         /// Poll until the pinned controller reports, on a row read AFTER the
         /// dispatch, some config this run could have issued, then hand back to
         /// `assigning`. Waits or reads, never dispatches.
-        public static let confirming = "confirming"
+        case confirming
         /// The quiet step between census reads.
-        public static let hauling = "hauling"
+        case hauling
     }
 
     /// The fleet tag a row falls back to when it carries none of its own.
@@ -77,16 +77,17 @@ public struct HaulRun: MissionStepMachine {
     /// Route `directive`'s current step against `world`. An unrecognised step
     /// waits rather than dispatching — waiting is inert, guessing commands the fleet.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
-        switch directive.step {
-        case Step.preflight: return preflight(directive, world)
-        case Step.surveying: return survey(directive, world)
-        case Step.assigning: return assign(directive, world)
-        case Step.dispatching: return dispatchAssignment(directive, world)
-        case Step.confirming: return confirm(directive, world)
-        case Step.hauling: return haul(directive, world)
-        default:
-            logger.notice("haul run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
+        guard let step = Step(rawValue: directive.step) else {
+            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
             return .wait
+        }
+        switch step {
+        case .preflight: return preflight(directive, world)
+        case .surveying: return survey(directive, world)
+        case .assigning: return assign(directive, world)
+        case .dispatching: return dispatchAssignment(directive, world)
+        case .confirming: return confirm(directive, world)
+        case .hauling: return haul(directive, world)
         }
     }
 
@@ -235,9 +236,9 @@ public struct HaulRun: MissionStepMachine {
             }
             guard entry.kind == .stepStarted else { continue }
             switch entry.step {
-            case Step.dispatching:
+            case Step.dispatching.rawValue:
                 if entry.deviceCode == controllerCode { count += 1 }
-            case Step.assigning, Step.confirming:
+            case Step.assigning.rawValue, Step.confirming.rawValue:
                 continue
             default:
                 return count
@@ -262,7 +263,7 @@ public struct HaulRun: MissionStepMachine {
                     deviceCodes: [directive.deviceCode], thenStall: .noHaulControllerTagged
                 )
             }
-            return .advanceStep(nextStep: Step.surveying)
+            return .advanceStep(nextStep: Step.surveying.rawValue)
         }
         let tag = Self.fleetTag(of: directive)
         let found = Self.controllers(in: world, tag: tag, theatreDepot: directive.theatreDepot)
@@ -272,7 +273,7 @@ public struct HaulRun: MissionStepMachine {
         if stale {
             return .refreshFleet(tag: tag, thenStall: .noHaulControllerTagged)
         }
-        return .advanceStep(nextStep: Step.surveying)
+        return .advanceStep(nextStep: Step.surveying.rawValue)
     }
 
     /// Refresh the stockpile census, gated on `world`'s freshest read so the 5s
@@ -281,9 +282,9 @@ public struct HaulRun: MissionStepMachine {
     private func survey(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         let newest = world.footprints.values.map(\.fetchedAt).max()
         if let newest, world.now.timeIntervalSince(newest) < Self.pollInterval {
-            return .advanceStep(nextStep: Step.assigning)
+            return .advanceStep(nextStep: Step.assigning.rawValue)
         }
-        return .refreshFootprint(nextStep: Step.assigning, thenStall: nil)
+        return .refreshFootprint(nextStep: Step.assigning.rawValue, thenStall: nil)
     }
 
     /// Pin ONE pending controller for `dispatching` to command, or move on when
@@ -296,9 +297,9 @@ public struct HaulRun: MissionStepMachine {
         if let pinned = Self.pinnedSource(of: directive) {
             let assignment = Self.pinnedAssignment(directive, at: pinned, in: world)
             if Self.isInForce(assignment, in: world, for: directive) {
-                return .advanceStep(nextStep: Step.hauling)
+                return .advanceStep(nextStep: Step.hauling.rawValue)
             }
-            return .assignController(deviceCode: assignment.controllerCode, nextStep: Step.dispatching)
+            return .assignController(deviceCode: assignment.controllerCode, nextStep: Step.dispatching.rawValue)
         }
         let tag = Self.fleetTag(of: directive)
         guard !Self.controllers(in: world, tag: tag, theatreDepot: directive.theatreDepot).isEmpty else {
@@ -310,10 +311,10 @@ public struct HaulRun: MissionStepMachine {
         guard let pending = assignments.first(where: { !Self.isInForce($0, in: world, for: directive) }) else {
             // Never `.done`: the Salvage Run keeps making new piles under this one,
             // so an empty frontier is a lull.
-            return .advanceStep(nextStep: Step.hauling)
+            return .advanceStep(nextStep: Step.hauling.rawValue)
         }
         logger.debug("haul run \(directive.id, privacy: .public): pinning \(pending.controllerCode, privacy: .public)")
-        return .assignController(deviceCode: pending.controllerCode, nextStep: Step.dispatching)
+        return .assignController(deviceCode: pending.controllerCode, nextStep: Step.dispatching.rawValue)
     }
 
     /// Issue the command `assigning` chose, against the controller `directive`
@@ -322,7 +323,7 @@ public struct HaulRun: MissionStepMachine {
     private func dispatchAssignment(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         guard !world.theatreWentClaimed(for: directive) else { return .wait }
         guard let controllerCode = directive.controllerCode else {
-            return .advanceStep(nextStep: Step.assigning)
+            return .advanceStep(nextStep: Step.assigning.rawValue)
         }
         guard world.device(controllerCode) != nil else {
             // Gone from the account, not merely untagged — this lookup ignores the
@@ -336,10 +337,10 @@ public struct HaulRun: MissionStepMachine {
             pending = planned
         } else {
             // Census moved since `assign` ran; let it re-plan.
-            return .advanceStep(nextStep: Step.assigning)
+            return .advanceStep(nextStep: Step.assigning.rawValue)
         }
         if Self.isInForce(pending, in: world, for: directive) {
-            return .advanceStep(nextStep: Step.assigning)
+            return .advanceStep(nextStep: Step.assigning.rawValue)
         }
         guard Self.dispatchAttemptCount(directive, world, controllerCode: controllerCode) <= Self.dispatchAttemptLimit else {
             logger.notice("haul run \(directive.id, privacy: .public): \(controllerCode, privacy: .public) exhausted its dispatch-attempt budget — stalling")
@@ -353,7 +354,7 @@ public struct HaulRun: MissionStepMachine {
                 "collect": .string(pending.location),
                 "deliver": .string(Self.deliverySink(in: world, for: directive)),
             ]),
-            nextStep: Step.confirming
+            nextStep: Step.confirming.rawValue
         )
     }
 
@@ -363,7 +364,7 @@ public struct HaulRun: MissionStepMachine {
     /// so anything else makes this step's deadline unreachable.
     private func confirm(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
         guard let controllerCode = directive.controllerCode else {
-            return .advanceStep(nextStep: Step.assigning)
+            return .advanceStep(nextStep: Step.assigning.rawValue)
         }
         guard let controller = world.device(controllerCode) else {
             return .stall(.unreachableDevice)
@@ -385,7 +386,7 @@ public struct HaulRun: MissionStepMachine {
             return .wait
         }
         if Self.hasTakenSomeHaulConfig(controller, delivery: Self.deliverySink(in: world, for: directive)) {
-            return .advanceStep(nextStep: Step.assigning)
+            return .advanceStep(nextStep: Step.assigning.rawValue)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) < Self.confirmDeadline {
             return .wait
@@ -402,6 +403,6 @@ public struct HaulRun: MissionStepMachine {
         if world.now.timeIntervalSince(directive.stepStartedAt) < Self.pollInterval {
             return .wait
         }
-        return .advanceStep(nextStep: Step.surveying)
+        return .advanceStep(nextStep: Step.surveying.rawValue)
     }
 }

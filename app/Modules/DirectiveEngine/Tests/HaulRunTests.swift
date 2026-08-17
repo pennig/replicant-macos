@@ -145,14 +145,14 @@ private func healthyPass(size n: Int) -> (directive: Directive, world: WorldSnap
     var when = fixtureNow.addingTimeInterval(-Double(n) * 10)
     var nextID = 0
     for index in 0..<(n - 1) {
-        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: codes[index], at: when)); nextID += 1; when += 1
-        log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning.rawValue, at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching.rawValue, deviceCode: codes[index], at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.confirming.rawValue, at: when)); nextID += 1; when += 1
     }
-    log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-    log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: codes[n - 1], at: when)) // the CURRENT entry
+    log.append(stepStartedEntry(nextID, HaulRun.Step.assigning.rawValue, at: when)); nextID += 1; when += 1
+    log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching.rawValue, deviceCode: codes[n - 1], at: when)) // the CURRENT entry
 
-    let directive = run(step: HaulRun.Step.dispatching, controllerCode: codes[n - 1])
+    let directive = run(step: HaulRun.Step.dispatching.rawValue, controllerCode: codes[n - 1])
     let snapshot = world(devices: devices + meshed, footprints: footprints, log: log)
     return (directive, snapshot)
 }
@@ -202,7 +202,7 @@ struct HaulRunTests {
     @Test func preflightRefreshesAStaleFleet() {
         let stale = controller("C1", updatedAt: fixtureNow.addingTimeInterval(-3_600))
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.preflight),
+            directive: run(step: HaulRun.Step.preflight.rawValue),
             world: world(devices: [stale] + meshed)
         )
         #expect(action == .refreshFleet(tag: FleetTag(goal: .haul), thenStall: .noHaulControllerTagged))
@@ -211,16 +211,16 @@ struct HaulRunTests {
     /// A fresh, tagged controller needs no read at all.
     @Test func preflightAdvancesOnAFreshTaggedFleet() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.preflight),
+            directive: run(step: HaulRun.Step.preflight.rawValue),
             world: world(devices: [controller("C1")] + meshed)
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.surveying))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.surveying.rawValue))
     }
 
     /// An untagged controller is invisible to the run — the tag IS the opt-in.
     @Test func anUntaggedControllerIsNotPartOfTheFleet() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.preflight),
+            directive: run(step: HaulRun.Step.preflight.rawValue),
             world: world(devices: [controller("C1", tags: [])] + meshed)
         )
         #expect(action == .refreshFleet(tag: FleetTag(goal: .haul), thenStall: .noHaulControllerTagged))
@@ -257,7 +257,7 @@ struct HaulRunTests {
     /// unscoped form alongside it, so a half-migrated fleet is still seen.
     @Test func preflightRefreshesUsingTheRowsOwnPerTheatreTag() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.preflight, fleetTag: "auto:haul:AINALRAM-BELT-1"),
+            directive: run(step: HaulRun.Step.preflight.rawValue, fleetTag: "auto:haul:AINALRAM-BELT-1"),
             world: world(devices: meshed)
         )
         #expect(action == .refreshFleet(
@@ -273,25 +273,25 @@ struct HaulRunTests {
     @Test func surveyingRefreshesAStaleCensus() {
         let old = footprint("ATIANFU-BELT-1", 3_537, at: fixtureNow.addingTimeInterval(-3_600))
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.surveying),
+            directive: run(step: HaulRun.Step.surveying.rawValue),
             world: world(devices: [controller("C1")] + meshed, footprints: [old])
         )
         // thenStall: nil — HaulRun's survey never escalates on a stale/failed
         // census; it always advances anyway (see `HaulRun.survey`'s doc).
-        #expect(action == .refreshFootprint(nextStep: HaulRun.Step.assigning, thenStall: nil))
+        #expect(action == .refreshFootprint(nextStep: HaulRun.Step.assigning.rawValue, thenStall: nil))
     }
 
     /// A census read moments ago is not read again — the 5s tick must not
     /// multiply into requests.
     @Test func surveyingSkipsARecentCensus() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.surveying),
+            directive: run(step: HaulRun.Step.surveying.rawValue),
             world: world(
                 devices: [controller("C1")] + meshed,
                 footprints: [footprint("ATIANFU-BELT-1", 3_537)]
             )
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning.rawValue))
     }
 
     // MARK: assigning
@@ -303,13 +303,13 @@ struct HaulRunTests {
     /// whole fleet's plan (fix landed 2026-07-31, see `Step.dispatching`).
     @Test func assigningPinsTheControllerAtTheRichestPile() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.assigning),
+            directive: run(step: HaulRun.Step.assigning.rawValue),
             world: world(
                 devices: [controller("C1")] + meshed,
                 footprints: [footprint("ATIANFU-BELT-1", 3_537)]
             )
         )
-        #expect(action == .assignController(deviceCode: "C1", nextStep: HaulRun.Step.dispatching))
+        #expect(action == .assignController(deviceCode: "C1", nextStep: HaulRun.Step.dispatching.rawValue))
     }
 
     /// The guard that makes repointing terminate: a controller already running
@@ -324,10 +324,10 @@ struct HaulRunTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.assigning),
+            directive: run(step: HaulRun.Step.assigning.rawValue),
             world: world(devices: [settled] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling.rawValue))
     }
 
     /// A controller pointed at a DIFFERENT pile is not in force, so it is
@@ -343,26 +343,26 @@ struct HaulRunTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.assigning),
+            directive: run(step: HaulRun.Step.assigning.rawValue),
             world: world(
                 devices: [onOldPile] + meshed,
                 footprints: [footprint("SHERATANON-6-1", 0), footprint("ATIANFU-BELT-1", 3_537)]
             )
         )
-        #expect(action == .assignController(deviceCode: "C1", nextStep: HaulRun.Step.dispatching))
+        #expect(action == .assignController(deviceCode: "C1", nextStep: HaulRun.Step.dispatching.rawValue))
     }
 
     /// Nothing reachable is a LULL, not an ending. The run must never complete —
     /// the Salvage Run keeps making new piles under it.
     @Test func nothingReachableIdlesRatherThanFinishing() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.assigning),
+            directive: run(step: HaulRun.Step.assigning.rawValue),
             world: world(
                 devices: [controller("C1")] + meshed,
                 footprints: [footprint("TENEGSHE-3", 80)]
             )
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling.rawValue))
         #expect(action != .done)
     }
 
@@ -374,7 +374,7 @@ struct HaulRunTests {
     /// same tick; a transient local gap no longer strands a healthy fleet.
     @Test func assigningReReadsTheFleetBeforeStallingOnIt() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.assigning),
+            directive: run(step: HaulRun.Step.assigning.rawValue),
             world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
         #expect(action == .refreshFleet(tag: FleetTag(goal: .haul), thenStall: .noHaulControllerTagged))
@@ -384,7 +384,7 @@ struct HaulRunTests {
     /// tag, and the resolver reads the unscoped form alongside it.
     @Test func assigningRefreshesUsingTheRowsOwnPerTheatreTag() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.assigning, fleetTag: "auto:haul:AINALRAM-BELT-1"),
+            directive: run(step: HaulRun.Step.assigning.rawValue, fleetTag: "auto:haul:AINALRAM-BELT-1"),
             world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
         #expect(action == .refreshFleet(
@@ -410,13 +410,13 @@ struct HaulRunTests {
         // A second CROSS-system pile: a same-system one now ranks `.infinity`
         // regardless of size, which would collide with this test's premise.
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.assigning, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.assigning.rawValue, controllerCode: "C1"),
             world: world(
                 devices: [settledC1, c2] + meshed + [relay(at: "SHERATANON-10-L4")],
                 footprints: [footprint("ATIANFU-BELT-1", 3_537), footprint("SHERATANON-6-1", 900)]
             )
         )
-        #expect(action == .assignController(deviceCode: "C2", nextStep: HaulRun.Step.dispatching))
+        #expect(action == .assignController(deviceCode: "C2", nextStep: HaulRun.Step.dispatching.rawValue))
     }
 
     // MARK: dispatching
@@ -425,7 +425,7 @@ struct HaulRunTests {
     /// chose: the richest reachable pile, `ferry` to the delivery location.
     @Test func dispatchingIssuesSetDirectiveToThePinnedController() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.dispatching.rawValue, controllerCode: "C1"),
             world: world(
                 devices: [controller("C1")] + meshed,
                 footprints: [footprint("ATIANFU-BELT-1", 3_537)]
@@ -438,7 +438,7 @@ struct HaulRunTests {
                 "collect": .string("ATIANFU-BELT-1"),
                 "deliver": .string(HaulRun.deliveryLocation),
             ]),
-            nextStep: HaulRun.Step.confirming
+            nextStep: HaulRun.Step.confirming.rawValue
         ))
     }
 
@@ -453,7 +453,7 @@ struct HaulRunTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.dispatching.rawValue, controllerCode: "C1"),
             world: world(
                 devices: [onOldPile] + meshed,
                 footprints: [footprint("SHERATANON-6-1", 0), footprint("ATIANFU-BELT-1", 3_537)]
@@ -466,7 +466,7 @@ struct HaulRunTests {
                 "collect": .string("ATIANFU-BELT-1"),
                 "deliver": .string(HaulRun.deliveryLocation),
             ]),
-            nextStep: HaulRun.Step.confirming
+            nextStep: HaulRun.Step.confirming.rawValue
         ))
     }
 
@@ -478,7 +478,7 @@ struct HaulRunTests {
     /// from `world.devices` and could never be absent.
     @Test func dispatchingStallsWhenThePinnedControllerHasVanished() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.dispatching.rawValue, controllerCode: "C1"),
             world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
         #expect(action == .stall(.unreachableDevice))
@@ -490,10 +490,10 @@ struct HaulRunTests {
     /// force-unwrapping.
     @Test func dispatchingWithNoPinnedControllerReturnsToAssigning() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.dispatching),
+            directive: run(step: HaulRun.Step.dispatching.rawValue),
             world: world(devices: [controller("C1")] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning.rawValue))
     }
 
     /// Deferred item folded in during the round-2 fix: a controller that
@@ -510,10 +510,10 @@ struct HaulRunTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.dispatching.rawValue, controllerCode: "C1"),
             world: world(devices: [alreadySettled] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning.rawValue))
     }
 
     // MARK: dispatch-attempt budget
@@ -532,12 +532,12 @@ struct HaulRunTests {
         var when = fixtureNow.addingTimeInterval(-60)
         var nextID = 0
         for _ in 0..<(HaulRun.dispatchAttemptLimit - 1) {
-            log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)); nextID += 1; when += 1
-            log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.assigning.rawValue, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching.rawValue, deviceCode: "C1", at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.confirming.rawValue, at: when)); nextID += 1; when += 1
         }
-        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)) // the CURRENT entry
+        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning.rawValue, at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching.rawValue, deviceCode: "C1", at: when)) // the CURRENT entry
 
         let stillOnOldPile = controller(
             "C1", currentDirective: "ferry",
@@ -547,7 +547,7 @@ struct HaulRunTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.dispatching.rawValue, controllerCode: "C1"),
             world: world(
                 devices: [stillOnOldPile] + meshed,
                 footprints: [footprint("ATIANFU-BELT-1", 3_537)],
@@ -561,7 +561,7 @@ struct HaulRunTests {
                 "collect": .string("ATIANFU-BELT-1"),
                 "deliver": .string(HaulRun.deliveryLocation),
             ]),
-            nextStep: HaulRun.Step.confirming
+            nextStep: HaulRun.Step.confirming.rawValue
         ))
     }
 
@@ -578,12 +578,12 @@ struct HaulRunTests {
         var when = fixtureNow.addingTimeInterval(-60)
         var nextID = 0
         for _ in 0..<HaulRun.dispatchAttemptLimit {
-            log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)); nextID += 1; when += 1
-            log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.assigning.rawValue, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching.rawValue, deviceCode: "C1", at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.confirming.rawValue, at: when)); nextID += 1; when += 1
         }
-        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)) // the CURRENT entry
+        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning.rawValue, at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching.rawValue, deviceCode: "C1", at: when)) // the CURRENT entry
 
         let stillOnOldPile = controller(
             "C1", currentDirective: "ferry",
@@ -593,7 +593,7 @@ struct HaulRunTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.dispatching.rawValue, controllerCode: "C1"),
             world: world(
                 devices: [stillOnOldPile] + meshed,
                 footprints: [footprint("ATIANFU-BELT-1", 3_537)],
@@ -611,20 +611,20 @@ struct HaulRunTests {
         var nextID = 0
         // A full exhausted budget...
         for _ in 0..<HaulRun.dispatchAttemptLimit {
-            log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)); nextID += 1; when += 1
-            log.append(stepStartedEntry(nextID, HaulRun.Step.confirming, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.assigning.rawValue, at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching.rawValue, deviceCode: "C1", at: when)); nextID += 1; when += 1
+            log.append(stepStartedEntry(nextID, HaulRun.Step.confirming.rawValue, at: when)); nextID += 1; when += 1
         }
         // ...followed by an operator Retry...
         log.append(DirectiveLogEntry(
             id: "LR", directiveID: "D1", deviceCode: nil, kind: .resolved,
-            summary: "Retried", step: HaulRun.Step.confirming, operationID: nil,
+            summary: "Retried", step: HaulRun.Step.confirming.rawValue, operationID: nil,
             eventID: nil, occurredAt: when
         ))
         when += 1
         // ...and one fresh attempt since.
-        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning, at: when)); nextID += 1; when += 1
-        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching, deviceCode: "C1", at: when)) // the CURRENT entry
+        log.append(stepStartedEntry(nextID, HaulRun.Step.assigning.rawValue, at: when)); nextID += 1; when += 1
+        log.append(stepStartedEntry(nextID, HaulRun.Step.dispatching.rawValue, deviceCode: "C1", at: when)) // the CURRENT entry
 
         let stillOnOldPile = controller(
             "C1", currentDirective: "ferry",
@@ -634,7 +634,7 @@ struct HaulRunTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.dispatching, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.dispatching.rawValue, controllerCode: "C1"),
             world: world(
                 devices: [stillOnOldPile] + meshed,
                 footprints: [footprint("ATIANFU-BELT-1", 3_537)],
@@ -648,7 +648,7 @@ struct HaulRunTests {
                 "collect": .string("ATIANFU-BELT-1"),
                 "deliver": .string(HaulRun.deliveryLocation),
             ]),
-            nextStep: HaulRun.Step.confirming
+            nextStep: HaulRun.Step.confirming.rawValue
         ))
     }
 
@@ -670,7 +670,7 @@ struct HaulRunTests {
                 "collect": .string("AINALRAM-5"),
                 "deliver": .string(HaulRun.deliveryLocation),
             ]),
-            nextStep: HaulRun.Step.confirming
+            nextStep: HaulRun.Step.confirming.rawValue
         ))
     }
 
@@ -687,7 +687,7 @@ struct HaulRunTests {
                 "collect": .string("AINALRAM-8"),
                 "deliver": .string(HaulRun.deliveryLocation),
             ]),
-            nextStep: HaulRun.Step.confirming
+            nextStep: HaulRun.Step.confirming.rawValue
         ))
     }
 
@@ -697,7 +697,7 @@ struct HaulRunTests {
     /// re-dispatch, which would reset the deadline measuring the wait.
     @Test func confirmingWaitsForTheControllerToTakeTheConfig() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.confirming.rawValue, controllerCode: "C1"),
             world: world(devices: [controller("C1")] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
         #expect(action == .wait)
@@ -713,10 +713,10 @@ struct HaulRunTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.confirming.rawValue, controllerCode: "C1"),
             world: world(devices: [settled] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning.rawValue))
     }
 
     /// **CRITICAL regression guard (2026-07-31 review).** `confirming` must
@@ -744,13 +744,13 @@ struct HaulRunTests {
         // pre-fix code too, proving nothing). `AINALRAM-2` shares the
         // delivery system, so it's reachable by construction.
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.confirming.rawValue, controllerCode: "C1"),
             world: world(
                 devices: [settledC1, neverDispatchedC2] + meshed,
                 footprints: [footprint("ATIANFU-BELT-1", 3_537), footprint("AINALRAM-2", 900)]
             )
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning.rawValue))
     }
 
     /// **IMPORTANT regression guard (2026-07-31 review).** The census can move
@@ -777,13 +777,13 @@ struct HaulRunTests {
         // ever entered the ranking — it is genuinely reachable and genuinely
         // outranks `ATIANFU-BELT-1` once ATIANFU has been drawn down to 100.
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.confirming.rawValue, controllerCode: "C1"),
             world: world(
                 devices: [settledOnItsOriginalPile] + meshed,
                 footprints: [footprint("ATIANFU-BELT-1", 100), footprint("AINALRAM-2", 9_000)]
             )
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning.rawValue))
     }
 
     /// **Controller vanishing between assign and confirm.** The device
@@ -792,7 +792,7 @@ struct HaulRunTests {
     /// back would just delay reaching the same conclusion.
     @Test func confirmingStallsWhenThePinnedControllerHasVanished() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.confirming.rawValue, controllerCode: "C1"),
             world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
         #expect(action == .stall(.unreachableDevice))
@@ -827,11 +827,11 @@ struct HaulRunTests {
             updatedAt: fixtureNow, firstSeenAt: Date(timeIntervalSince1970: 0)
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.assigning),
+            directive: run(step: HaulRun.Step.assigning.rawValue),
             world: world(devices: [blocked] + meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
         // Already pointed correctly — no re-dispatch, blocked state or not.
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling.rawValue))
     }
 
     /// **CRITICAL regression guard (2026-07-31 final review).** A row read
@@ -851,7 +851,7 @@ struct HaulRunTests {
             updatedAt: fixtureNow.addingTimeInterval(-300)
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.confirming.rawValue, controllerCode: "C1"),
             world: world(devices: [onTheOldPile] + meshed, footprints: [footprint("AINALRAM-2", 9_000)])
         )
         #expect(action == .refreshDevices(deviceCodes: ["C1"], thenStall: nil))
@@ -872,7 +872,7 @@ struct HaulRunTests {
         let neverRefreshed = controller("C1", updatedAt: fixtureNow.addingTimeInterval(-3_600))
         let action = HaulRun().nextAction(
             directive: run(
-                step: HaulRun.Step.confirming,
+                step: HaulRun.Step.confirming.rawValue,
                 stepStartedAt: fixtureNow.addingTimeInterval(-HaulRun.confirmDeadline - 900),
                 controllerCode: "C1"
             ),
@@ -895,7 +895,7 @@ struct HaulRunTests {
             updatedAt: fixtureNow.addingTimeInterval(-5)
         )
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.confirming, controllerCode: "C1"),
+            directive: run(step: HaulRun.Step.confirming.rawValue, controllerCode: "C1"),
             world: world(devices: [justRead] + meshed, footprints: [footprint("AINALRAM-2", 9_000)])
         )
         #expect(action == .wait)
@@ -906,7 +906,7 @@ struct HaulRunTests {
     @Test func confirmingReReadsThenStallsPastTheDeadline() {
         let action = HaulRun().nextAction(
             directive: run(
-                step: HaulRun.Step.confirming,
+                step: HaulRun.Step.confirming.rawValue,
                 stepStartedAt: fixtureNow.addingTimeInterval(-HaulRun.confirmDeadline - 1),
                 controllerCode: "C1"
             ),
@@ -921,7 +921,7 @@ struct HaulRunTests {
     /// does not re-stamp `stepStartedAt`.
     @Test func haulingWaitsOutThePollInterval() {
         let action = HaulRun().nextAction(
-            directive: run(step: HaulRun.Step.hauling),
+            directive: run(step: HaulRun.Step.hauling.rawValue),
             world: world(devices: [controller("C1")] + meshed)
         )
         #expect(action == .wait)
@@ -930,12 +930,12 @@ struct HaulRunTests {
     @Test func haulingRechecksAfterThePollInterval() {
         let action = HaulRun().nextAction(
             directive: run(
-                step: HaulRun.Step.hauling,
+                step: HaulRun.Step.hauling.rawValue,
                 stepStartedAt: fixtureNow.addingTimeInterval(-HaulRun.pollInterval - 1)
             ),
             world: world(devices: [controller("C1")] + meshed)
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.surveying))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.surveying.rawValue))
     }
 
     // MARK: contracts
@@ -963,7 +963,14 @@ struct HaulRunTests {
     @Test func theMachineIsRegistered() {
         let machine = MissionRegistry.machine(for: .haulRun)
         #expect(machine != nil)
-        #expect(machine?.firstStep == HaulRun.Step.preflight)
+        #expect(machine?.firstStep == HaulRun.Step.preflight.rawValue)
+    }
+
+    @Test func stepVocabularyIsFrozen() {
+        #expect(
+            HaulRun.Step.allCases.map(\.rawValue)
+                == ["preflight", "surveying", "assigning", "dispatching", "confirming", "hauling"]
+        )
     }
 }
 
@@ -1044,7 +1051,7 @@ struct HaulRunEndToEndTests {
             ] {
                 try LocationFootprint.insert { pile }.execute(db)
             }
-            try Directive.insert { run(step: HaulRun.Step.assigning) }.execute(db)
+            try Directive.insert { run(step: HaulRun.Step.assigning.rawValue) }.execute(db)
         }
 
         let dispatched = LockIsolated<[RecordedDispatch]>([])
@@ -1067,9 +1074,9 @@ struct HaulRunEndToEndTests {
         // evaluation is what proves the command is not re-issued every tick —
         // `confirming` waits out `confirmDeadline` instead.
         #expect(steps == [
-            HaulRun.Step.dispatching,
-            HaulRun.Step.confirming,
-            HaulRun.Step.confirming,
+            HaulRun.Step.dispatching.rawValue,
+            HaulRun.Step.confirming.rawValue,
+            HaulRun.Step.confirming.rawValue,
         ])
 
         let calls = dispatched.value
@@ -1103,7 +1110,7 @@ struct HaulRunEndToEndTests {
         try await database.write { db in
             try Device.insert { controller("C1") }.execute(db)
             try LocationFootprint.insert { footprint("TENEGSHE-3", 80) }.execute(db)
-            try Directive.insert { run(step: HaulRun.Step.assigning) }.execute(db)
+            try Directive.insert { run(step: HaulRun.Step.assigning.rawValue) }.execute(db)
         }
 
         let dispatched = LockIsolated(0)
@@ -1121,11 +1128,11 @@ struct HaulRunEndToEndTests {
         }
 
         #expect(dispatched.value == 0)
-        #expect(steps == [HaulRun.Step.hauling, HaulRun.Step.hauling, HaulRun.Step.hauling])
+        #expect(steps == [HaulRun.Step.hauling.rawValue, HaulRun.Step.hauling.rawValue, HaulRun.Step.hauling.rawValue])
 
         let row = try #require(await readRow(database))
         #expect(row.status == .running)
-        #expect(row.step == HaulRun.Step.hauling)
+        #expect(row.step == HaulRun.Step.hauling.rawValue)
     }
 
     /// **The steady state nothing else here covers**: the controller is ALREADY
@@ -1157,7 +1164,7 @@ struct HaulRunEndToEndTests {
             for pile in [footprint("ATIANFU-BELT-1", 0), footprint("AINALRAM-2", 9_000)] {
                 try LocationFootprint.insert { pile }.execute(db)
             }
-            try Directive.insert { run(step: HaulRun.Step.assigning) }.execute(db)
+            try Directive.insert { run(step: HaulRun.Step.assigning.rawValue) }.execute(db)
         }
 
         let dispatched = LockIsolated<[RecordedDispatch]>([])
@@ -1202,10 +1209,10 @@ struct HaulRunEndToEndTests {
 
         // Pin, command, confirm-by-read, then settle and stay settled.
         #expect(steps == [
-            HaulRun.Step.dispatching,
-            HaulRun.Step.confirming,
-            HaulRun.Step.assigning,
-        ] + Array(repeating: HaulRun.Step.hauling, count: 9))
+            HaulRun.Step.dispatching.rawValue,
+            HaulRun.Step.confirming.rawValue,
+            HaulRun.Step.assigning.rawValue,
+        ] + Array(repeating: HaulRun.Step.hauling.rawValue, count: 9))
 
         let row = try #require(await readRow(database))
         #expect(row.status == .running)
@@ -1238,7 +1245,7 @@ struct HaulRunDerivedSinkTests {
 
     /// A row stamped with `depot` — the theatre a directive's own row names.
     private func rowNaming(_ depot: String?) -> Directive {
-        run(step: HaulRun.Step.hauling, theatreDepot: depot)
+        run(step: HaulRun.Step.hauling.rawValue, theatreDepot: depot)
     }
 
     @Test("the sink follows the recognised hub")
@@ -1379,7 +1386,7 @@ struct HaulRunTheatreScopingTests {
             now: fixtureNow
         )
         let directive = run(
-            step: HaulRun.Step.assigning, fleetTag: "auto:haul:AINALRAM-BELT-1", theatreDepot: ainalram.depot
+            step: HaulRun.Step.assigning.rawValue, fleetTag: "auto:haul:AINALRAM-BELT-1", theatreDepot: ainalram.depot
         )
 
         guard case let .assignController(deviceCode, _) = HaulRun().nextAction(directive: directive, world: world)
@@ -1470,7 +1477,7 @@ struct HaulDepotSinkTests {
             now: fixtureNow
         )
         let directive = run(
-            step: HaulRun.Step.dispatching, fleetTag: "auto:haul:AINALRAM-BELT-1",
+            step: HaulRun.Step.dispatching.rawValue, fleetTag: "auto:haul:AINALRAM-BELT-1",
             controllerCode: "CTRL-A", theatreDepot: ainalram.depot
         )
 
@@ -1578,8 +1585,8 @@ struct HaulRunPinnedTests {
 
     /// `targets.first` is the whole mode switch.
     @Test func pinnedSourceIsTheFirstTarget() {
-        let keeperRow = keeperRun(step: HaulRun.Step.assigning, deviceCode: "C2", targets: [pinnedBelt])
-        let drainerRow = keeperRun(step: HaulRun.Step.assigning, deviceCode: "C1", targets: [])
+        let keeperRow = keeperRun(step: HaulRun.Step.assigning.rawValue, deviceCode: "C2", targets: [pinnedBelt])
+        let drainerRow = keeperRun(step: HaulRun.Step.assigning.rawValue, deviceCode: "C1", targets: [])
         #expect(HaulRun.pinnedSource(of: keeperRow) == pinnedBelt)
         #expect(HaulRun.pinnedSource(of: drainerRow) == nil)
     }
@@ -1588,10 +1595,10 @@ struct HaulRunPinnedTests {
     /// would rank C1 first against the richer pile.
     @Test func pinnedAssigningClaimsItsOwnController() {
         let action = HaulRun().nextAction(
-            directive: keeperRun(step: HaulRun.Step.assigning, deviceCode: "C2", targets: [pinnedBelt]),
+            directive: keeperRun(step: HaulRun.Step.assigning.rawValue, deviceCode: "C2", targets: [pinnedBelt]),
             world: twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
         )
-        #expect(action == .assignController(deviceCode: "C2", nextStep: HaulRun.Step.dispatching))
+        #expect(action == .assignController(deviceCode: "C2", nextStep: HaulRun.Step.dispatching.rawValue))
     }
 
     /// Case 2: it ferries the pinned belt into the derived sink — not the
@@ -1599,7 +1606,7 @@ struct HaulRunPinnedTests {
     @Test func pinnedDispatchingCommandsTheBelt() {
         let world = twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
         let directive = keeperRun(
-            step: HaulRun.Step.dispatching, deviceCode: "C2",
+            step: HaulRun.Step.dispatching.rawValue, deviceCode: "C2",
             targets: [pinnedBelt], controllerCode: "C2"
         )
         let action = HaulRun().nextAction(directive: directive, world: world)
@@ -1610,7 +1617,7 @@ struct HaulRunPinnedTests {
                 "collect": .string(pinnedBelt),
                 "deliver": .string(HaulRun.deliverySink(in: world, for: directive)),
             ]),
-            nextStep: HaulRun.Step.confirming
+            nextStep: HaulRun.Step.confirming.rawValue
         ))
     }
 
@@ -1619,7 +1626,7 @@ struct HaulRunPinnedTests {
     @Test func pinnedDispatchingArmsShuttleForASameSystemPile() {
         let world = twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
         let directive = keeperRun(
-            step: HaulRun.Step.dispatching, deviceCode: "C2",
+            step: HaulRun.Step.dispatching.rawValue, deviceCode: "C2",
             targets: [sameSystemBelt], controllerCode: "C2"
         )
         let action = HaulRun().nextAction(directive: directive, world: world)
@@ -1630,7 +1637,7 @@ struct HaulRunPinnedTests {
                 "collect": .string(sameSystemBelt),
                 "deliver": .string(HaulRun.deliverySink(in: world, for: directive)),
             ]),
-            nextStep: HaulRun.Step.confirming
+            nextStep: HaulRun.Step.confirming.rawValue
         ))
     }
 
@@ -1645,10 +1652,10 @@ struct HaulRunPinnedTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: keeperRun(step: HaulRun.Step.assigning, deviceCode: "C2", targets: [sameSystemBelt]),
+            directive: keeperRun(step: HaulRun.Step.assigning.rawValue, deviceCode: "C2", targets: [sameSystemBelt]),
             world: twoPileWorld(controllers: [keeper("C1"), settled])
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling.rawValue))
     }
 
     /// Case 3: already running exactly that ferry config, so the keeper idles
@@ -1662,10 +1669,10 @@ struct HaulRunPinnedTests {
             ]
         )
         let action = HaulRun().nextAction(
-            directive: keeperRun(step: HaulRun.Step.assigning, deviceCode: "C2", targets: [pinnedBelt]),
+            directive: keeperRun(step: HaulRun.Step.assigning.rawValue, deviceCode: "C2", targets: [pinnedBelt]),
             world: twoPileWorld(controllers: [keeper("C1"), settled])
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling.rawValue))
     }
 
     /// Case 4, the scoping guard: an empty `targets` is the general drainer, and
@@ -1673,7 +1680,7 @@ struct HaulRunPinnedTests {
     @Test func aGeneralRunOverTheSameWorldStillFollowsThePlanner() {
         let world = twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
         let directive = keeperRun(
-            step: HaulRun.Step.dispatching, deviceCode: "C1",
+            step: HaulRun.Step.dispatching.rawValue, deviceCode: "C1",
             targets: [], controllerCode: "C1"
         )
         let action = HaulRun().nextAction(directive: directive, world: world)
@@ -1684,7 +1691,7 @@ struct HaulRunPinnedTests {
                 "collect": .string(richestPile),
                 "deliver": .string(HaulRun.deliverySink(in: world, for: directive)),
             ]),
-            nextStep: HaulRun.Step.confirming
+            nextStep: HaulRun.Step.confirming.rawValue
         ))
     }
 
@@ -1693,7 +1700,7 @@ struct HaulRunPinnedTests {
     @Test func pinnedPreflightRefreshesOnlyItsOwnController() {
         let stale = keeper("C2", updatedAt: fixtureNow.addingTimeInterval(-3_600))
         let action = HaulRun().nextAction(
-            directive: keeperRun(step: HaulRun.Step.preflight, deviceCode: "C2", targets: [pinnedBelt]),
+            directive: keeperRun(step: HaulRun.Step.preflight.rawValue, deviceCode: "C2", targets: [pinnedBelt]),
             world: twoPileWorld(controllers: [keeper("C1"), stale])
         )
         #expect(action == .refreshDevices(deviceCodes: ["C2"], thenStall: .noHaulControllerTagged))
@@ -1702,9 +1709,9 @@ struct HaulRunPinnedTests {
     /// A fresh keeper needs no read at all.
     @Test func pinnedPreflightAdvancesOnAFreshController() {
         let action = HaulRun().nextAction(
-            directive: keeperRun(step: HaulRun.Step.preflight, deviceCode: "C2", targets: [pinnedBelt]),
+            directive: keeperRun(step: HaulRun.Step.preflight.rawValue, deviceCode: "C2", targets: [pinnedBelt]),
             world: twoPileWorld(controllers: [keeper("C1"), keeper("C2")])
         )
-        #expect(action == .advanceStep(nextStep: HaulRun.Step.surveying))
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.surveying.rawValue))
     }
 }

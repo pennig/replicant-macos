@@ -95,7 +95,7 @@ struct NewHaulRunFeatureTests {
         #expect(row.status == .running)
         #expect(row.deviceCode == "C1")
         #expect(row.fleetTag == HaulRun.defaultFleetTag.string)
-        #expect(row.step == HaulRun.Step.preflight)
+        #expect(row.step == HaulRun.Step.preflight.rawValue)
         // Empty and stays empty: the planner re-derives from the census every
         // cycle and records no history.
         #expect(row.targets.isEmpty)
