@@ -88,9 +88,8 @@ extension DirectiveResolutionClient: DependencyKey {
             }) { directive, now in
                 directive.targetIndex += 1
                 // Restart the machine so the next target begins with a fresh
-                // preflight rather than mid-procedure. A kind with no registered
-                // machine keeps its step — it is inert either way.
-                directive.step = MissionRegistry.firstStep(for: directive.kind) ?? directive.step
+                // preflight rather than mid-procedure.
+                directive.step = MissionRegistry.firstStep(for: directive.kind)
                 directive.stepStartedAt = now
                 directive.status = .running
                 directive.attentionReason = nil

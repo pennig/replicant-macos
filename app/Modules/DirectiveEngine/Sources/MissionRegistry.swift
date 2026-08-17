@@ -25,9 +25,13 @@ public enum MissionRegistry {
         machines.first { $0.kind == kind }
     }
 
-    /// The step a freshly-started target of `kind` begins on, or nil for a kind
-    /// with no registered machine — which the engine leaves alone anyway.
-    public static func firstStep(for kind: DirectiveKind) -> String? {
-        machine(for: kind)?.firstStep
+    /// The step a freshly-started target of `kind` begins on. Every
+    /// `DirectiveKind` case is registered above, so a missing machine here is a
+    /// programmer error, not a runtime state.
+    public static func firstStep(for kind: DirectiveKind) -> String {
+        guard let machine = machine(for: kind) else {
+            preconditionFailure("no machine registered for \(kind.rawValue)")
+        }
+        return machine.firstStep
     }
 }
