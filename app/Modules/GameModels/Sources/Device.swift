@@ -214,6 +214,28 @@ extension Device {
     }
 }
 
+// MARK: - Fleet tags
+
+extension Device {
+    /// This device's tags parsed as `FleetTag`s. A tag that isn't `auto:`
+    /// grammar, or fails to parse, is skipped rather than surfaced as an error.
+    public var fleetTags: [FleetTag] { tags.compactMap { FleetTag(parsing: $0) } }
+
+    /// Whether this device carries `tag`. `.exactOrUnscoped` also matches a
+    /// bare tag for the same goal — an unscoped wearer answers to everyone.
+    public func carries(_ tag: FleetTag, policy: FleetTag.MatchPolicy) -> Bool {
+        switch policy {
+        case .exact: fleetTags.contains(tag)
+        case .exactOrUnscoped: fleetTags.contains(tag) || fleetTags.contains(tag.unscoped)
+        }
+    }
+
+    /// A device wearing any scoped tag for `goal` — nil when unscoped-only or absent.
+    public func scopedTag(for goal: FleetTag.Goal) -> FleetTag? {
+        fleetTags.first { $0.goal == goal && $0.isScoped }
+    }
+}
+
 // MARK: - Replication source capability
 
 extension Device {
