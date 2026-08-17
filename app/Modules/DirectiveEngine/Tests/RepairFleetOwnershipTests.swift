@@ -120,11 +120,18 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
         #expect(!RepairFleet.answers(bot, to: FleetTag(goal: .survey, scope: .theatre(depot: "DENEBED-BELT-1"))))
     }
 
-    /// The OTHER migration direction. A legacy `surveyRun`/`salvageRun`
-    /// row keeps a bare `fleetTag` forever; an operator who re-tags its
-    /// service bots to the per-theatre form must not silently lose repair.
-    @Test func aTheatreTaggedBotStillAnswersToABareOwner() {
+    /// The OTHER direction: a bot that names its own theatre has been handed
+    /// over, so a run naming no theatre does not get it back.
+    @Test func aTheatreTaggedBotDoesNotAnswerToABareOwner() {
         let bot = taggedBot("BOT1", ["auto:survey:AINALRAM-BELT-1"])
-        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .survey)))
+        #expect(!RepairFleet.answers(bot, to: FleetTag(goal: .survey)))
+    }
+
+    /// The half-migrated bot: it wears the bare tag AND its theatre's. The
+    /// scoped tag is the operator's last word, so it answers that theatre alone.
+    @Test func aBotWearingBothTagsAnswersItsOwnTheatreAlone() {
+        let bot = taggedBot("BOT1", ["auto:survey", "auto:survey:DENEBED-BELT-1"])
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .survey, scope: .theatre(depot: "DENEBED-BELT-1"))))
+        #expect(!RepairFleet.answers(bot, to: FleetTag(goal: .survey, scope: .theatre(depot: "AINALRAM-BELT-1"))))
     }
 }

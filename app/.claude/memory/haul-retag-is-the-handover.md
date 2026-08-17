@@ -48,3 +48,5 @@ Pinned mine-ferry rows are excluded twice over (`isGeneralHaul` is false for
 `auto:mine:<belt>`, and `HaulRun.pinnedSource` is non-nil) — such a row drives
 exactly its own `deviceCode`, so re-homing one would point it at a controller
 that is not its belt's.
+
+Generalised 2026-08-17: the rule is now `FleetMembership.belongs` and every fleet obeys it, not haul alone — see `.scratch/directives-architecture/issues/12-scoped-tag-outranks-location.md`.

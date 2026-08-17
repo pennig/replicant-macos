@@ -353,6 +353,30 @@ struct BrainSurveyTests {
         #expect(Brain.surveyReadiness(view: view, directives: [], theatre: denebed) == .launch(carrier: "VB", roamCentre: "DENEBED"))
     }
 
+    /// Re-tagging is the operator's handover: a vessel standing in AINALRAM's
+    /// own system, a long way from DENEBED's, is DENEBED's the moment it
+    /// wears DENEBED's tag.
+    @Test("a vessel re-tagged for another theatre changes hands without moving")
+    func anExplicitTagMovesAVesselBetweenTheatres() {
+        let (view, ainalram, denebed) = twoTheatreSurveyView(
+            ainalramFleet: surveyReadinessStagedFleet(
+                carrier: "VA", controller: "AMIA", drone: "DRONEA", location: "AINALRAM-1",
+                tags: ["auto:survey:DENEBED-BELT-1"]
+            ),
+            denebedFleet: []
+        )
+
+        #expect(
+            Brain.surveyReadiness(view: view, directives: [], theatre: denebed)
+                == .launch(carrier: "VA", roamCentre: "DENEBED")
+        )
+        guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalram) else {
+            Issue.record("expected AINALRAM to idle — VA now wears DENEBED's tag")
+            return
+        }
+        #expect(!reason.contains("VA"))
+    }
+
     /// A carrier tagged for AINALRAM alone is never a candidate for DENEBED —
     /// the theatre it wears no tag for idles, naming no carrier at all.
     @Test("a device tagged for one theatre is not selected for another")

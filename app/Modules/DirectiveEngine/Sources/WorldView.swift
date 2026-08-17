@@ -281,10 +281,10 @@ public struct WorldView: Equatable, Sendable {
         theatreResolver.theatre(nearest: system)
     }
 
-    /// `device`'s theatre, by location alone. Ticket 12 threads the caller's
-    /// goal through so an explicit scoped tag can outrank where it stands.
-    public func owningTheatre(of device: Device) -> Theatre? {
-        theatreResolver.owningTheatre(of: device, goal: nil)
+    /// `device`'s theatre. A `goal` lets its scoped tag outrank where it
+    /// stands; nil asks the location question alone.
+    public func owningTheatre(of device: Device, goal: FleetTag.Goal?) -> Theatre? {
+        theatreResolver.owningTheatre(of: device, goal: goal)
     }
 
     /// `system`'s theatre — the rule `owningTheatre(of:)` applies to a

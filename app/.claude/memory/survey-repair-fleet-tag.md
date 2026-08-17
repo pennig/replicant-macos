@@ -29,3 +29,5 @@ Residual: any future mission that carries bots must pass an owner from day one �
 `answers`'s nil-owner = refuse-tagged contract makes an owner-less caller wrong
 the moment its bots are tagged, and quiet repair-phase degradation means the
 failure will again be silent.
+
+Amended 2026-08-17: `RepairFleet.answers` is no longer root-tolerant upward — a bot wearing a scoped tag answers that theatre alone, never a bare-tagged owner — see `.scratch/directives-architecture/issues/12-scoped-tag-outranks-location.md`.

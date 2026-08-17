@@ -581,10 +581,16 @@ public struct SurveyRun: MissionStepMachine {
         FleetTag(goal: .survey, scope: .theatre(depot: depot))
     }
 
-    /// Whether `device` may carry `depot`'s survey work: its own theatre tag,
-    /// or (an un-migrated fleet) the bare tag it falls back from.
-    static func isFleetTagged(_ device: Device, at depot: String) -> Bool {
+    /// Whether `device` wears `depot`'s survey tag, its own or the bare one it
+    /// falls back from — the operator's opt-in, wherever the device stands.
+    /// Fleet MEMBERSHIP is `isFleetTagged`.
+    static func wearsFleetTag(_ device: Device, at depot: String) -> Bool {
         device.carries(fleetTag(forTheatre: depot), policy: .exactOrUnscoped)
+    }
+
+    /// Whether `device` is `depot`'s survey fleet — `FleetMembership.belongs`.
+    static func isFleetTagged(_ device: Device, at depot: String, resolver: TheatreResolver) -> Bool {
+        FleetMembership.belongs(device, toDepot: depot, goal: .survey, resolver: resolver)
     }
 
     /// Deploy the next service bot still aboard `vessel`, or move on when the

@@ -798,10 +798,11 @@ struct Brain: Sendable {
 
     // MARK: - Theatre ownership
 
-    /// `device`'s theatre — forwards to `WorldView.owningTheatre(of:)`, the
-    /// public seam operator-launched dialogs outside the engine also use.
-    static func owningTheatre(of device: Device, view: WorldView) -> Theatre? {
-        view.owningTheatre(of: device)
+    /// `device`'s theatre — forwards to `WorldView.owningTheatre(of:goal:)`, the
+    /// public seam operator-launched dialogs outside the engine also use. A nil
+    /// `goal` asks where the device STANDS, ignoring what it is tagged for.
+    static func owningTheatre(of device: Device, view: WorldView, goal: FleetTag.Goal?) -> Theatre? {
+        view.owningTheatre(of: device, goal: goal)
     }
 
     // MARK: - Theatre adoption
@@ -816,20 +817,11 @@ struct Brain: Sendable {
         return directives.compactMap { row in
             guard row.theatreDepot == nil else { return nil }
             if let origin = row.originDesignation,
-               let theatre = view.theatre(servicing: origin) {
+               let theatre = view.owningTheatre(ofSystem: origin) {
                 return (row.id, theatre.depot)
             }
             guard operational.count == 1 else { return nil }
             return (row.id, operational[0].depot)
-        }
-    }
-
-    /// `HaulRun.belongs`, resolved through this view's own theatre rule.
-    private static func haulFleet(
-        _ device: Device, tag: FleetTag, depot: String, view: WorldView
-    ) -> Bool {
-        HaulRun.belongs(device, tag: tag, theatreDepot: depot) {
-            owningTheatre(of: $0, view: view)?.depot
         }
     }
 
@@ -855,7 +847,7 @@ struct Brain: Sendable {
             else { return nil }
             let tag = row.fleetTag.flatMap(FleetTag.init(parsing:)) ?? HaulRun.defaultFleetTag
             let fleet = HaulRun.controllers(in: view.devices.values, tag: tag)
-                .filter { haulFleet($0, tag: tag, depot: depot, view: view) }
+                .filter { HaulRun.belongs($0, to: depot, resolver: view.theatreResolver) }
                 .map(\.deviceCode)
             guard !fleet.isEmpty else { return nil }
             let member = fleet.contains(row.deviceCode) ? nil : fleet.first
@@ -1441,8 +1433,10 @@ struct Brain: Sendable {
     static func salvageReadiness(view: WorldView, directives: [Directive], theatre: Theatre) -> SalvageReadiness {
         let reserved = reservedDevices(directives: directives, view: view, theatre: theatre)
         let candidates = view.devices.values
-            .filter { $0.isCarrierHull && SalvageRun.isFleetTagged($0, at: theatre.depot) }
-            .filter { owningTheatre(of: $0, view: view)?.depot == theatre.depot }
+            .filter {
+                $0.isCarrierHull
+                    && SalvageRun.isFleetTagged($0, at: theatre.depot, resolver: view.theatreResolver)
+            }
         guard let carrier = candidates
             .filter({ !reserved.contains($0.deviceCode) })
             .min(by: { $0.deviceCode < $1.deviceCode })
@@ -1450,7 +1444,7 @@ struct Brain: Sendable {
             // A tag on a non-carrier hull is a misapplied opt-in, not an untagged
             // fleet. Moving the tag is location-independent, so the scan is fleet-wide.
             let mistagged = view.devices.values
-                .filter { !$0.isCarrierHull && SalvageRun.isFleetTagged($0, at: theatre.depot) }
+                .filter { !$0.isCarrierHull && SalvageRun.wearsFleetTag($0, at: theatre.depot) }
                 .sorted { $0.deviceCode < $1.deviceCode }
             let theatreTag = SalvageRun.fleetTag(forTheatre: theatre.depot)
             guard let clause = mistaggedClause(mistagged, tag: salvageCarrierTag) else {
@@ -1462,8 +1456,8 @@ struct Brain: Sendable {
                     // fleet-wide, like `mistagged`, rather than read as untagged.
                     let unreachable = view.devices.values
                         .filter {
-                            $0.isCarrierHull && SalvageRun.isFleetTagged($0, at: theatre.depot)
-                                && owningTheatre(of: $0, view: view) == nil
+                            $0.isCarrierHull && SalvageRun.wearsFleetTag($0, at: theatre.depot)
+                                && owningTheatre(of: $0, view: view, goal: nil) == nil
                         }
                         .sorted { $0.deviceCode < $1.deviceCode }
                     guard unreachable.isEmpty else {
@@ -1526,7 +1520,7 @@ struct Brain: Sendable {
         let reserved = reservedDevices(directives: directives, view: view, theatre: theatre)
         let theatreTag = HaulRun.fleetTag(forTheatre: theatre.depot)
         let candidates = HaulRun.controllers(in: view.devices.values, tag: theatreTag)
-            .filter { haulFleet($0, tag: theatreTag, depot: theatre.depot, view: view) }
+            .filter { HaulRun.belongs($0, to: theatre.depot, resolver: view.theatreResolver) }
         guard let controller = candidates.first(where: { !reserved.contains($0.deviceCode) }) else {
             let base = "no free \(HaulRun.defaultFleetTag) controller offering ferry"
             guard let unmigrated = unmigratedHold(
@@ -1906,13 +1900,15 @@ struct Brain: Sendable {
         }
     }
 
-    /// The lowest-coded FREE vessel tagged `surveyCarrierTag` that `theatre`
-    /// owns (`owningTheatre`) — survey never co-locates at a hub the way
+    /// The lowest-coded FREE vessel in `theatre`'s survey fleet
+    /// (`FleetMembership`) — survey never co-locates at a hub the way
     /// `freeCarrier` requires.
     private static func surveyCarrier(view: WorldView, theatre: Theatre, reserved: Set<String>) -> Device? {
         view.devices.values
-            .filter { $0.isCarrierHull && SurveyRun.isFleetTagged($0, at: theatre.depot) }
-            .filter { owningTheatre(of: $0, view: view)?.depot == theatre.depot }
+            .filter {
+                $0.isCarrierHull
+                    && SurveyRun.isFleetTagged($0, at: theatre.depot, resolver: view.theatreResolver)
+            }
             .filter { !reserved.contains($0.deviceCode) }
             .min { $0.deviceCode < $1.deviceCode }
     }
@@ -1924,18 +1920,21 @@ struct Brain: Sendable {
         view: WorldView, theatre: Theatre, reserved: Set<String>, directives: [Directive]
     ) -> String {
         let hulls = view.devices.values
-            .filter { $0.isCarrierHull && owningTheatre(of: $0, view: view)?.depot == theatre.depot }
+            .filter { $0.isCarrierHull && owningTheatre(of: $0, view: view, goal: .survey)?.depot == theatre.depot }
             .sorted { $0.deviceCode < $1.deviceCode }
         // A tag on a non-carrier hull is a misapplied opt-in, not an untagged
         // fleet. Moving the tag is location-independent, so the scan is fleet-wide.
         let mistagged = view.devices.values
-            .filter { !$0.isCarrierHull && SurveyRun.isFleetTagged($0, at: theatre.depot) }
+            .filter { !$0.isCarrierHull && SurveyRun.wearsFleetTag($0, at: theatre.depot) }
             .sorted { $0.deviceCode < $1.deviceCode }
         guard !hulls.isEmpty else {
             // A stowed or mid-cruise hull resolves no theatre — find it
             // fleet-wide, like `mistagged`, rather than read as untagged.
             let unreachable = view.devices.values
-                .filter { $0.isCarrierHull && SurveyRun.isFleetTagged($0, at: theatre.depot) && owningTheatre(of: $0, view: view) == nil }
+                .filter {
+                    $0.isCarrierHull && SurveyRun.wearsFleetTag($0, at: theatre.depot)
+                        && owningTheatre(of: $0, view: view, goal: nil) == nil
+                }
                 .sorted { $0.deviceCode < $1.deviceCode }
             guard unreachable.isEmpty else {
                 return "\(list(unreachable.map(\.deviceCode))) \(unreachable.count == 1 ? "is" : "are") tagged \(surveyCarrierTag) but not placeable — stowed or mid-cruise"
@@ -1945,7 +1944,9 @@ struct Brain: Sendable {
             }
             return "no carrier hull — \(clause)"
         }
-        let candidates = hulls.filter { SurveyRun.isFleetTagged($0, at: theatre.depot) }
+        let candidates = hulls.filter {
+            SurveyRun.isFleetTagged($0, at: theatre.depot, resolver: view.theatreResolver)
+        }
         guard !candidates.isEmpty else {
             let untagged = "no carrier hull is tagged \(surveyCarrierTag) — \(list(hulls.map(\.deviceCode))) \(hulls.count == 1 ? "is" : "are") untagged"
             guard let clause = mistaggedClause(mistagged, tag: surveyCarrierTag) else { return untagged }

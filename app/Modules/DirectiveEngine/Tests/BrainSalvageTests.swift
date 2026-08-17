@@ -359,6 +359,31 @@ struct BrainSalvageReadinessTests {
         )
     }
 
+    /// Re-tagging is the operator's handover: a vessel standing in AINALRAM's
+    /// own system, a long way from DENEBED's, is DENEBED's the moment it
+    /// wears DENEBED's tag.
+    @Test("a vessel re-tagged for another theatre changes hands without moving")
+    func anExplicitTagMovesAVesselBetweenTheatres() {
+        let (view, ainalram, denebed) = twoTheatreSalvageView(
+            ainalramFleet: salvageStagedFleet(
+                carrier: "VA", location: "AINALRAM-1",
+                tags: ["auto:salvage:DENEBED-BELT-1"]
+            ),
+            denebedFleet: [],
+            salvageUnits: ["AINALRAM": 900, "DENEBED": 900]
+        )
+
+        #expect(
+            Brain.salvageReadiness(view: view, directives: [], theatre: denebed)
+                == .launch(carrier: "VA", roamCentre: "DENEBED")
+        )
+        guard case let .idle(reason) = Brain.salvageReadiness(view: view, directives: [], theatre: ainalram) else {
+            Issue.record("expected AINALRAM to idle — VA now wears DENEBED's tag")
+            return
+        }
+        #expect(!reason.contains("VA"))
+    }
+
     /// A carrier tagged for AINALRAM alone is never a candidate for DENEBED.
     @Test("a device tagged for one theatre is not selected for another")
     func aDeviceTaggedForOneTheatreIsNotSelectedForAnother() {

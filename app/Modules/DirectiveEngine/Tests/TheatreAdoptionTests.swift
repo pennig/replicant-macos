@@ -43,6 +43,18 @@ struct TheatreAdoptionTests {
         #expect(Brain.adoptTheatres(directives: [row], view: view).map(\.depot) == ["AINALRAM-BELT-1"])
     }
 
+    /// The launcher rule: servicing, then nearest. A row launched outside
+    /// every theatre's mesh component is still stamped, rather than waiting
+    /// for the one-theatre fallback that a second theatre retires.
+    @Test("A row whose origin no theatre services adopts the nearest one")
+    func adoptsNearestWhenNoComponentServices() {
+        let row = directiveFixture(id: "D1", kind: .haulRun, originDesignation: "REMOTE", theatreDepot: nil)
+
+        let stamps = Brain.adoptTheatres(directives: [row], view: strandedOriginView())
+
+        #expect(stamps.map(\.depot) == ["AINALRAM-BELT-1"])
+    }
+
     @Test("With several theatres and no origin, the row is left for the operator")
     func ambiguousRowNotGuessed() {
         let view = twoTheatreView()
@@ -68,6 +80,30 @@ private func singleTheatreView() -> WorldView {
                     readiness: .operational, stock: 40_000),
         ],
         components: ["AINALRAM": "AINALRAM"],
+        now: Date(timeIntervalSince1970: 5_000)
+    )
+}
+
+/// Two theatres, and a `REMOTE` origin in a mesh component neither services —
+/// `AINALRAM` is the nearer of the two.
+private func strandedOriginView() -> WorldView {
+    WorldView(
+        devices: [:],
+        starPositions: [
+            "AINALRAM": ainalram,
+            "REMOTE": Position(x: ainalram.x + 5, y: ainalram.y, z: ainalram.z),
+            "DENEBED": Position(x: ainalram.x + 400, y: ainalram.y, z: ainalram.z),
+        ],
+        meshSystems: ["AINALRAM", "DENEBED"],
+        salvageUnits: [:],
+        eventSystems: [],
+        theatres: [
+            Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+                    readiness: .operational, stock: 40_000),
+            Theatre(depot: "DENEBED-BELT-1", system: "DENEBED", origin: .pinned,
+                    readiness: .operational, stock: 900),
+        ],
+        components: ["AINALRAM": "AINALRAM", "DENEBED": "DENEBED", "REMOTE": "REMOTE"],
         now: Date(timeIntervalSince1970: 5_000)
     )
 }

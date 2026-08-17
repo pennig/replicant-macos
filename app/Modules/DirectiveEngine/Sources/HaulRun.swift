@@ -107,21 +107,16 @@ public struct HaulRun: MissionStepMachine {
 
     /// `theatreDepot`, when given, scopes the result through `belongs` (see
     /// `haul-run-theatre-scoped-controllers.md`); nil preserves the old read.
+    /// A per-belt ferry row names a belt, not a theatre, so it is left alone.
     public static func controllers(in world: WorldSnapshot, tag: FleetTag, theatreDepot: String? = nil) -> [Device] {
         let matched = controllers(in: world.devices.values, tag: tag)
-        guard let theatreDepot else { return matched }
-        return matched.filter {
-            belongs($0, tag: tag, theatreDepot: theatreDepot) { world.owningTheatre(of: $0)?.depot }
-        }
+        guard let theatreDepot, tag.goal == .haul else { return matched }
+        return matched.filter { belongs($0, to: theatreDepot, resolver: world.theatreResolver) }
     }
 
-    /// Whether `device` is `theatreDepot`'s: it wears `tag` itself, or the bare
-    /// fallback claimed it and `owningDepot` places it there. An explicit tag is
-    /// the operator's handover, so it outranks wherever the device stands.
-    public static func belongs(
-        _ device: Device, tag: FleetTag, theatreDepot: String, owningDepot: (Device) -> String?
-    ) -> Bool {
-        device.carries(tag, policy: .exact) || owningDepot(device) == theatreDepot
+    /// Whether `device` is `depot`'s haul fleet — `FleetMembership.belongs`.
+    public static func belongs(_ device: Device, to depot: String, resolver: TheatreResolver) -> Bool {
+        FleetMembership.belongs(device, toDepot: depot, goal: .haul, resolver: resolver)
     }
 
     /// The tag `Brain.ensureHaul` stamps for a theatre at `depot`.

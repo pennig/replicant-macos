@@ -217,7 +217,7 @@ public struct NewDirectiveFeature {
                     do {
                         tag = try await database.read { db -> FleetTag in
                             let view = try WorldView.read(from: db, now: now)
-                            guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device)
+                            guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device, goal: .survey)
                             else {
                                 logger.notice("survey launch on \(vesselCode, privacy: .public): no theatre resolves — bare tag")
                                 return SurveyRun.defaultFleetTag

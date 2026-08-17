@@ -103,7 +103,7 @@ public struct NewHaulRunFeature {
                     do {
                         tag = try await database.read { db -> FleetTag in
                             let view = try WorldView.read(from: db, now: now)
-                            guard let device = view.devices[anchor], let theatre = view.owningTheatre(of: device)
+                            guard let device = view.devices[anchor], let theatre = view.owningTheatre(of: device, goal: .haul)
                             else {
                                 logger.notice("haul launch on \(anchor, privacy: .public): no theatre resolves — bare tag")
                                 return HaulRun.defaultFleetTag
