@@ -482,6 +482,49 @@ struct DirectiveEngineTests {
         }
     }
 
+    /// A malformed request — a `travel` with no destination, which the real
+    /// client refuses before it POSTs — stalls on tick 1: it writes no operation
+    /// row, so the retry budget can never advance and the dispatch would repeat.
+    @Test func failureWithNoOperationRowStallsOnTheFirstTick() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let dispatch = MissionAction.dispatch(
+            kind: .travel, deviceCode: "VES1", params: CommandParams(), nextStep: "travelling"
+        )
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([dispatch, dispatch])],
+            tick: .seconds(5)
+        )
+        let governor = CommandGovernor()
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.gameClient = GameClient(
+                make: { ReplicantSpace.client(apiKey: "") },
+                budget: { _ in RateLimitGovernor.Snapshot(limit: 60, remaining: 40, resetAt: nil) }
+            )
+            $0.commandClient = .liveValue
+            $0.commandGovernor.dispatchOwned = { kind, deviceCode, params, owner in
+                await governor.dispatch(kind, on: deviceCode, params: params, owner: owner)
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.status == .needsAttention, "a failure with no row must not be retried")
+            #expect(directive?.attentionReason == .commandFailed)
+            #expect(directive?.step == "start")
+            let ops = try await database.read { db in try GameModels.Operation.all.fetchCount(db) }
+            #expect(ops == 0, "the client refused the request before staging a row")
+        }
+    }
+
     /// Isolates the counter/budget arithmetic from `CommandGovernor`'s own
     /// per-step dedup (a stubbed governor never defers), so a failure here
     /// would name the executor rather than the governor as the cause.

@@ -56,6 +56,9 @@ enum DirectiveExecutor {
         case let .dispatch(kind, deviceCode, params, nextStep):
             @Dependency(\.commandGovernor) var commandGovernor
             let owner = CommandOwner(directiveID: directive.id, step: directive.step, since: directive.stepStartedAt)
+            // Read before dispatching: a `.failed` that leaves the count where it
+            // was never reached the server, and no repeat of it can (see below).
+            let failuresBefore = await failedDispatches(for: directive)
             switch await commandGovernor.dispatchOwned(kind, deviceCode, params, owner) {
             case let .deferred(reason):
                 // Not a failure: the governor will let it through on a later
@@ -92,6 +95,13 @@ enum DirectiveExecutor {
                     // Counts THIS dispatch's own just-written row too, so `<=`
                     // yields exactly `failedDispatchBudget` retries.
                     let failures = await failedDispatches(for: directive)
+                    guard failures > failuresBefore else {
+                        // No row to show for the attempt: a malformed request, or
+                        // a write that failed. Repeating it changes neither.
+                        logger.notice("directive \(directive.id, privacy: .public): \(kind.rawValue, privacy: .public) failed without an operation row — \(message, privacy: .public)")
+                        await stall(directive, reason: .commandFailed, detail: message)
+                        return false
+                    }
                     if failures <= Self.failedDispatchBudget {
                         logger.notice("directive \(directive.id, privacy: .public): \(kind.rawValue, privacy: .public) failed (\(failures)/\(Self.failedDispatchBudget)) — \(message, privacy: .public) — will retry")
                         return true
