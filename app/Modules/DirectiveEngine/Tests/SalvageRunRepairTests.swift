@@ -84,39 +84,15 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             == .advanceStep(nextStep: SalvageRun.Step.deployingBots.rawValue))
     }
 
-    /// Every retired relay step re-enters at `preflight` rather than freezing
-    /// with a fleet. **Not at `deployingBots`**: a `restocking` row's vessel is
-    /// at the hub, and deploying bots there leaves them behind — the run recalls
-    /// them at the TARGET, finds none, and advances.
+    /// These four names sit outside `SalvageRun.Step`'s vocabulary, so a row
+    /// stuck on one waits like any other unrecognised string.
     @Test(arguments: ["emplacing", "activating", "confirmingRelay", "restocking"])
-    func aRowOnARetiredStepReEntersAtPreflight(_ step: String) {
+    func formerRelayStepNamesNowWait(_ step: String) {
         let w = repairWorld(devices: [vessel, plantedRelay])
         let d = salvageDirective(step: step, targets: ["TOSLIT"])
-        #expect(SalvageRun().nextAction(directive: d, world: w)
-            == .advanceStep(nextStep: SalvageRun.Step.preflight.rawValue))
+        #expect(SalvageRun().nextAction(directive: d, world: w) == .wait)
     }
 
-    /// The case the single-fixture version could not see: a row remapped while
-    /// the vessel stands at the HUB must not reach the bot deploy until travel
-    /// has put it back at the target.
-    @Test func aRetiredRowAtTheHubDoesNotDeployBotsThere() {
-        let atHub = repairDevice("VESSEL", type: "heaven_vessel", location: "AINALRAM-BELT-1")
-        let w = repairWorld(devices: [atHub, plantedRelay])
-        let remapped = SalvageRun().nextAction(
-            directive: salvageDirective(step: "restocking", targets: ["TOSLIT"]), world: w
-        )
-        #expect(remapped == .advanceStep(nextStep: SalvageRun.Step.preflight.rawValue))
-
-        // And from travelling, a vessel away from the target flies rather than
-        // handing to the bots.
-        let travelling = SalvageRun().nextAction(
-            directive: salvageDirective(step: SalvageRun.Step.travelling.rawValue, targets: ["TOSLIT"]), world: w
-        )
-        #expect(travelling != .advanceStep(nextStep: SalvageRun.Step.deployingBots.rawValue))
-    }
-
-    /// An unknown step that is NOT a retired one still waits — the remap must
-    /// not become a catch-all that advances on a typo.
     @Test func anUnknownStepStillWaits() {
         let w = repairWorld(devices: [vessel, plantedRelay])
         let d = salvageDirective(step: "notAStepAtAll", targets: ["TOSLIT"])

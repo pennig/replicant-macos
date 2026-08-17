@@ -54,13 +54,6 @@ public struct SalvageRun: MissionStepMachine {
         case confirmingBotStow
     }
 
-    /// Step names outside this machine's vocabulary that must ADVANCE rather
-    /// than wait. A row carrying one holds a fleet, and `default:` would park it.
-    /// They re-enter at `preflight`, the only funnel that re-derives where the
-    /// vessel is: one of them parks it at the hub, and every later step assumes
-    /// the target system.
-    static let retiredSteps: Set<String> = ["emplacing", "activating", "confirmingRelay", "restocking"]
-
     /// The tag a row falls back to when it carries none of its own.
     public static let defaultFleetTag = FleetTag(goal: .salvage)
 
@@ -125,9 +118,6 @@ public struct SalvageRun: MissionStepMachine {
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
         guard let vessel = world.device(directive.deviceCode) else {
             return .stall(.unreachableDevice)
-        }
-        if Self.retiredSteps.contains(directive.step) {
-            return .advanceStep(nextStep: Step.preflight.rawValue)
         }
         guard let step = Step(rawValue: directive.step) else {
             // Waiting is inert and recoverable; guessing would command the fleet.
