@@ -10,6 +10,8 @@
 
 **Spec:** `.scratch/directives-architecture/spec.md` — read it first. It carries the seven locked decisions (D1–D7) and the per-stage design; this plan carries only the work.
 
+**Punch list:** `.scratch/directives-architecture/punch-list.md` — small things a review deliberately did not fix. Add a line whenever you defer something; work the list at the end of the effort.
+
 ## Global Constraints
 
 Every task's requirements implicitly include this section.
@@ -118,4 +120,5 @@ Stages 2–4 — planning tickets (`Type: task`, output = a plan file + tickets 
 - `check-comments.sh` exit 0 on touched paths.
 - If a schema changed: `GoldenSchemaTests` fixture regenerated deliberately, `SchemaManifestTests` updated.
 - A memory note under `app/.claude/memory/` only for a fact a competent reader could not recover from the code; otherwise none.
+- Anything a review deferred is a line on `punch-list.md`, with its `file:line` and why it was deferred.
 - `Status: resolved` + commit sha(s) in the ticket's `## Comments`.
