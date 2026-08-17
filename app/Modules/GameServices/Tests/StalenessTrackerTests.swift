@@ -309,6 +309,74 @@ private typealias Operation = GameModels.Operation
         }
     }
 
+    /// Urgent marks whose reads never land cannot take a whole pass: one
+    /// ordinary slot is reserved, so the visible/op-holding/aged tiers keep
+    /// draining beside them.
+    @Test func stuckUrgentMarksDoNotStarveTheOrdinaryTiers() async throws {
+        let database = try GameDatabase.bootstrap()
+        let refreshed = LockIsolated<[String]>([])
+        let now = LockIsolated(Date(timeIntervalSince1970: 1_000))
+        let tracker = StalenessTracker(maxPerPass: 4, urgentPerPass: 4)
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = DateGenerator { now.value }
+            $0.deviceRefresher = DeviceRefreshClient { code, _ in
+                refreshed.withValue { $0.append(code) }
+                return nil   // no read ever lands, so no mark is ever spent
+            }
+        } operation: {
+            try await seedOp(database, device: "OPDEV")
+            for code in ["U1", "U2", "U3", "U4"] {
+                await tracker.markUrgent(code, "print.completed")
+                now.setValue(now.value.addingTimeInterval(1))
+            }
+            await tracker.markStale("OPDEV", reason: "mining.tick")
+
+            await tracker.drainPass()
+            #expect(refreshed.value.filter { $0.hasPrefix("U") }.count == 3)
+            #expect(refreshed.value.contains("OPDEV"))
+        }
+    }
+
+    /// An urgent mark whose read never lands is paced by `urgentRetryBackoff`,
+    /// then demoted after `urgentAttemptLimit` attempts — after which it drains
+    /// as an ordinary mark, at `.low`, where the coordinator throttles it.
+    @Test func urgentRetriesArePacedThenDemoted() async throws {
+        let database = try GameDatabase.bootstrap()
+        let refreshed = LockIsolated<[RefreshPriority]>([])
+        let now = LockIsolated(Date(timeIntervalSince1970: 1_000))
+        let tracker = StalenessTracker(
+            hiddenMarkDrainAge: 30, agedRetryBackoff: 60,
+            urgentRetryBackoff: 15, urgentAttemptLimit: 3
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = DateGenerator { now.value }
+            $0.deviceRefresher = DeviceRefreshClient { _, priority in
+                refreshed.withValue { $0.append(priority) }
+                return nil
+            }
+        } operation: {
+            await tracker.markNew("CLONE")   // a clone code that 404s forever
+
+            await tracker.drainPass()   // attempt 1
+            await tracker.drainPass()   // inside the backoff → no read
+            #expect(refreshed.value == [.high])
+
+            now.setValue(Date(timeIntervalSince1970: 1_015))
+            await tracker.drainPass()   // attempt 2
+            now.setValue(Date(timeIntervalSince1970: 1_030))
+            await tracker.drainPass()   // attempt 3 — and the demotion
+            #expect(refreshed.value == [.high, .high, .high])
+
+            now.setValue(Date(timeIntervalSince1970: 1_045))
+            await tracker.drainPass()   // ordinary now: the aged tier, at `.low`
+            #expect(refreshed.value == [.high, .high, .high, .low])
+        }
+    }
+
     /// `markUrgent` on a device already in `visible` self-triggers a drain —
     /// no explicit `drainPass()` call needed, matching `markStale`'s own
     /// visible-tier promptness.

@@ -32,6 +32,13 @@ public actor StalenessTracker {
         /// for a mark whose device can't be read (destroyed/traded away), so
         /// it can't hog the tier's single slot every pass.
         var lastAgedAttemptAt: Date?
+        /// When the urgent tier last spent a read on this mark — the same
+        /// pacing, for the tier that skips the coordinator's TTL and floor.
+        var lastUrgentAttemptAt: Date?
+        /// Urgent reads spent on this mark. Never reset: a satisfied mark is
+        /// dropped whole, so a surviving count is a count of reads that did
+        /// not land, and `urgentAttemptLimit` demotes on it.
+        var urgentAttempts: Int = 0
         var reason: String
         /// Whether this mark drains through the urgent tier (`.high`, ahead of
         /// visible/op-holding/aged) or the ordinary ones.
@@ -58,6 +65,9 @@ public actor StalenessTracker {
     /// burst still leaves the ordinary tiers some room rather than starving
     /// them outright.
     private let urgentPerPass: Int
+    /// Slots of `maxPerPass` the urgent tier may never claim, so marks whose
+    /// urgent read cannot land can slow the ordinary tiers but never stop them.
+    private let reservedOrdinarySlots = 1
     /// Minimum age before a hidden, op-less mark qualifies for the slow drain
     /// tier (see `drainPass`).
     private let hiddenMarkDrainAge: TimeInterval
@@ -65,19 +75,31 @@ public actor StalenessTracker {
     /// unreadable device can't monopolize the tier (other aged marks take the
     /// slot in between).
     private let agedRetryBackoff: TimeInterval
+    /// Minimum spacing between urgent attempts for the SAME mark. The urgent
+    /// tier bypasses the coordinator's TTL and budget floor, so this — not the
+    /// drain cadence — is what bounds an unreadable code's `.high` read rate.
+    private let urgentRetryBackoff: TimeInterval
+    /// Urgent attempts a mark gets before it is demoted to `.ordinary`. A read
+    /// that has failed this often is not going to land, and the ordinary tiers
+    /// carry the throttles the urgent one skips.
+    private let urgentAttemptLimit: Int
 
     public init(
         drainInterval: Duration = .seconds(5),
         maxPerPass: Int = 4,
         urgentPerPass: Int = 4,
         hiddenMarkDrainAge: TimeInterval = 30,
-        agedRetryBackoff: TimeInterval = 60
+        agedRetryBackoff: TimeInterval = 60,
+        urgentRetryBackoff: TimeInterval = 15,
+        urgentAttemptLimit: Int = 3
     ) {
         self.drainInterval = drainInterval
         self.maxPerPass = maxPerPass
         self.urgentPerPass = urgentPerPass
         self.hiddenMarkDrainAge = hiddenMarkDrainAge
         self.agedRetryBackoff = agedRetryBackoff
+        self.urgentRetryBackoff = urgentRetryBackoff
+        self.urgentAttemptLimit = urgentAttemptLimit
     }
 
     /// Remember that `deviceCode`'s row may be stale. Free — no read happens
@@ -96,7 +118,10 @@ public actor StalenessTracker {
             mark.reason = reason
             stale[deviceCode] = mark
         } else {
-            stale[deviceCode] = Mark(firstMarkedAt: now, markedAt: now, lastAgedAttemptAt: nil, reason: reason)
+            stale[deviceCode] = Mark(
+                firstMarkedAt: now, markedAt: now, lastAgedAttemptAt: nil,
+                lastUrgentAttemptAt: nil, reason: reason
+            )
         }
         logger.debug("marked \(deviceCode, privacy: .public) stale (\(reason, privacy: .public))")
         if visible.contains(deviceCode) {
@@ -116,7 +141,10 @@ public actor StalenessTracker {
             mark.tier = .urgent
             stale[deviceCode] = mark
         } else {
-            stale[deviceCode] = Mark(firstMarkedAt: now, markedAt: now, lastAgedAttemptAt: nil, reason: reason, tier: .urgent)
+            stale[deviceCode] = Mark(
+                firstMarkedAt: now, markedAt: now, lastAgedAttemptAt: nil,
+                lastUrgentAttemptAt: nil, reason: reason, tier: .urgent
+            )
         }
         logger.debug("marked \(deviceCode, privacy: .public) urgent (\(reason, privacy: .public))")
         if visible.contains(deviceCode) {
@@ -201,13 +229,21 @@ public actor StalenessTracker {
     /// `maxPerPass`; a hidden idle mark fills any leftover slot once aged.
     func drainPass() async {
         guard !stale.isEmpty else { return }
+        @Dependency(\.date) var date
+        let now = date.now
 
+        // `max(1, …)` keeps the urgent tier alive on a one-slot pass, where
+        // there is no room to reserve and still read anything urgently.
+        let urgentCap = min(urgentPerPass, max(1, maxPerPass - reservedOrdinarySlots))
         let urgentCandidates = Array(
             stale
                 .filter { $0.value.tier == .urgent }
+                .filter { entry in
+                    entry.value.lastUrgentAttemptAt.map { now.timeIntervalSince($0) >= urgentRetryBackoff } ?? true
+                }
                 .sorted { $0.value.markedAt < $1.value.markedAt }
                 .map(\.key)
-                .prefix(min(urgentPerPass, maxPerPass))
+                .prefix(urgentCap)
         )
         let ordinaryBudget = maxPerPass - urgentCandidates.count
 
@@ -243,8 +279,6 @@ public actor StalenessTracker {
             // that hasn't been attempted within the retry backoff (an unreadable
             // device's mark yields the slot to the next-oldest between attempts).
             if ordinaryCandidates.count < ordinaryBudget {
-                @Dependency(\.date) var date
-                let now = date.now
                 let aged = stale
                     .filter { $0.value.tier == .ordinary && !visible.contains($0.key) && !opCodes.contains($0.key) }
                     .filter { now.timeIntervalSince($0.value.firstMarkedAt) >= hiddenMarkDrainAge }
@@ -257,6 +291,16 @@ public actor StalenessTracker {
                     ordinaryCandidates.append(aged.key)
                 }
             }
+        }
+
+        // Stamped after both tiers are chosen, so a mark demoted by this pass
+        // waits for the next one rather than being read twice in this one.
+        for code in urgentCandidates {
+            guard var mark = stale[code] else { continue }
+            mark.lastUrgentAttemptAt = now
+            mark.urgentAttempts += 1
+            if mark.urgentAttempts >= urgentAttemptLimit { mark.tier = .ordinary }
+            stale[code] = mark
         }
 
         guard !urgentCandidates.isEmpty || !ordinaryCandidates.isEmpty else { return }
