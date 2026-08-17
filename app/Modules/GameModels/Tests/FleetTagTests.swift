@@ -34,6 +34,14 @@ struct FleetTagTests {
         #expect(FleetTag(parsing: "manual:haul") == nil)
     }
 
+    /// A hand-typed tag reaches every parse site with the operator's spacing on
+    /// it, and `Device.normalizedTag` has always trimmed before comparing.
+    @Test func parsingTrimsSurroundingWhitespace() {
+        #expect(FleetTag(parsing: " auto:survey ") == FleetTag(goal: .survey))
+        #expect(FleetTag(parsing: "\tauto:Haul:SOL-3\n") == FleetTag(goal: .haul, scope: .theatre(depot: "sol-3")))
+        #expect(device(tags: [" auto:survey "]).carries(FleetTag(goal: .survey), policy: .exact))
+    }
+
     @Test func stringIsCanonicalLowercase() {
         #expect(FleetTag(goal: .survey, scope: .theatre(depot: "SOL-1")).string == "auto:survey:sol-1")
     }

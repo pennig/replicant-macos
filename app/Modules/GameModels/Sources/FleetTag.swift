@@ -5,6 +5,8 @@
 //  ferries — an INSTALL tag and a ferry tag can render identically (S1.1).
 //
 
+import Foundation
+
 /// One canonical fleet-tag grammar. `string` is always lowercase — the
 /// server normalises tags to lowercase regardless of what was sent.
 public struct FleetTag: Sendable, Codable, CustomStringConvertible {
@@ -37,8 +39,10 @@ public struct FleetTag: Sendable, Codable, CustomStringConvertible {
         self.scope = scope.map(Self.lowercased)
     }
 
+    /// Trims and lowercases first: a hand-typed tag reaches here with whatever
+    /// spacing and casing the operator gave it.
     public init?(parsing raw: String) {
-        let lowered = raw.lowercased()
+        let lowered = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard lowered.hasPrefix(Self.prefix) else { return nil }
         let segments = lowered.dropFirst(Self.prefix.count).split(separator: ":", maxSplits: 1)
         guard let goalSegment = segments.first, let goal = Goal(rawValue: String(goalSegment)) else { return nil }

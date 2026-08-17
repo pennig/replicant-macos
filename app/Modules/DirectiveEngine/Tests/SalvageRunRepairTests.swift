@@ -639,16 +639,21 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         ))
     }
 
+    /// The run's own bot carries the HIGHER code, so a recall that ignored the
+    /// owner would reach for the other theatre's `BOT1` first.
     @Test func aRunWithItsOwnTagClaimsOnlyItsOwnBots() {
-        let mine = bot("BOT1", tags: ["auto:salvage:DENEBED-9"])
-        let theirs = bot("BOT2", tags: ["auto:salvage:AINALRAM-1"])
-        let w = repairWorld(devices: [vessel, mine, theirs])
+        let theirs = bot("BOT1", tags: ["auto:salvage:AINALRAM-1"])
+        let mine = bot("BOT2", tags: ["auto:salvage:DENEBED-9"])
+        let w = repairWorld(devices: [vessel, theirs, mine])
+        let owner = FleetTag(goal: .salvage, scope: .theatre(depot: "DENEBED-9"))
+        #expect(RepairFleet.botsOut(near: "TOSLIT-3", in: w, owner: owner)
+            .map(\.deviceCode) == ["BOT2"])
         let d = salvageDirective(
             step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"],
             stepStartedAt: long, fleetTag: "auto:salvage:DENEBED-9"
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
-            kind: .simple("recall"), deviceCode: "BOT1",
+            kind: .simple("recall"), deviceCode: "BOT2",
             params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotStow
         ))
     }

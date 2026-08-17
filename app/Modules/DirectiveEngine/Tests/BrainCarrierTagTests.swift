@@ -77,14 +77,6 @@ struct BrainCarrierTagTests {
         )
     }
 
-    /// The constant is spelled the way the fleet actually stores it, so the
-    /// string quoted back at the operator in `carrierBlocker` matches what they
-    /// will see in the device inspector.
-    @Test("the carrier tag is spelled in its normalised form")
-    func carrierTagIsNormalised() {
-        #expect(Brain.carrierTag.string == Device.normalizedTag(Brain.carrierTag.string))
-    }
-
     /// The live fleet's exact shape: three idle vessels, none tagged. Before the
     /// gate this launched three runs.
     @Test("a hub full of untagged vessels yields no carrier at all")

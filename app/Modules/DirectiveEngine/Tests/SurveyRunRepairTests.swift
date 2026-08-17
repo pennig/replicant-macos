@@ -450,23 +450,27 @@ import Utils
         #expect(SurveyRun().nextAction(directive: d, world: w) == .wait)
     }
 
+    /// The run's own bot carries the HIGHER code, so a deploy that ignored the
+    /// owner would reach for the other theatre's `BOT1` first.
     @Test func anExplicitFleetTagOverridesTheDefault() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
-        let mine = repairDevice(
-            "BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL",
-            directives: ["service"], tags: ["auto:survey:DENEBED-9"]
-        )
         let theirs = repairDevice(
-            "BOT2", type: "service_bot", location: nil, stowedIn: "VESSEL",
+            "BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL",
             directives: ["service"], tags: ["auto:survey:AINALRAM-1"]
         )
-        let w = repairWorld(devices: [vessel, mine, theirs])
+        let mine = repairDevice(
+            "BOT2", type: "service_bot", location: nil, stowedIn: "VESSEL",
+            directives: ["service"], tags: ["auto:survey:DENEBED-9"]
+        )
+        let w = repairWorld(devices: [vessel, theirs, mine])
+        let owner = FleetTag(goal: .survey, scope: .theatre(depot: "DENEBED-9"))
+        #expect(RepairFleet.bots(aboard: vessel, in: w, owner: owner).map(\.deviceCode) == ["BOT2"])
         let d = repairDirective(
             step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL",
             fleetTag: "auto:survey:DENEBED-9"
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
-            kind: .simple("deploy"), deviceCode: "BOT1",
+            kind: .simple("deploy"), deviceCode: "BOT2",
             params: CommandParams(),
             nextStep: SurveyRun.Step.confirmingBotDeploy
         ))
