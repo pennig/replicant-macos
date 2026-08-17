@@ -758,7 +758,7 @@ public struct RelayRun: MissionStepMachine {
         )
     }
 
-    /// Wait out `SalvageRun.systemResolutionDeadline`, spend ONE `.refreshSystem`
+    /// Wait out `SalvageRun.systemResolutionDeadline`, spend `.refreshSystem`
     /// in the following `unresolvedReadBand`, wait out the rest of
     /// `systemUnresolvedRetryWindow`, then stall — for an uncached `target`.
     private func unresolvedSystem(

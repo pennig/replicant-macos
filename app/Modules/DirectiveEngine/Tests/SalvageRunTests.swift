@@ -889,10 +889,10 @@ struct SalvageRunMiningTests {
             == .refreshSystem(designation: "TOSLIT", nextStep: "configuring"))
     }
 
-    /// The read is spent ONCE, not on every tick of `systemUnresolvedRetryWindow`
-    /// — walks the whole span at the engine's 5s cadence and counts, so a
-    /// regression back to "one read per tick" fails this test, not a human.
-    @Test func readsOnlyOnceAcrossTheWholeRetryWindow() {
+    /// The read is confined to `unresolvedReadBand`, not spent on every tick of
+    /// `systemUnresolvedRetryWindow` — walks the whole span at the engine's 5s
+    /// cadence, so a regression to "one read per tick" fails here, not a human.
+    @Test func readsOnlyInsideTheBandAcrossTheWholeRetryWindow() {
         let stepStartedAt = Date(timeIntervalSince1970: 0)
         let span = SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow
         var reads = 0
@@ -911,8 +911,33 @@ struct SalvageRunMiningTests {
             }
             elapsed += 5
         }
-        #expect(reads == 1)
+        #expect(reads >= 1)
+        #expect(reads <= Int(SalvageRun.unresolvedReadBand / 5))
         #expect(sawTheStall)
+    }
+
+    /// An engine tick is `5s + evaluation`, so two evaluations can straddle the
+    /// band. Whatever the phase, the read must still fire — a skipped band
+    /// stalls the run without ever spending the read that could clear it.
+    @Test func readsEvenWhenTheTickPeriodStraddlesTheBand() {
+        let stepStartedAt = Date(timeIntervalSince1970: 0)
+        let span = SalvageRun.systemResolutionDeadline + SalvageRun.systemUnresolvedRetryWindow
+        for phase in stride(from: 0.0, to: 5.0, by: 0.5) {
+            var reads = 0
+            var elapsed = SalvageRun.systemResolutionDeadline - 10 + phase
+            while elapsed <= span {
+                let world = world(
+                    devices: [atSystem, controller, drone], // still no "TOSLIT" entry
+                    now: stepStartedAt.addingTimeInterval(elapsed)
+                )
+                let directive = running(step: "configuring", stepStartedAt: stepStartedAt)
+                if case .refreshSystem = SalvageRun().nextAction(directive: directive, world: world) {
+                    reads += 1
+                }
+                elapsed += 6.5   // a 5s tick plus a slow evaluation
+            }
+            #expect(reads >= 1, "phase \(phase) skipped the band entirely")
+        }
     }
 
     /// Past `systemUnresolvedRetryWindow` too, the run surfaces rather than
@@ -1126,10 +1151,10 @@ struct SalvageRunLoopProgressTests {
             == .refreshBody(system: "TOSLIT", body: "TOSLIT-6-5", nextStep: "verifying"))
     }
 
-    /// Same invariant as the system backstop's: the body read is spent ONCE,
-    /// not on every tick of `bodyUnresolvedRetryWindow` — walked at the
-    /// engine's 5s cadence.
-    @Test func readsTheBodyOnlyOnceAcrossTheWholeRetryWindow() {
+    /// Same invariant as the system backstop's: the body read is confined to
+    /// `unresolvedReadBand`, not spent on every tick of
+    /// `bodyUnresolvedRetryWindow` — walked at the engine's 5s cadence.
+    @Test func readsTheBodyOnlyInsideTheBandAcrossTheWholeRetryWindow() {
         let stepStartedAt = Date(timeIntervalSince1970: 0)
         let span = SalvageRun.depletionPropagationGrace + SalvageRun.bodyUnresolvedRetryWindow
         var reads = 0
@@ -1150,8 +1175,33 @@ struct SalvageRunLoopProgressTests {
             }
             elapsed += 5
         }
-        #expect(reads == 1)
+        #expect(reads >= 1)
+        #expect(reads <= Int(SalvageRun.unresolvedReadBand / 5))
         #expect(sawTheStall)
+    }
+
+    /// The body backstop's own jitter case: a tick period past the nominal one
+    /// must not skip the band, or `verify` stalls on a body it never re-read.
+    @Test func readsTheBodyEvenWhenTheTickPeriodStraddlesTheBand() {
+        let stepStartedAt = Date(timeIntervalSince1970: 0)
+        let span = SalvageRun.depletionPropagationGrace + SalvageRun.bodyUnresolvedRetryWindow
+        for phase in stride(from: 0.0, to: 5.0, by: 0.5) {
+            var reads = 0
+            var elapsed = SalvageRun.depletionPropagationGrace - 10 + phase
+            while elapsed <= span {
+                let world = world(
+                    devices: [atSystem, worked("TOSLIT-6-5"), drone],
+                    systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays,
+                    now: stepStartedAt.addingTimeInterval(elapsed)
+                )
+                let directive = running(step: "verifying", stepStartedAt: stepStartedAt)
+                if case .refreshBody = SalvageRun().nextAction(directive: directive, world: world) {
+                    reads += 1
+                }
+                elapsed += 6.5   // a 5s tick plus a slow evaluation
+            }
+            #expect(reads >= 1, "phase \(phase) skipped the band entirely")
+        }
     }
 
     /// Past `bodyUnresolvedRetryWindow` too, and the body is STILL on offer,

@@ -446,17 +446,17 @@ public struct SalvageRun: MissionStepMachine {
     public static let systemResolutionDeadline: TimeInterval = 10 * 60
 
     /// How long past its deadline an unresolved-system/body backstop still
-    /// waits before surfacing — the read fires once, in `unresolvedReadBand`,
+    /// waits before surfacing — the read fires inside `unresolvedReadBand`,
     /// never on every tick across this whole span.
     public static let systemUnresolvedRetryWindow: TimeInterval = 60
 
-    /// The width, right past a backstop's deadline, in which its ONE
-    /// authoritative read fires — sized to the engine's own tick, so ordinarily
-    /// exactly one tick lands inside it. Shared by every same-step backstop.
-    public static let unresolvedReadBand: TimeInterval = 5
+    /// The width, right past a backstop's deadline, in which its authoritative
+    /// read fires — three nominal ticks, because an engine tick really lasts
+    /// `5s + evaluation` and a narrower band is one two ticks can straddle.
+    public static let unresolvedReadBand: TimeInterval = 15
 
     /// What `emplace`, `configure` and `verify` all do about an uncached `target`:
-    /// wait out `systemResolutionDeadline`, spend ONE `.refreshSystem` in the
+    /// wait out `systemResolutionDeadline`, spend `.refreshSystem` in the
     /// following `unresolvedReadBand`, wait out the rest, then stall.
     private func unresolvedSystem(
         _ directive: Directive, _ world: WorldSnapshot, target: String
@@ -970,7 +970,7 @@ public struct SalvageRun: MissionStepMachine {
     }
 
     /// How long past `depletionPropagationGrace` the loop still waits on a
-    /// still-on-offer worked body before surfacing it — the one read fires in
+    /// still-on-offer worked body before surfacing it — the read fires inside
     /// `unresolvedReadBand`, never on every tick across this whole span.
     public static let bodyUnresolvedRetryWindow: TimeInterval = 60
 
@@ -979,8 +979,8 @@ public struct SalvageRun: MissionStepMachine {
     /// real finish, so a read spent sooner asks a server not yet caught up.
     public static let depletionPropagationGrace: TimeInterval = 5 * 60
 
-    /// The mining loop's terminator, ordered grace → ONE `.refreshBody` → wait
-    /// out the rest → stall. The per-body read, never `.refreshSystem`: the
+    /// The mining loop's terminator, ordered grace → `.refreshBody` → wait out
+    /// the rest → stall. The per-body read, never `.refreshSystem`: the
     /// server DELISTS a depleted site, only the per-body roster sees it.
     private func sameBodyAgain(
         _ directive: Directive, _ world: WorldSnapshot, target: String, body: String
