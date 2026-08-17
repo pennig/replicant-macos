@@ -1091,6 +1091,28 @@ struct BrainHaulReadinessTests {
         #expect(Brain.isGeneralHaul(drifted) == true, "case drift must not read as a per-site tag")
     }
 
+    /// The tag says whose it is, but a theatre spends only what the census can
+    /// place: launching on a controller that is nowhere parks the theatre's
+    /// slot on the first fault. Its own theatre names it; the other must not.
+    @Test("a scoped-tagged controller the census cannot place is named, never launched on")
+    func aTaggedUnplaceableControllerIsNamedNotLaunchedOn() {
+        let (view, sol, vega) = twoTheatreHaulView(
+            solControllers: [haulController("T1", tags: ["auto:haul:VEGA-3"], location: nil)],
+            vegaControllers: []
+        )
+
+        guard case let .idle(vegaReason) = Brain.haulReadiness(view: view, directives: [], theatre: vega) else {
+            Issue.record("expected VEGA to idle — T1 is its own, but nowhere")
+            return
+        }
+        #expect(vegaReason == "T1 is tagged \(HaulRun.defaultFleetTag) but not placeable — stowed or mid-cruise")
+        guard case let .idle(solReason) = Brain.haulReadiness(view: view, directives: [], theatre: sol) else {
+            Issue.record("expected SOL to idle — T1 wears VEGA's tag")
+            return
+        }
+        #expect(!solReason.contains("T1"))
+    }
+
     /// Retagging is the operator's handover, so the tag decides which theatre
     /// owns a controller — not the depot it happens to be parked nearest.
     @Test("a controller tagged for another theatre belongs to that theatre wherever it stands")

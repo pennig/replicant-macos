@@ -13,6 +13,24 @@ Small things deliberately not fixed when they were found, kept here so they are 
 - [ ] **`MineFleetPrint.stocking` has no deadline above its open-op guard.** Stage 0 owner-scoped the guard to match its three siblings but deliberately did not invent a deadline, because adding one changes mission behaviour outside the ticket's scope. Without it, a co-tenant on a shared bench can park the run for the length of its own print. `MineFleetPrint.swift` — decide whether `stocking` should carry a deadline like `printing` does.
 - [ ] **automation-brain ticket 14 (RestockRun over-print race) is still open.** Stage 0 declined to close it: the ownership and ordering fixes did not touch the clone-row-lag race it describes. It now carries a cross-reference. Decide whether it belongs in a later stage of this effort or stays where it is.
 
+- [ ] **`SurveyRun.wearsFleetTag` / `SalvageRun.wearsFleetTag` are still the pre-ticket-12 rule under a
+  new name, and the obvious fix is a diagnostic regression.** The Stage 1 fix wave was asked to route both
+  through `FleetMembership.belongs` and STOPPED: `belongs` places a BARE-tagged device by location, so an
+  unplaceable one (stowed, mid-cruise, off-census) belongs to no theatre and vanishes from both pools
+  these feed. That breaks six shipped tests / nine assertions which pin the opposite on purpose —
+  `BrainSurveyTests.aTaggedStowedVesselIsNamedNotReportedUntagged`,
+  `.locationlessMistaggedDeviceIsStillNamedAcrossTheatres`, `.mistaggedOnlyFleetNamesTheDevice`,
+  `.untaggedHullsAndMistaggedDeviceAreBothNamed` and the two salvage twins. The finding counted two
+  callers; there are four (`Brain.swift`, the `mistagged` and `unreachable` filters in
+  `salvageReadiness` and `surveyCarrierBlocker`), and the two it did not count are the ones that break.
+  Silencing them costs the operator exactly the un-migrated bare-tagged fleet — the live fleet's actual
+  state, and the population `unmigratedNote` is written for. The disagreement the finding names is real
+  (a device wearing both `auto:survey` and `auto:survey:DEPOT-B` reads as A's here and B's under
+  `belongs`); closing it without the regression needs a THIRD predicate — "belongs to this theatre, OR is
+  a bare-tagged orphan no theatre can place" — which is a rule to sanction, not a refactor to do
+  silently. Decide the rule; the haul side already got its `unreachable` diagnostic in the fix wave
+  built on the tag-family pool, matching its two siblings.
+
 - [ ] **A sticky theatre depot that runs dry parks its runs silently and cannot self-heal.** Stage 1
   ticket 16 made recognition sticky per system, and the proviso deliberately tests print-capability and
   not stock (spec §S1.7). So a depot at zero stock keeps the theatre and reads
@@ -137,7 +155,11 @@ Small things deliberately not fixed when they were found, kept here so they are 
 - [ ] **`TheatreRegistry`'s `.derived` tier resolves two persisted systems in one mesh component by
   `.min()` on designation, and that tie-break is untested.** The loop is per mesh component while the
   sticky rule is per system, so the code had to invent a rule the spec does not define. Reachable only via
-  a removed pin or a vanished hub. `TheatreRegistry.swift`.
+  a removed pin or a vanished hub. `TheatreRegistry.swift`. **Still open after the Stage 1 fix wave**:
+  re-pinning `aForeignRecordIsIgnored` on the per-system key was expected to close this for free and does
+  not — `.min()` → `.max()` leaves all 1,499 `DirectiveEngineTests` green, because the fixture holds one
+  record, so the filtered set never has two elements. Reaching it needs two systems in ONE component,
+  each with its own persisted print-capable depot.
 
 ## Cosmetic
 

@@ -318,12 +318,15 @@ struct StickyTheatreRecognitionTests {
         #expect(theatres[0].readiness == .claimed(missing: [.noStock]))
     }
 
+    /// The record names a print-capable depot, so only the SYSTEM key can
+    /// reject it — a lookup blind to the system would hand `AINALRAM` the
+    /// depot `GRAZ` persisted.
     @Test("A record for another system decides nothing here")
     func aForeignRecordIsIgnored() {
         let theatres = TheatreRegistry.recognise(
             devices: twoPrinters,
             pins: [],
-            records: [record("GRAZ-BELT-1", in: "GRAZ")],
+            records: [record("AINALRAM-BELT-2", in: "GRAZ")],
             meshSystems: ["AINALRAM"],
             components: ["AINALRAM": "AINALRAM"],
             stockByLocation: lopsidedStock

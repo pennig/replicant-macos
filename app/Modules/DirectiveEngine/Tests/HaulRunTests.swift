@@ -950,9 +950,14 @@ struct HaulRunTests {
     }
 
     /// An unknown step must never dispatch — waiting is inert and recoverable.
+    /// Started past the poll interval, so `hauling`'s own `.wait` is out of
+    /// reach and only the unknown-step guard can produce this answer.
     @Test func anUnknownStepWaits() {
         let action = HaulRun().nextAction(
-            directive: run(step: "nonsense"),
+            directive: run(
+                step: "nonsense",
+                stepStartedAt: fixtureNow.addingTimeInterval(-HaulRun.pollInterval - 1)
+            ),
             world: world(devices: [controller("C1")] + meshed)
         )
         #expect(action == .wait)

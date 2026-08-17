@@ -165,15 +165,18 @@ struct MineFleetPrintTests {
         ))
     }
 
-    /// The carrier-missing world above, on an unrecognised step: `stocking`
-    /// would print here, so a fallback to it cannot pass this alongside
-    /// `.wait`.
-    @Test("an unknown step waits rather than falling through to stocking")
+    /// The carrier-missing world above, past the print deadline: `stocking`
+    /// prints here and `printing` re-decides, so a fallback to either arm
+    /// cannot pass this alongside `.wait`.
+    @Test("an unknown step waits rather than falling through to a real step")
     func unknownStepWaits() {
         let snapshot = world(devices: printedFleet() + [hub()])
+        let run = printRun(
+            step: "not-a-real-step",
+            stepStartedAt: now.addingTimeInterval(-RestockRun.printDeadline - 1)
+        )
 
-        #expect(MineFleetPrint().nextAction(directive: printRun(step: "not-a-real-step"), world: snapshot)
-                == .wait)
+        #expect(MineFleetPrint().nextAction(directive: run, world: snapshot) == .wait)
     }
 
     /// A recipe shortfall is printed in one job for the whole missing quantity,

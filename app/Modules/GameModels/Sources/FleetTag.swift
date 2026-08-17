@@ -75,8 +75,8 @@ public struct FleetTag: Sendable, Codable, CustomStringConvertible {
 // MARK: - Equality
 
 extension FleetTag: Equatable, Hashable {
-    // R2: two tags with the same designation are the same reservation even
-    // when their Scope case differs (.theatre vs .belt) — see task report.
+    // Two tags with the same designation are the same reservation even when
+    // their Scope case differs (.theatre vs .belt) — spec §S1.1 / decision D2.
     public static func == (lhs: FleetTag, rhs: FleetTag) -> Bool {
         lhs.goal == rhs.goal && lhs.scope?.designation == rhs.scope?.designation
     }

@@ -1526,6 +1526,16 @@ struct Brain: Sendable {
                 candidates, reserved: reserved, tag: theatreTag, kind: .haulRun,
                 theatre: theatre, directives: directives, devices: view.devices
             ) else {
+                // A stowed or mid-cruise controller resolves no theatre — find
+                // it fleet-wide rather than let it read as untagged.
+                let unreachable = HaulRun.controllers(in: view.devices.values, tag: theatreTag)
+                    .filter { owningTheatre(of: $0, view: view, goal: nil) == nil }
+                guard unreachable.isEmpty else {
+                    return .idle(reason: """
+                        \(list(unreachable.map(\.deviceCode))) \(unreachable.count == 1 ? "is" : "are") tagged \
+                        \(HaulRun.defaultFleetTag) but not placeable — stowed or mid-cruise
+                        """)
+                }
                 return .idle(reason: base)
             }
             return .idle(reason: "\(base) — \(unmigratedNote(unmigrated, tag: theatreTag))")

@@ -67,8 +67,8 @@ extension DeviceListLayout {
     }
 
     /// Whether `directive` holds `device`, by the engine's own lease rule.
-    /// Resolved over this device alone, so only the joins off the row's own
-    /// columns can fire — the stow closure needs a fleet this caller lacks.
+    /// Resolved over this device alone: the joins off the row's own columns,
+    /// plus one hop down stow, attach or adoption from the devices they name.
     static func covers(_ directive: Directive, _ device: Device) -> Bool {
         Ownership
             .resolve(directives: [directive], devices: [device.deviceCode: device], theatres: [])

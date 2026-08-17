@@ -16,8 +16,8 @@ import UniverseModels
 struct TheatreAdoptionTests {
     @Test("An unstamped row adopts the theatre servicing its origin")
     func adoptsFromOrigin() {
-        let view = singleTheatreView()
-        let row = directiveFixture(id: "D1", kind: .haulRun, originDesignation: "AINALRAM", theatreDepot: nil)
+        let view = splitOriginView()
+        let row = directiveFixture(id: "D1", kind: .haulRun, originDesignation: "GRAZ", theatreDepot: nil)
 
         let stamps = Brain.adoptTheatres(directives: [row], view: view)
 
@@ -80,6 +80,31 @@ private func singleTheatreView() -> WorldView {
                     readiness: .operational, stock: 40_000),
         ],
         components: ["AINALRAM": "AINALRAM"],
+        now: Date(timeIntervalSince1970: 5_000)
+    )
+}
+
+/// Two theatres, and a `GRAZ` origin sharing AINALRAM's mesh component while
+/// standing nearer DENEBED — so servicing, nearest and the one-theatre
+/// fallback each name a different depot.
+private func splitOriginView() -> WorldView {
+    WorldView(
+        devices: [:],
+        starPositions: [
+            "AINALRAM": ainalram,
+            "GRAZ": Position(x: ainalram.x + 90, y: ainalram.y, z: ainalram.z),
+            "DENEBED": Position(x: ainalram.x + 100, y: ainalram.y, z: ainalram.z),
+        ],
+        meshSystems: ["AINALRAM", "GRAZ", "DENEBED"],
+        salvageUnits: [:],
+        eventSystems: [],
+        theatres: [
+            Theatre(depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+                    readiness: .operational, stock: 40_000),
+            Theatre(depot: "DENEBED-BELT-1", system: "DENEBED", origin: .pinned,
+                    readiness: .operational, stock: 900),
+        ],
+        components: ["AINALRAM": "AINALRAM", "GRAZ": "AINALRAM", "DENEBED": "DENEBED"],
         now: Date(timeIntervalSince1970: 5_000)
     )
 }

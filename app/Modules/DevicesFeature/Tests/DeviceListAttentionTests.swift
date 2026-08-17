@@ -198,6 +198,20 @@ import Utils
         )
     }
 
+    /// One hop down the closure, not just the column joins: a drone in a
+    /// stalled run's hold is a device the operator wants flagged, and the
+    /// carrier's own row is the only edge that reaches it.
+    @Test func directiveJoinsOneHopDownStow() {
+        let stowed = makeDevice("DRONE1", stowedIn: "CARRIER1")
+        let elsewhere = makeDevice("DRONE2", stowedIn: "OTHER")
+        let directive = makeDirective(deviceCode: "CARRIER1", reason: .commandRejected)
+        expectNoDifference(
+            DeviceListLayout.attentionFlags(for: stowed, directives: [directive]),
+            [.directive(.commandRejected)]
+        )
+        expectNoDifference(DeviceListLayout.attentionFlags(for: elsewhere, directives: [directive]), [])
+    }
+
     @Test func directiveWithNoRecordedReasonStillFlags() {
         let device = makeDevice("A1")
         let directive = makeDirective(deviceCode: "A1", reason: nil)
