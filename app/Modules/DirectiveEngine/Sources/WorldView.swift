@@ -208,7 +208,7 @@ public struct WorldView: Equatable, Sendable {
             .reduce(into: [:]) { $0[$1.location] = $1.resources }
 
         let componentLabels = MeshGraph(positions: positions).components(of: mesh)
-        let theatreRecords = try TheatreRecord.all.fetchAll(db)
+        let theatreRecords = try TheatreRecord.order { $0.depot }.fetchAll(db)
         let theatres = TheatreRegistry.recognise(
             devices: allDevices, pins: pins, records: theatreRecords, meshSystems: mesh,
             components: componentLabels, stockByLocation: hubStock

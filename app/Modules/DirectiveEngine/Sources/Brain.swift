@@ -223,7 +223,7 @@ struct Brain: Sendable {
     /// The `theatres` rows `view` implies that are not already written. A pin
     /// is skipped: the operator's own row is the sheet's to write. A depot that
     /// has not moved keeps its original `establishedAt`.
-    static func theatreRecords(view: WorldView, now: Date) -> [TheatreRecord] {
+    private static func theatreRecords(view: WorldView, now: Date) -> [TheatreRecord] {
         let existing = Dictionary(
             view.theatreRecords.map { ($0.system, $0) }, uniquingKeysWith: { first, _ in first }
         )

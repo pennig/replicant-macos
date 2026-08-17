@@ -299,6 +299,25 @@ struct StickyTheatreRecognitionTests {
         #expect(theatres[0].origin == .pinned)
     }
 
+    /// Print-capability is the WHOLE proviso: a persisted depot that has run dry
+    /// keeps the identity and reports `.noStock`, rather than hopping to the
+    /// stocked sibling. See `app/.claude/memory/theatre-recognition-model.md`.
+    @Test("A persisted depot with no stock left still keeps the identity")
+    func aDryPersistedDepotKeepsTheIdentity() {
+        let theatres = TheatreRegistry.recognise(
+            devices: twoPrinters,
+            pins: [],
+            records: [record("AINALRAM-BELT-2", in: "AINALRAM")],
+            meshSystems: ["AINALRAM"],
+            components: ["AINALRAM": "AINALRAM"],
+            stockByLocation: ["AINALRAM-BELT-1": 40_000, "AINALRAM-BELT-2": 0]
+        )
+
+        #expect(theatres.count == 1)
+        #expect(theatres[0].depot == "AINALRAM-BELT-2")
+        #expect(theatres[0].readiness == .claimed(missing: [.noStock]))
+    }
+
     @Test("A record for another system decides nothing here")
     func aForeignRecordIsIgnored() {
         let theatres = TheatreRegistry.recognise(

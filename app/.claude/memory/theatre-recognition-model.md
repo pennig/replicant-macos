@@ -25,6 +25,18 @@ coexist in one component.
 
 **Identity is now PERSISTED** in the `theatres` table (`TheatreRecord`, one row per system), making tiers 2 and 3 sticky while the row's depot still prints — written by `Brain.persistTheatres` and, for a pin, by `EstablishTheatreSheet`.
 
+**Print-capability is the whole proviso; stock is deliberately NOT a condition.**
+A depot going quiet is exactly the flip stickiness exists to outrank, so a
+persisted depot that has run dry keeps the identity and reports
+`.claimed(missing: [.noStock])` rather than hopping to a stocked sibling in the
+same system. That is spec S1.7's rule read literally, and the trade is parked
+for Matt, not settled: `readiness` is honest, but **the run is silent** — with a
+second theatre operational, `theatreWentClaimed` sends seven mission guards to
+`.wait` with no stall, no `attentionReason` and no operator surface, and nothing
+can restock it, because the brain allocates only to operational theatres and the
+haul run that would refill it is itself one of the waiters. Recovery needs the
+operator. Pinned by `StickyTheatreRecognitionTests.aDryPersistedDepotKeepsTheIdentity`.
+
 **Identity is the depot location** (`Theatre.id { depot }`): a theatre that
 moves is a different theatre, and a stateless brain must name the same one
 every tick from world state alone — the same reason `WorldView.hubLocation`

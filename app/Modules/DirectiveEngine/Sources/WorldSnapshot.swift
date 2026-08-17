@@ -334,7 +334,7 @@ public struct WorldSnapshot: Equatable, Sendable {
             let pins = try TheatrePin.all.fetchAll(db)
             let theatres = TheatreRegistry.recognise(
                 devices: devices, pins: pins,
-                records: try TheatreRecord.all.fetchAll(db), meshSystems: mesh,
+                records: try TheatreRecord.order { $0.depot }.fetchAll(db), meshSystems: mesh,
                 components: components, stockByLocation: footprints.mapValues(\.resources)
             )
 

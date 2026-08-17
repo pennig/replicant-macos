@@ -40,9 +40,8 @@ public enum TheatreRegistry {
         let established = Dictionary(
             records.map { ($0.system, $0.depot) }, uniquingKeysWith: { first, _ in first }
         )
-        /// The depot already established for `system`, still print-capable.
-        /// Stock is deliberately not a condition: a depot going quiet is
-        /// exactly what this outranks.
+        /// `system`'s persisted depot when it still holds a print-capable
+        /// device, else nil.
         func persistedDepot(of system: String) -> String? {
             established[system].flatMap { printLocations.contains($0) ? $0 : nil }
         }
