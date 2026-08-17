@@ -144,6 +144,7 @@ struct BrainGrowTests {
         #expect(row.roamCentre == nil, "a Relay Run is one-shot; a roam centre would ask it to extend its queue")
         #expect(row.returnToOrigin, "the carrier comes home so the next run can use it")
         #expect(row.originDesignation == "SOL")
+        #expect(row.theatreDepot == growHubLocation, "the row names the theatre it was launched out of")
         #expect(row.attentionReason == nil)
         #expect(row.stepStartedAt == tickTime)
         #expect(row.createdAt == tickTime)
@@ -843,15 +844,15 @@ struct BrainGrowFallthroughTests {
             carrierAtHubY: deviceFixture(code: "VY", location: "HUBY-1")
         )
 
-        guard case let .grow(goal, ranked, carrier, hub, origin, _, _) = Brain.plan(view: view, directives: []) else {
+        guard case let .grow(goal, ranked, carrier, theatre, _, _) = Brain.plan(view: view, directives: []) else {
             Issue.record("expected a grow")
             return
         }
         #expect(ranked.map(\.firstHop) == ["CANDA", "CANDB"], "CANDA ranks first on hop distance alone")
         #expect(goal.target == "CANDB", "CANDA's own theatre has no carrier, so the pass reaches past it")
         #expect(carrier == "VY")
-        #expect(hub == hubY.depot)
-        #expect(origin == hubY.system)
+        #expect(theatre.depot == hubY.depot)
+        #expect(theatre.system == hubY.system)
     }
 
     /// Every candidate's theatre is carrier-less: idle names the FIRST

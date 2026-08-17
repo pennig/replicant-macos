@@ -11,7 +11,9 @@ import Foundation
 import GameDatabase
 import GameModels
 import SQLiteData
+import SwiftUI
 import Testing
+import UI
 import UniverseModels
 import Utils
 @testable import DirectivesFeature
@@ -111,12 +113,35 @@ struct EventCourierLauncherTests {
         return store
     }
 
+    /// One theatre wanting a courier: the plain confirm dialog, no picker.
     @Test func tappingPresentsTheConfirmDialog() async throws {
         let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Self.seedTwoTheatres(db)
+            try Self.seedCourier(db, at: "DENEBED-BELT-1")
+        }
         let store = Self.store(database)
 
         await store.send(.eventCourierTapped)
+        await store.receive(\.eventCourierSitesLoaded)
         #expect(store.state.eventCourierDialog?.title == TextState("Print an event courier?"))
+    }
+
+    /// Two theatres both wanting one: a picker naming each depot, in mono.
+    @Test func twoWantingDepotsPresentAPicker() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try Self.seedTwoTheatres(db) }
+        let store = Self.store(database)
+
+        await store.send(.eventCourierTapped)
+        await store.receive(\.eventCourierSitesLoaded)
+
+        let dialog = try #require(store.state.eventCourierDialog)
+        #expect(dialog.title == TextState("Print an event courier at which depot?"))
+        #expect(dialog.buttons.count == 3, "one per depot, plus Cancel")
+        #expect(dialog.buttons[0].label == TextState("AINALRAM-BELT-1").font(.rcMono))
+        #expect(dialog.buttons[1].label == TextState("DENEBED-BELT-1").font(.rcMono))
+        #expect(dialog.buttons[2].role == .cancel)
     }
 
     /// The row stamps `theatreDepot` — `EventCourierPrint` resolves its depot
@@ -128,7 +153,8 @@ struct EventCourierLauncherTests {
         let store = Self.store(database)
 
         await store.send(.eventCourierTapped)
-        await store.send(.eventCourierDialog(.presented(.confirm)))
+        await store.receive(\.eventCourierSitesLoaded)
+        await store.send(.eventCourierDialog(.presented(.confirm(depot: "AINALRAM-BELT-1"))))
         await store.receive(\.eventCourierLaunched)
 
         let created = try await database.read { db in try Directive.all.fetchAll(db) }
@@ -153,7 +179,8 @@ struct EventCourierLauncherTests {
         let store = Self.store(database)
 
         await store.send(.eventCourierTapped)
-        await store.send(.eventCourierDialog(.presented(.confirm)))
+        await store.receive(\.eventCourierSitesLoaded)
+        await store.send(.eventCourierDialog(.presented(.confirm(depot: "DENEBED-BELT-1"))))
         await store.receive(\.eventCourierLaunched)
 
         let created = try await database.read { db in try Directive.all.fetchAll(db) }
@@ -210,8 +237,7 @@ struct EventCourierLauncherTests {
         let store = Self.store(database)
 
         await store.send(.eventCourierTapped)
-        await store.send(.eventCourierDialog(.presented(.confirm)))
-        await store.receive(\.eventCourierSiteMissing)
+        await store.receive(\.eventCourierSitesLoaded)
 
         #expect(store.state.eventCourierDialog?.title == TextState("No depot can print a courier."))
         let created = try await database.read { db in try Directive.all.fetchAll(db) }

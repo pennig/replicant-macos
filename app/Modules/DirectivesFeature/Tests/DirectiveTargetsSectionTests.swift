@@ -13,13 +13,17 @@ import Testing
 import Utils
 @testable import DirectivesFeature
 
+/// The theatre every haul fixture here is stamped for, and so the sink its
+/// controllers must name to read as assigned.
+private let fixtureDepot = "AINALRAM-BELT-1"
+
 /// A haul controller fixture: `available_directives` carries `ferry`, and the
 /// in-force `ami_directive` block carries the pile it drains.
 private func controller(
     code: String,
     tags: [String] = [HaulRun.defaultFleetTag.string],
     collecting: String? = nil,
-    delivering: String = HaulRun.deliveryLocation,
+    delivering: String = fixtureDepot,
     directive: String = "ferry"
 ) -> Device {
     var detail: [String: JSONValue] = [
@@ -63,7 +67,8 @@ private func run(
     targets: [String] = [],
     targetIndex: Int = 0,
     roamCentre: String? = nil,
-    fleetTag: String? = nil
+    fleetTag: String? = nil,
+    theatreDepot: String? = fixtureDepot
 ) -> Directive {
     Directive(
         id: "D1", kind: kind, status: status, deviceCode: deviceCode,
@@ -72,7 +77,8 @@ private func run(
         stepStartedAt: Date(timeIntervalSince1970: 0),
         returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
         createdAt: Date(timeIntervalSince1970: 0),
-        updatedAt: Date(timeIntervalSince1970: 0)
+        updatedAt: Date(timeIntervalSince1970: 0),
+        theatreDepot: theatreDepot
     )
 }
 
@@ -215,6 +221,30 @@ struct DirectiveTargetsSectionTests {
         else { return #expect(Bool(false), "expected assignments") }
         #expect(assignments.map(\.controllerCode) == ["FERRY1"])
         #expect(assignments.map(\.collecting) == ["ACHERNUR-BELT-1"])
+    }
+
+    /// The row's own stamp is the sink. An unstamped row delivers nowhere the
+    /// pane can name, and no controller reads as assigned against it.
+    @Test func anUnstampedHaulRunNamesNoSink() {
+        let devices = [controller(code: "HAUL1", collecting: "SOL-3")]
+        let directive = run(kind: .haulRun, theatreDepot: nil)
+        guard case let .assignments(delivering, assignments)
+            = DirectiveTargetsSection.section(for: directive, devices: devices)
+        else { return #expect(Bool(false), "expected assignments") }
+        #expect(delivering == nil)
+        #expect(assignments.map(\.collecting) == [nil])
+    }
+
+    /// The section names the row's OWN depot, not a fixed one — two theatres'
+    /// runs must not both claim the same sink.
+    @Test func theSectionNamesTheRowsOwnDepot() {
+        let devices = [controller(code: "HAUL1", collecting: "SOL-3", delivering: "DENEBED-BELT-1")]
+        let directive = run(kind: .haulRun, theatreDepot: "DENEBED-BELT-1")
+        guard case let .assignments(delivering, assignments)
+            = DirectiveTargetsSection.section(for: directive, devices: devices)
+        else { return #expect(Bool(false), "expected assignments") }
+        #expect(delivering == "DENEBED-BELT-1")
+        #expect(assignments.map(\.collecting) == ["SOL-3"])
     }
 
     /// The empty "Targets" header the pane used to draw over a Haul Run is now

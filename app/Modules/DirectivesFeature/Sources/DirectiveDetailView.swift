@@ -334,15 +334,21 @@ public struct DirectiveDetailView: View {
     /// queue-walker would show its queue.
     @ViewBuilder
     private func assignmentsBlock(
-        delivering: String, _ assignments: [DirectiveTargetsSection.Assignment]
+        delivering: String?, _ assignments: [DirectiveTargetsSection.Assignment]
     ) -> some View {
         HStack(spacing: Space.xxs) {
             Text("delivering to")
                 .font(.rcCaption)
                 .foregroundStyle(.rcTextTertiary)
-            Text(delivering)
-                .font(.rcMonoSmall)
-                .foregroundStyle(.rcTextSecondary)
+            if let delivering {
+                Text(delivering)
+                    .font(.rcMonoSmall)
+                    .foregroundStyle(.rcTextSecondary)
+            } else {
+                Text("no theatre")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+            }
             Spacer(minLength: 0)
         }
         ForEach(assignments) { assignment in

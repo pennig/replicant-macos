@@ -30,6 +30,10 @@ public struct NewHaulRunFeature {
         @FetchAll(Device.order { $0.deviceCode }, animation: .default)
         public var devices: [Device]
 
+        /// The depot the launch will stamp, once `task` has resolved it. Nil
+        /// until then, and for an anchor no theatre owns.
+        public var deliveryDepot: String?
+
         public init() {}
 
         /// A `WorldSnapshot` over the synced fleet, so eligibility is judged by
@@ -63,6 +67,9 @@ public struct NewHaulRunFeature {
 
     public enum Action: BindableAction {
         case binding(BindingAction<State>)
+        /// Resolve the depot this launch would deliver to, for the summary.
+        case task
+        case deliveryDepotResolved(String?)
         case launchTapped
         case cancelTapped
         case delegate(Delegate)
@@ -87,6 +94,21 @@ public struct NewHaulRunFeature {
             case .binding:
                 return .none
 
+            case .task:
+                guard let anchor = state.anchorControllerCode else { return .none }
+                let database = self.database
+                let now = date.now
+                return .run { send in
+                    let theatre = await LauncherTheatre.resolve(
+                        for: anchor, goal: .haul, database: database, now: now
+                    )
+                    await send(.deliveryDepotResolved(theatre?.depot))
+                }
+
+            case let .deliveryDepotResolved(depot):
+                state.deliveryDepot = depot
+                return .none
+
             case .launchTapped:
                 guard let anchor = state.anchorControllerCode else { return .none }
                 logger.info("launching haul run anchored on \(anchor, privacy: .public)")
@@ -97,48 +119,18 @@ public struct NewHaulRunFeature {
                 let id = uuid().uuidString
                 let now = date.now
                 return .run { send in
-                    // `Brain.ensureHaul`'s own resolution — never the bare tag
-                    // (see `launcher-tag-resolution-error-narrowing.md`).
-                    let tag: FleetTag
-                    do {
-                        tag = try await database.read { db -> FleetTag in
-                            let view = try WorldView.read(from: db, now: now)
-                            guard let device = view.devices[anchor], let theatre = view.owningTheatre(of: device, goal: .haul)
-                            else {
-                                logger.notice("haul launch on \(anchor, privacy: .public): no theatre resolves — bare tag")
-                                return HaulRun.defaultFleetTag
-                            }
-                            return HaulRun.fleetTag(forTheatre: theatre.depot)
-                        }
-                    } catch {
-                        logger.error("haul launch on \(anchor, privacy: .public): theatre read failed: \(error) — bare tag")
-                        tag = HaulRun.defaultFleetTag
-                    }
-                    let directive = Directive(
-                        id: id,
-                        kind: .haulRun,
-                        status: .running,
-                        // Anchor only — see this file's header. The machine
-                        // resolves its controllers by tag on every evaluation.
-                        deviceCode: anchor,
-                        // The engine claims nothing: a Haul Run drives EVERY
-                        // tagged controller, so pinning one would misrepresent it.
-                        controllerCode: nil,
-                        // No roam centre: this run plans over locations, not
-                        // systems, and never emits `.extendQueue`.
-                        roamCentre: nil,
-                        fleetTag: tag.string,
-                        // Empty and stays empty — the planner re-derives every
-                        // cycle from the footprint census, and records no history.
-                        targets: [],
-                        targetIndex: 0,
-                        step: HaulRun().firstStep,
-                        stepStartedAt: now,
-                        returnToOrigin: false,
-                        originDesignation: nil,
-                        attentionReason: nil,
-                        createdAt: now,
-                        updatedAt: now
+                    let theatre = await LauncherTheatre.resolve(
+                        for: anchor, goal: .haul, database: database, now: now
+                    )
+                    let directive = Directive.launch(
+                        .init(
+                            kind: .haulRun,
+                            // Anchor only — see this file's header. The machine
+                            // resolves its controllers by tag every evaluation.
+                            deviceCode: anchor,
+                            theatre: theatre
+                        ),
+                        id: id, now: now
                     )
                     try? await database.write { db in
                         try Directive.insert { directive }.execute(db)

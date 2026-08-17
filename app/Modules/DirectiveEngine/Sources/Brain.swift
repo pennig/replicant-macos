@@ -321,20 +321,15 @@ struct Brain: Sendable {
                 continue
             }
 
-            let directive = Directive(
-                id: uuid().uuidString,
-                kind: .restockRun,
-                status: .running,
-                deviceCode: host.deviceCode,
-                controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
-                targets: demand, targetIndex: 0,
-                step: RestockRun().firstStep,
-                stepStartedAt: now,
-                returnToOrigin: false,
-                originDesignation: host.location.map { SiteAssay.system(of: $0) },
-                attentionReason: nil,
-                createdAt: now, updatedAt: now,
-                theatreDepot: theatre.depot
+            let directive = Directive.launch(
+                .init(
+                    kind: .restockRun,
+                    deviceCode: host.deviceCode,
+                    theatre: theatre,
+                    targets: demand,
+                    originDesignation: host.location.map { SiteAssay.system(of: $0) }
+                ),
+                id: uuid().uuidString, now: now
             )
             do {
                 try await database.write { db in
@@ -439,21 +434,16 @@ struct Brain: Sendable {
             )
             else { continue }
             await ensureOne(.surveyRun, theatre: theatre, snapshot: snapshot, database: database) {
-                Directive(
-                    id: uuid().uuidString,
-                    kind: .surveyRun,
-                    status: .running,
-                    deviceCode: carrier,
-                    controllerCode: nil, roamCentre: roamCentre,
-                    fleetTag: SurveyRun.fleetTag(forTheatre: theatre.depot).string, sourceRelayCode: nil,
-                    targets: [], targetIndex: 0,
-                    step: SurveyRun().firstStep,
-                    stepStartedAt: now,
-                    returnToOrigin: false,
-                    originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
-                    attentionReason: nil,
-                    createdAt: now, updatedAt: now,
-                    theatreDepot: theatre.depot
+                Directive.launch(
+                    .init(
+                        kind: .surveyRun,
+                        deviceCode: carrier,
+                        theatre: theatre,
+                        roamCentre: roamCentre,
+                        originDesignation: snapshot.view.devices[carrier]?.location
+                            .map { SiteAssay.system(of: $0) }
+                    ),
+                    id: uuid().uuidString, now: now
                 )
             }
         }
@@ -469,23 +459,16 @@ struct Brain: Sendable {
                 view: snapshot.view, directives: snapshot.directives, theatre: theatre
             ) else { continue }
             await ensureOne(.salvageRun, theatre: theatre, snapshot: snapshot, database: database) {
-                Directive(
-                    id: uuid().uuidString,
-                    kind: .salvageRun,
-                    status: .running,
-                    deviceCode: carrier,
-                    controllerCode: nil,
-                    roamCentre: roamCentre,
-                    fleetTag: SalvageRun.fleetTag(forTheatre: theatre.depot).string,
-                    sourceRelayCode: nil,
-                    targets: [], targetIndex: 0,
-                    step: SalvageRun().firstStep,
-                    stepStartedAt: now,
-                    returnToOrigin: false,
-                    originDesignation: snapshot.view.devices[carrier]?.location.map { SiteAssay.system(of: $0) },
-                    attentionReason: nil,
-                    createdAt: now, updatedAt: now,
-                    theatreDepot: theatre.depot
+                Directive.launch(
+                    .init(
+                        kind: .salvageRun,
+                        deviceCode: carrier,
+                        theatre: theatre,
+                        roamCentre: roamCentre,
+                        originDesignation: snapshot.view.devices[carrier]?.location
+                            .map { SiteAssay.system(of: $0) }
+                    ),
+                    id: uuid().uuidString, now: now
                 )
             }
         }
@@ -504,23 +487,14 @@ struct Brain: Sendable {
                 .haulRun, theatre: theatre, matching: Self.isGeneralHaul,
                 snapshot: snapshot, database: database
             ) {
-                Directive(
-                    id: uuid().uuidString,
-                    kind: .haulRun,
-                    status: .running,
-                    deviceCode: controller,
-                    controllerCode: nil,
-                    roamCentre: nil,
-                    fleetTag: HaulRun.fleetTag(forTheatre: theatre.depot).string,
-                    sourceRelayCode: nil,
-                    targets: [], targetIndex: 0,
-                    step: HaulRun().firstStep,
-                    stepStartedAt: now,
-                    returnToOrigin: false,
-                    originDesignation: theatre.system,
-                    attentionReason: nil,
-                    createdAt: now, updatedAt: now,
-                    theatreDepot: theatre.depot
+                Directive.launch(
+                    .init(
+                        kind: .haulRun,
+                        deviceCode: controller,
+                        theatre: theatre,
+                        originDesignation: theatre.system
+                    ),
+                    id: uuid().uuidString, now: now
                 )
             }
         }
@@ -536,23 +510,16 @@ struct Brain: Sendable {
                 view: snapshot.view, directives: snapshot.directives, theatre: theatre
             ) else { continue }
             await ensureOne(.mineRun, theatre: theatre, snapshot: snapshot, database: database) {
-                Directive(
-                    id: uuid().uuidString,
-                    kind: .mineRun,
-                    status: .running,
-                    deviceCode: carrier,
-                    controllerCode: nil,
-                    roamCentre: nil,
-                    fleetTag: MineRecipe.fleetTag(forTheatre: theatre.depot).string,
-                    sourceRelayCode: nil,
-                    targets: [belt], targetIndex: 0,
-                    step: MineRun().firstStep,
-                    stepStartedAt: now,
-                    returnToOrigin: true,
-                    originDesignation: theatre.system,
-                    attentionReason: nil,
-                    createdAt: now, updatedAt: now,
-                    theatreDepot: theatre.depot
+                Directive.launch(
+                    .init(
+                        kind: .mineRun,
+                        deviceCode: carrier,
+                        theatre: theatre,
+                        targets: [belt],
+                        returnToOrigin: true,
+                        originDesignation: theatre.system
+                    ),
+                    id: uuid().uuidString, now: now
                 )
             }
         }
@@ -581,25 +548,19 @@ struct Brain: Sendable {
                 guard let controller = Self.mineFerryController(
                     for: belt, at: theatre.depot, view: view, directives: snapshot.directives
                 ) else { return nil }
-                return Directive(
-                    id: uuid().uuidString,
-                    kind: .haulRun,
-                    status: .running,
-                    deviceCode: controller,
-                    // Stamped at LAUNCH, not by `.assignController`: a ferry the
-                    // `mineRun` already armed short-circuits `assign` forever.
-                    controllerCode: controller,
-                    roamCentre: nil,
-                    fleetTag: Self.mineFerryTag(for: belt).string,
-                    sourceRelayCode: nil,
-                    targets: [belt], targetIndex: 0,
-                    step: HaulRun().firstStep,
-                    stepStartedAt: now,
-                    returnToOrigin: false,
-                    originDesignation: theatre.system,
-                    attentionReason: nil,
-                    createdAt: now, updatedAt: now,
-                    theatreDepot: theatre.depot
+                return Directive.launch(
+                    .init(
+                        kind: .haulRun,
+                        deviceCode: controller,
+                        theatre: theatre,
+                        targets: [belt],
+                        originDesignation: theatre.system,
+                        // Stamped at LAUNCH, not by `.assignController`: a ferry
+                        // the `mineRun` already armed short-circuits `assign`.
+                        controllerCode: controller,
+                        belt: belt
+                    ),
+                    id: uuid().uuidString, now: now
                 )
             }
         }
@@ -615,24 +576,17 @@ struct Brain: Sendable {
                 view: snapshot.view, directives: snapshot.directives, theatre: theatre
             ) else { continue }
             await ensureOne(.eventRun, theatre: theatre, snapshot: snapshot, database: database) {
-                Directive(
-                    id: uuid().uuidString,
-                    kind: .eventRun,
-                    status: .running,
-                    deviceCode: carrier,
-                    controllerCode: nil,
-                    roamCentre: nil,
-                    fleetTag: EventRun.fleetTag(forTheatre: theatre.depot).string,
-                    sourceRelayCode: nil,
-                    targets: [candidate.designation], targetIndex: 0,
-                    step: EventRun().firstStep,
-                    stepStartedAt: now,
-                    returnToOrigin: true,
-                    originDesignation: theatre.system,
-                    attentionReason: nil,
-                    createdAt: now, updatedAt: now,
-                    theatreDepot: theatre.depot,
-                    freighterCode: freighter
+                Directive.launch(
+                    .init(
+                        kind: .eventRun,
+                        deviceCode: carrier,
+                        theatre: theatre,
+                        targets: [candidate.designation],
+                        returnToOrigin: true,
+                        originDesignation: theatre.system,
+                        freighterCode: freighter
+                    ),
+                    id: uuid().uuidString, now: now
                 )
             }
         }
@@ -702,7 +656,7 @@ struct Brain: Sendable {
             logger.debug("idle — \(reason, privacy: .public)")
             return .idle(reason: reason)
 
-        case let .grow(goal, ranked, carrier, hub, origin, source, _):
+        case let .grow(goal, ranked, carrier, theatre, source, _):
             // The confirm-fresh gate, in two halves that cannot collapse: the
             // authoritative half is a network read and cannot sit in a transaction,
             // the local half must sit in the very transaction that inserts or it is
@@ -714,7 +668,7 @@ struct Brain: Sendable {
                 return .idle(reason: reason)
             case let .proceed(fresh):
                 let decision = await launch(
-                    goal: goal, ranked: ranked, carrier: fresh, hub: hub, origin: origin,
+                    goal: goal, ranked: ranked, carrier: fresh, theatre: theatre,
                     source: source, database: database
                 )
                 if case .idle = decision, let escalated { return .stall(escalated) }
@@ -865,14 +819,11 @@ struct Brain: Sendable {
         /// Nothing to launch, for `reason`. `ranked` is NOT always empty — a tick
         /// idling because every candidate is in flight ranked a full field.
         case idle(reason: String, ranked: [GrowCandidate], prune: PruneAnalysis?)
-        /// Launch a Relay Run for `goal` on `carrier`, standing at `hub` and
-        /// setting off from `origin`. `hub` rides beside `origin` rather than being
-        /// re-derived — `origin` is a lossy projection ("SOL-3" → "SOL"), and
-        /// widening the gate's co-location test to the system would let a vessel
-        /// that crossed to another location confirm as free. A nil `source` PRINTS
-        /// a relay at the hub; non-nil RECLAIMS the one it names.
+        /// Launch a Relay Run for `goal` on `carrier`, out of `theatre`. The
+        /// co-location gate tests the DEPOT, never `theatre.system` — that is a
+        /// lossy projection. Nil `source` PRINTS a relay; non-nil RECLAIMS one.
         case grow(
-            goal: Goal, ranked: [GrowCandidate], carrier: String, hub: String, origin: String,
+            goal: Goal, ranked: [GrowCandidate], carrier: String, theatre: Theatre,
             source: ReclaimChoice?, prune: PruneAnalysis?
         )
 
@@ -881,7 +832,7 @@ struct Brain: Sendable {
         var ranked: [GrowCandidate] {
             switch self {
             case let .idle(_, ranked, _): ranked
-            case let .grow(_, ranked, _, _, _, _, _): ranked
+            case let .grow(_, ranked, _, _, _, _): ranked
             }
         }
 
@@ -890,7 +841,7 @@ struct Brain: Sendable {
         var prune: PruneAnalysis? {
             switch self {
             case let .idle(_, _, prune): prune
-            case let .grow(_, _, _, _, _, _, prune): prune
+            case let .grow(_, _, _, _, _, prune): prune
             }
         }
 
@@ -899,7 +850,7 @@ struct Brain: Sendable {
         var reclaim: ReclaimChoice? {
             switch self {
             case .idle: nil
-            case let .grow(_, _, _, _, _, source, _): source
+            case let .grow(_, _, _, _, source, _): source
             }
         }
     }
@@ -958,8 +909,7 @@ struct Brain: Sendable {
                 goal: Goal(kind: .tendMesh, target: candidate.firstHop, rationale: rationale(for: candidate)),
                 ranked: ranked,
                 carrier: carrier.deviceCode,
-                hub: hub,
-                origin: theatre.system,
+                theatre: theatre,
                 source: reclaimSource(
                     analysis: prune, view: view, graph: graph, target: candidate.firstHop,
                     carrier: carrier, directives: directives
@@ -1691,13 +1641,6 @@ struct Brain: Sendable {
         return "mine fleet incomplete — missing \(missing.joined(separator: ", "))"
     }
 
-    /// The fleet tag a per-mine ferry row wears. Per BELT, never the bare
-    /// `MineRecipe.fleetTag`: `reservedDevices` closes over a row's tag, so a
-    /// fleet-wide one would reserve every other mine's controller forever.
-    static func mineFerryTag(for belt: String) -> FleetTag {
-        FleetTag(goal: .mine, scope: .belt(designation: belt))
-    }
-
     /// The transport controller at `hub` to drain `belt` through: the one
     /// already ferrying it, else the lowest-coded free one. Both arms skip a
     /// controller another live row holds, so `ensureOne` never declines it.
@@ -2144,9 +2087,10 @@ struct Brain: Sendable {
     /// `DatabaseWriter`, so the re-check either sees a racing row or that row
     /// waits. Checking beforehand would only narrow the window.
     private func launch(
-        goal: Goal, ranked: [GrowCandidate], carrier: Device, hub: String, origin: String,
+        goal: Goal, ranked: [GrowCandidate], carrier: Device, theatre: Theatre,
         source: ReclaimChoice?, database: any DatabaseWriter
     ) async -> BrainDecision {
+        let hub = theatre.depot
         // A `stop()` can have landed while the confirm-read was in flight, and the
         // row would be wiped moments after the executor dispatched off it.
         guard !Task.isCancelled else { return .idle(reason: "engine stopped") }
@@ -2156,29 +2100,21 @@ struct Brain: Sendable {
         // scope this tick is running in does not reach.
         @Dependency(\.uuid) var uuid
 
-        let directive = Directive(
-            id: uuid().uuidString,
-            kind: .relayRun,
-            status: .running,
-            deviceCode: carrier.deviceCode,
-            controllerCode: nil,
-            roamCentre: nil,
-            fleetTag: nil,
-            sourceRelayCode: source?.relay.deviceCode,
-            targets: [goal.target],
-            targetIndex: 0,
-            step: RelayRun().firstStep,
-            stepStartedAt: now,
-            // The carrier comes home; without it the run leaves the vessel
-            // parked at the target until a human flies it back.
-            returnToOrigin: true,
-            // A record, NOT the return leg's destination: this names the SYSTEM,
-            // and travelling to a bare designation lands at the entry point (an
-            // L4). `RelayRun.returnHome` re-derives the hub location instead.
-            originDesignation: origin,
-            attentionReason: nil,
-            createdAt: now,
-            updatedAt: now
+        let directive = Directive.launch(
+            .init(
+                kind: .relayRun,
+                deviceCode: carrier.deviceCode,
+                theatre: theatre,
+                targets: [goal.target],
+                // The carrier comes home; without it the run leaves the vessel
+                // parked at the target until a human flies it back.
+                returnToOrigin: true,
+                // A record, NOT the return leg's destination — a bare system
+                // designation lands at an entry point (an L4).
+                originDesignation: theatre.system,
+                sourceRelayCode: source?.relay.deviceCode
+            ),
+            id: uuid().uuidString, now: now
         )
         let blocker: String?
         do {

@@ -57,6 +57,7 @@ public struct NewHaulRunSheet: View {
         }
         .padding(Space.xl)
         .frame(width: 480, height: 320)
+        .task { await store.send(.task).finish() }
     }
 
     /// No `ferry`-capable controller exists at all. Names the hardware needed,
@@ -97,9 +98,15 @@ public struct NewHaulRunSheet: View {
                 Text("Delivering to")
                     .font(.rcCaption)
                     .foregroundStyle(.rcTextTertiary)
-                Text(HaulRun.deliveryLocation)
-                    .font(.rcBodyEmphMono)
-                    .foregroundStyle(.rcTextPrimary)
+                if let depot = store.deliveryDepot {
+                    Text(depot)
+                        .font(.rcBodyEmphMono)
+                        .foregroundStyle(.rcTextPrimary)
+                } else {
+                    Text("no theatre")
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                }
             }
         }
     }

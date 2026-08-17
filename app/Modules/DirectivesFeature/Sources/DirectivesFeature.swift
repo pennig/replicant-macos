@@ -21,6 +21,8 @@ import GameModels
 import GameServices
 import OSLog
 import SQLiteData
+import SwiftUI
+import UI
 import Utils
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "Directives")
@@ -98,12 +100,13 @@ public struct DirectivesFeature {
         /// The new-Haul-Run launcher. Also its own presentation — there is no
         /// picker to fold into `newDirective`, only a report-and-launch dialog.
         @Presents public var newHaulRun: NewHaulRunFeature.State?
-        /// The Print Mine Fleet launcher — a confirm dialog rather than its own
-        /// reducer, since there is no form: nothing to pick, only a fixed print.
+        /// The Print Mine Fleet launcher — a dialog rather than its own reducer,
+        /// since the only choice is which depot, and only when several offer one.
         @Presents public var printMineFleetDialog: ConfirmationDialogState<Action.PrintMineFleet>?
-        /// The Print Event Courier launcher — a confirm dialog for the same
-        /// reason: the depot and its printer are resolved, never picked.
+        /// The Print Event Courier launcher — a dialog for the same reason.
         @Presents public var eventCourierDialog: ConfirmationDialogState<Action.EventCourier>?
+        /// Whose theatre a print launcher offers first.
+        @Shared(.appStorage(Account.activeReplicantCodeKey)) public var activeReplicantCode: String?
 
         public init(selectedRowID: String? = nil) {
             self.selectedRowID = selectedRowID
@@ -185,6 +188,8 @@ public struct DirectivesFeature {
         case newHaulRunTapped
         /// Open the Print Mine Fleet confirm dialog (or the already-running one).
         case printMineFleetTapped
+        /// The depots a mine fleet may be printed at, the preferred one first.
+        case printMineFleetSitesLoaded(depots: [String], preferred: String?)
         case printMineFleetDialog(PresentationAction<PrintMineFleet>)
         /// The confirm effect's insert succeeded.
         case printMineFleetLaunched(Directive)
@@ -192,6 +197,8 @@ public struct DirectivesFeature {
         case printMineFleetHostMissing
         /// Open the Print Event Courier confirm dialog (or the already-running one).
         case eventCourierTapped
+        /// The depots wanting a courier they can print, the preferred one first.
+        case eventCourierSitesLoaded(depots: [String], preferred: String?)
         case eventCourierDialog(PresentationAction<EventCourier>)
         /// The confirm effect's insert succeeded.
         case eventCourierLaunched(Directive)
@@ -221,12 +228,12 @@ public struct DirectivesFeature {
 
         @CasePathable
         public enum PrintMineFleet: Equatable, Sendable {
-            case confirm
+            case confirm(depot: String)
         }
 
         @CasePathable
         public enum EventCourier: Equatable, Sendable {
-            case confirm
+            case confirm(depot: String)
         }
     }
 
@@ -337,33 +344,46 @@ public struct DirectivesFeature {
                 let alreadyRunning = state.directives.contains {
                     $0.kind == .mineFleetPrint && DirectiveStatus.openCases.contains($0.status)
                 }
-                state.printMineFleetDialog = alreadyRunning
-                    ? Self.alreadyPrintingDialog : Self.confirmPrintDialog
+                guard !alreadyRunning else {
+                    state.printMineFleetDialog = Self.alreadyPrintingDialog
+                    return .none
+                }
+                let database = self.database
+                let date = self.date
+                let replicant = state.activeReplicantCode
+                return .run { send in
+                    let sites = await Self.printableDepots(
+                        database: database, now: date.now, activeReplicantCode: replicant,
+                        wanting: { _, _ in true }
+                    )
+                    await send(.printMineFleetSitesLoaded(depots: sites.depots, preferred: sites.preferred))
+                }
+
+            case let .printMineFleetSitesLoaded(depots, preferred):
+                guard let only = depots.first else {
+                    state.printMineFleetDialog = Self.noHostDialog
+                    return .none
+                }
+                state.printMineFleetDialog = depots.count == 1
+                    ? Self.confirmPrintDialog(at: only)
+                    : Self.mineFleetPicker(depots: depots, preferred: preferred)
                 return .none
 
-            case .printMineFleetDialog(.presented(.confirm)):
+            case let .printMineFleetDialog(.presented(.confirm(depot))):
                 let database = self.database
                 let uuid = self.uuid
                 let date = self.date
                 return .run { send in
-                    guard let site = await Self.mineFleetSite(database: database, now: date.now) else {
+                    guard let site = await Self.printSite(at: depot, database: database, now: date.now) else {
                         await send(.printMineFleetHostMissing)
                         return
                     }
-                    let directive = Directive(
-                        id: uuid().uuidString, kind: .mineFleetPrint, status: .running,
-                        deviceCode: site.host, controllerCode: nil, roamCentre: nil,
-                        fleetTag: MineRecipe.fleetTag.string, sourceRelayCode: nil,
-                        targets: [], targetIndex: 0,
-                        step: MineFleetPrint().firstStep, stepStartedAt: date.now,
-                        returnToOrigin: false, originDesignation: nil,
-                        attentionReason: nil, createdAt: date.now, updatedAt: date.now,
-                        // The bench the run prints at. Without it a hub that leaves
-                        // takes the run's idea of where it is printing with it.
-                        theatreDepot: site.depot
+                    let directive = Directive.launch(
+                        .init(kind: .mineFleetPrint, deviceCode: site.host, theatre: site.theatre),
+                        id: uuid().uuidString, now: date.now
                     )
                     try? await database.write { db in try Directive.insert { directive }.execute(db) }
-                    logger.info("printing mine fleet \(directive.id, privacy: .public) at \(site.depot, privacy: .public) on \(site.host, privacy: .public)")
+                    logger.info("printing mine fleet \(directive.id, privacy: .public) at \(depot, privacy: .public) on \(site.host, privacy: .public)")
                     await send(.printMineFleetLaunched(directive))
                 }
 
@@ -381,33 +401,46 @@ public struct DirectivesFeature {
                 let alreadyRunning = state.directives.contains {
                     $0.kind == .eventCourierPrint && DirectiveStatus.openCases.contains($0.status)
                 }
-                state.eventCourierDialog = alreadyRunning
-                    ? Self.alreadyPrintingCourierDialog : Self.confirmCourierDialog
+                guard !alreadyRunning else {
+                    state.eventCourierDialog = Self.alreadyPrintingCourierDialog
+                    return .none
+                }
+                let database = self.database
+                let date = self.date
+                let replicant = state.activeReplicantCode
+                return .run { send in
+                    let sites = await Self.printableDepots(
+                        database: database, now: date.now, activeReplicantCode: replicant,
+                        wanting: { theatre, world in !EventCourierPrint.courierStands(at: theatre.depot, in: world) }
+                    )
+                    await send(.eventCourierSitesLoaded(depots: sites.depots, preferred: sites.preferred))
+                }
+
+            case let .eventCourierSitesLoaded(depots, preferred):
+                guard let only = depots.first else {
+                    state.eventCourierDialog = Self.noCourierSiteDialog
+                    return .none
+                }
+                state.eventCourierDialog = depots.count == 1
+                    ? Self.confirmCourierDialog(at: only)
+                    : Self.eventCourierPicker(depots: depots, preferred: preferred)
                 return .none
 
-            case .eventCourierDialog(.presented(.confirm)):
+            case let .eventCourierDialog(.presented(.confirm(depot))):
                 let database = self.database
                 let uuid = self.uuid
                 let date = self.date
                 return .run { send in
-                    guard let site = await Self.courierSite(database: database, now: date.now) else {
+                    guard let site = await Self.printSite(at: depot, database: database, now: date.now) else {
                         await send(.eventCourierSiteMissing)
                         return
                     }
-                    let directive = Directive(
-                        id: uuid().uuidString, kind: .eventCourierPrint, status: .running,
-                        deviceCode: site.host, controllerCode: nil, roamCentre: nil,
-                        fleetTag: nil, sourceRelayCode: nil,
-                        targets: [], targetIndex: 0,
-                        step: EventCourierPrint().firstStep, stepStartedAt: date.now,
-                        returnToOrigin: false, originDesignation: nil,
-                        attentionReason: nil, createdAt: date.now, updatedAt: date.now,
-                        // The mission resolves its depot through this column and
-                        // nothing else; an unstamped row resolves to no depot.
-                        theatreDepot: site.depot
+                    let directive = Directive.launch(
+                        .init(kind: .eventCourierPrint, deviceCode: site.host, theatre: site.theatre),
+                        id: uuid().uuidString, now: date.now
                     )
                     try? await database.write { db in try Directive.insert { directive }.execute(db) }
-                    logger.info("printing event courier \(directive.id, privacy: .public) at \(site.depot, privacy: .public) on \(site.host, privacy: .public)")
+                    logger.info("printing event courier \(directive.id, privacy: .public) at \(depot, privacy: .public) on \(site.host, privacy: .public)")
                     await send(.eventCourierLaunched(directive))
                 }
 
@@ -513,15 +546,61 @@ public struct DirectivesFeature {
         }
     }
 
-    private static let confirmPrintDialog = ConfirmationDialogState<Action.PrintMineFleet> {
-        TextState("Print a mine fleet?")
-    } actions: {
-        ButtonState(action: .confirm) { TextState("Print") }
-        ButtonState(role: .cancel) { TextState("Cancel") }
-    } message: {
-        TextState(
-            "Eleven devices, 3,455 units from hub stock, plus a surge carrier if none is idle. The brain sites and delivers it when complete."
-        )
+    private static let printMessage =
+        "Eleven devices, 3,455 units from hub stock, plus a surge carrier if none is idle. The brain sites and delivers it when complete."
+
+    private static func confirmPrintDialog(at depot: String) -> ConfirmationDialogState<Action.PrintMineFleet> {
+        ConfirmationDialogState {
+            TextState("Print a mine fleet?")
+        } actions: {
+            ButtonState(action: .confirm(depot: depot)) { TextState("Print") }
+            ButtonState(role: .cancel) { TextState("Cancel") }
+        } message: {
+            TextState(printMessage)
+        }
+    }
+
+    private static func mineFleetPicker(
+        depots: [String], preferred: String?
+    ) -> ConfirmationDialogState<Action.PrintMineFleet> {
+        ConfirmationDialogState {
+            TextState("Print a mine fleet at which depot?")
+        } actions: {
+            for depot in depots {
+                ButtonState(action: .confirm(depot: depot)) { depotLabel(depot) }
+            }
+            ButtonState(role: .cancel) { TextState("Cancel") }
+        } message: {
+            TextState("\(printMessage)\n\n\(pickerHint(preferred: preferred))")
+        }
+    }
+
+    private static func eventCourierPicker(
+        depots: [String], preferred: String?
+    ) -> ConfirmationDialogState<Action.EventCourier> {
+        ConfirmationDialogState {
+            TextState("Print an event courier at which depot?")
+        } actions: {
+            for depot in depots {
+                ButtonState(action: .confirm(depot: depot)) { depotLabel(depot) }
+            }
+            ButtonState(role: .cancel) { TextState("Cancel") }
+        } message: {
+            TextState("\(courierMessage)\n\n\(pickerHint(preferred: preferred))")
+        }
+    }
+
+    /// A depot is a location designation, so it renders in a mono token.
+    private static func depotLabel(_ depot: String) -> TextState {
+        TextState(depot).font(.rcMono)
+    }
+
+    /// Names the ordering rather than marking one option, so the default is
+    /// legible without relying on colour, weight or position alone.
+    private static func pickerHint(preferred: String?) -> String {
+        preferred == nil
+            ? "Depots are listed in designation order."
+            : "Your replicant's own theatre is listed first."
     }
 
     private static let alreadyPrintingDialog = ConfirmationDialogState<Action.PrintMineFleet> {
@@ -538,15 +617,18 @@ public struct DirectivesFeature {
         ButtonState(role: .cancel) { TextState("OK") }
     }
 
-    private static let confirmCourierDialog = ConfirmationDialogState<Action.EventCourier> {
-        TextState("Print an event courier?")
-    } actions: {
-        ButtonState(action: .confirm) { TextState("Print") }
-        ButtonState(role: .cancel) { TextState("Cancel") }
-    } message: {
-        TextState(
-            "One matrix container at the depot, then a replication you confirm yourself. Without a courier no event convoy can be sent."
-        )
+    private static let courierMessage =
+        "One matrix container at the depot, then a replication you confirm yourself. Without a courier no event convoy can be sent."
+
+    private static func confirmCourierDialog(at depot: String) -> ConfirmationDialogState<Action.EventCourier> {
+        ConfirmationDialogState {
+            TextState("Print an event courier?")
+        } actions: {
+            ButtonState(action: .confirm(depot: depot)) { TextState("Print") }
+            ButtonState(role: .cancel) { TextState("Cancel") }
+        } message: {
+            TextState(courierMessage)
+        }
     }
 
     private static let alreadyPrintingCourierDialog = ConfirmationDialogState<Action.EventCourier> {
@@ -565,62 +647,78 @@ public struct DirectivesFeature {
         TextState("Every operational theatre either has a courier already or has no printer at its depot.")
     }
 
-    /// Where a courier is wanted and what prints it: the lowest-designated
-    /// operational theatre still without one, and that depot's own printer.
-    /// A failed read launches nothing — there is no safe fallback depot.
-    private static func courierSite(
-        database: any DatabaseWriter, now: Date
-    ) async -> (depot: String, host: String)? {
+    /// Every operational theatre `wanting` accepts whose depot has a free bench,
+    /// in designation order — except the active replicant's own, which leads.
+    /// A failed read offers nothing: there is no safe fallback depot.
+    private static func printableDepots(
+        database: any DatabaseWriter,
+        now: Date,
+        activeReplicantCode: String?,
+        wanting: @escaping @Sendable (Theatre, WorldSnapshot) -> Bool
+    ) async -> (depots: [String], preferred: String?) {
         do {
-            return try await database.read { db -> (depot: String, host: String)? in
+            return try await database.read { db -> (depots: [String], preferred: String?) in
                 let view = try WorldView.read(from: db, now: now)
                 let world = WorldSnapshot(
                     devices: view.devices, openOperations: [:], theatres: view.theatres,
                     replicantHostDevices: view.replicantHostDevices, now: view.now
                 )
-                for theatre in view.theatres.filter(\.isOperational).sorted(by: { $0.depot < $1.depot }) {
-                    guard !EventCourierPrint.courierStands(at: theatre.depot, in: world),
-                          let host = depotPrinter(at: theatre.depot, in: view)
-                    else { continue }
-                    return (theatre.depot, host.deviceCode)
-                }
-                logger.notice("event courier launch: no theatre wants a courier it can print")
-                return nil
+                let depots = view.theatres
+                    .filter { $0.isOperational && wanting($0, world) && depotPrinter(at: $0.depot, in: view) != nil }
+                    .map(\.depot)
+                    .sorted()
+                let preferred = try hostTheatre(of: activeReplicantCode, in: view, db: db)
+                    .map(\.depot)
+                    .flatMap { depots.contains($0) ? $0 : nil }
+                guard let preferred else { return (depots, nil) }
+                return ([preferred] + depots.filter { $0 != preferred }, preferred)
             }
         } catch {
-            logger.error("event courier launch: world read failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("print launch: world read failed: \(error.localizedDescription, privacy: .public)")
+            return ([], nil)
+        }
+    }
+
+    /// The theatre owning the ACTIVE replicant's host — never the roster's
+    /// first, which is a different replicant the moment there are two.
+    private static func hostTheatre(
+        of activeReplicantCode: String?, in view: WorldView, db: Database
+    ) throws -> Theatre? {
+        guard let activeReplicantCode,
+              let replicant = try Replicant.where({ $0.replicantCode.eq(activeReplicantCode) }).fetchOne(db),
+              let host = replicant.hostedDeviceCode.flatMap({ view.devices[$0] })
+        else { return nil }
+        return view.owningTheatre(of: host, goal: nil)
+    }
+
+    /// The theatre at `depot` and the bench a print pins to there: its OWN
+    /// printer, lowest-coded, never a carrier hull — hosting a print on a hull
+    /// would reserve the vessel the fleet is waiting on out of the fleet.
+    private static func printSite(
+        at depot: String, database: any DatabaseWriter, now: Date
+    ) async -> (theatre: Theatre, host: String)? {
+        do {
+            return try await database.read { db -> (theatre: Theatre, host: String)? in
+                let view = try WorldView.read(from: db, now: now)
+                guard let theatre = view.theatres.first(where: { $0.isOperational && $0.depot == depot }),
+                      let host = depotPrinter(at: depot, in: view)
+                else {
+                    logger.notice("print launch: \(depot, privacy: .public) has no bench free")
+                    return nil
+                }
+                return (theatre, host.deviceCode)
+            }
+        } catch {
+            logger.error("print launch: world read failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
 
-    /// The depot's OWN printer, lowest-coded and never a carrier hull — hosting
-    /// a print on a hull would reserve that vessel out of the fleet. A hub that
-    /// cannot presently take a job is no use as a launch pin.
+    /// A hub that cannot presently take a job is no use as a launch pin.
     private static func depotPrinter(at depot: String, in view: WorldView) -> Device? {
         view.devices.values
             .filter { $0.acceptsPrintJobs && $0.location == depot && !$0.isCarrierHull }
             .min { $0.deviceCode < $1.deviceCode }
-    }
-
-    /// Where a mine fleet should be printed: the first operational theatre whose
-    /// depot has a hub free to take the job, depot order breaking the tie.
-    private static func mineFleetSite(
-        database: any DatabaseWriter, now: Date
-    ) async -> (depot: String, host: String)? {
-        do {
-            return try await database.read { db -> (depot: String, host: String)? in
-                let view = try WorldView.read(from: db, now: now)
-                for theatre in view.theatres.filter(\.isOperational).sorted(by: { $0.depot < $1.depot }) {
-                    guard let host = depotPrinter(at: theatre.depot, in: view) else { continue }
-                    return (theatre.depot, host.deviceCode)
-                }
-                logger.notice("mine fleet launch: no theatre has a hub free to print")
-                return nil
-            }
-        } catch {
-            logger.error("mine fleet launch: world read failed: \(error.localizedDescription, privacy: .public)")
-            return nil
-        }
     }
 
     /// One `WorldView` read plus the CPU-bound rank, run only from this

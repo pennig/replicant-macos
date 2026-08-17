@@ -45,7 +45,8 @@ enum DirectiveTargetsSection: Equatable {
 
     case queue([Stop])
     case coverage(Coverage)
-    case assignments(delivering: String, [Assignment])
+    /// Nil `delivering` is a row with no theatre stamped, which delivers nowhere.
+    case assignments(delivering: String?, [Assignment])
     case demand([String])
     case empty
 
@@ -72,7 +73,7 @@ enum DirectiveTargetsSection: Equatable {
             let assignments = assignments(for: directive, devices: devices)
             return assignments.isEmpty
                 ? .empty
-                : .assignments(delivering: HaulRun.deliveryLocation, assignments)
+                : .assignments(delivering: directive.theatreDepot, assignments)
         case .restockRun:
             // `targetIndex` never advances here, so a delivery mark would sit
             // unchecked against demand that is genuinely being met.
@@ -128,12 +129,11 @@ enum DirectiveTargetsSection: Equatable {
                 in: devices, tag: directive.fleetTag.flatMap(FleetTag.init(parsing:)) ?? HaulRun.defaultFleetTag
             )
         }
-        return fleet.map { controller in
-            Assignment(
-                controllerCode: controller.deviceCode,
-                // The fallback sink: this section has no `WorldSnapshot`.
-                collecting: HaulRun.drainedPile(of: controller, delivery: HaulRun.deliveryLocation)
-            )
+        guard let delivery = directive.theatreDepot else {
+            return fleet.map { Assignment(controllerCode: $0.deviceCode, collecting: nil) }
+        }
+        return fleet.map {
+            Assignment(controllerCode: $0.deviceCode, collecting: HaulRun.drainedPile(of: $0, delivery: delivery))
         }
     }
 }

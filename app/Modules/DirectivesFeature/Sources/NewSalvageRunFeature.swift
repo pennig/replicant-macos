@@ -176,49 +176,20 @@ public struct NewSalvageRunFeature {
                 let now = date.now
                 let origin = vessel.location.map { SiteAssay.system(of: $0) }
                 return .run { send in
-                    // `Brain.ensureSalvage`'s own resolution — never the bare
-                    // tag (see `launcher-tag-resolution-error-narrowing.md`).
-                    let tag: FleetTag
-                    do {
-                        tag = try await database.read { db -> FleetTag in
-                            let view = try WorldView.read(from: db, now: now)
-                            guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device, goal: .salvage)
-                            else {
-                                logger.notice("salvage launch on \(vesselCode, privacy: .public): no theatre resolves — bare tag")
-                                return SalvageRun.defaultFleetTag
-                            }
-                            return SalvageRun.fleetTag(forTheatre: theatre.depot)
-                        }
-                    } catch {
-                        logger.error("salvage launch on \(vesselCode, privacy: .public): theatre read failed: \(error) — bare tag")
-                        tag = SalvageRun.defaultFleetTag
-                    }
-                    let directive = Directive(
-                        id: id,
-                        kind: .salvageRun,
-                        status: .running,
-                        deviceCode: vesselCode,
-                        // Claimed at preflight from whatever is aboard then —
-                        // recording it here would go stale if the fleet moved.
-                        controllerCode: nil,
-                        // Always set: with no finish line, this is what makes
-                        // `.extendQueue` fire instead of `.done`.
-                        roamCentre: centre,
-                        // The run resolves its whole fleet by tag (spec §4.2) —
-                        // `.refreshFleet` cannot see an untagged member.
-                        fleetTag: tag.string,
-                        // Empty: the engine plans the first target itself, via
-                        // `SalvageTargetPlanner`, on its first evaluation.
-                        targets: [],
-                        targetIndex: 0,
-                        step: SalvageRun().firstStep,
-                        stepStartedAt: now,
-                        // No queue to empty, so a return leg would never fire.
-                        returnToOrigin: false,
-                        originDesignation: origin,
-                        attentionReason: nil,
-                        createdAt: now,
-                        updatedAt: now
+                    let theatre = await LauncherTheatre.resolve(
+                        for: vesselCode, goal: .salvage, database: database, now: now
+                    )
+                    let directive = Directive.launch(
+                        .init(
+                            kind: .salvageRun,
+                            deviceCode: vesselCode,
+                            theatre: theatre,
+                            // Always set: with no finish line, this is what
+                            // makes `.extendQueue` fire instead of `.done`.
+                            roamCentre: centre,
+                            originDesignation: origin
+                        ),
+                        id: id, now: now
                     )
                     try? await database.write { db in
                         try Directive.insert { directive }.execute(db)

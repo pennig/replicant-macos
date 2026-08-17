@@ -53,6 +53,10 @@ private func device(
     )
 }
 
+/// The depot every haul fixture is stamped for — and so the sink a controller
+/// must name to read as doing this run's work.
+private let haulDepot = "AINALRAM-BELT-1"
+
 private func mission(
     id: String,
     kind: DirectiveKind = .surveyRun,
@@ -62,7 +66,8 @@ private func mission(
     targets: [String] = ["TAU", "SHERATANON"],
     targetIndex: Int = 1,
     roamCentre: String? = nil,
-    fleetTag: String? = nil
+    fleetTag: String? = nil,
+    theatreDepot: String? = haulDepot
 ) -> Directive {
     Directive(
         id: id, kind: kind, status: status, deviceCode: deviceCode,
@@ -72,7 +77,8 @@ private func mission(
         stepStartedAt: Date(timeIntervalSince1970: 0),
         returnToOrigin: false, originDesignation: "SOL", attentionReason: nil,
         createdAt: Date(timeIntervalSince1970: 0),
-        updatedAt: Date(timeIntervalSince1970: 0)
+        updatedAt: Date(timeIntervalSince1970: 0),
+        theatreDepot: theatreDepot
     )
 }
 
@@ -83,7 +89,7 @@ private func haulController(
     code: String = "HAUL1",
     collecting: String? = nil,
     directive: String = "ferry",
-    deliver: String = "AINALRAM-BELT-1",
+    deliver: String = haulDepot,
     tags: [String] = ["auto:haul"],
     location: String = "ATIANFU-3"
 ) -> Device {
@@ -98,8 +104,13 @@ private func haulController(
 }
 
 /// A Haul Run row: no queue, no `roamCentre`, nothing on the row to count.
-private func haulRun(id: String = "H1", fleetTag: String? = nil) -> Directive {
-    mission(id: id, kind: .haulRun, targets: [], targetIndex: 0, fleetTag: fleetTag)
+private func haulRun(
+    id: String = "H1", fleetTag: String? = nil, theatreDepot: String? = haulDepot
+) -> Directive {
+    mission(
+        id: id, kind: .haulRun, targets: [], targetIndex: 0,
+        fleetTag: fleetTag, theatreDepot: theatreDepot
+    )
 }
 
 /// A per-mine ferry row: pinned to one belt through `targets.first`, driving
@@ -481,6 +492,28 @@ struct DirectiveRowSubtitleTests {
             directives: [haulRun()]
         )
         #expect(rows.first?.headlineDesignation == "ATIANFU-BELT-1")
+    }
+
+    /// The sink is the row's own stamp, never a fixed depot: an unstamped row
+    /// delivers nowhere the list can name, so no pile is claimed for it.
+    @Test func anUnstampedHaulRunClaimsNoPile() {
+        let rows = DirectiveRow.merge(
+            devices: [haulController(collecting: "ATIANFU-BELT-1")],
+            directives: [haulRun(theatreDepot: nil)]
+        )
+        #expect(rows.first?.headlineDesignation == nil)
+        #expect(rows.first?.subtitle == "Nothing reachable")
+    }
+
+    /// A second theatre's run reads against ITS depot — the two must not both
+    /// claim a controller delivering to only one of them.
+    @Test func aHaulRunReadsAgainstItsOwnDepot() {
+        let devices = [haulController(collecting: "ATIANFU-BELT-1", deliver: "DENEBED-BELT-1")]
+        #expect(
+            DirectiveRow.merge(devices: devices, directives: [haulRun(theatreDepot: "DENEBED-BELT-1")])
+                .first?.headlineDesignation == "ATIANFU-BELT-1"
+        )
+        #expect(DirectiveRow.merge(devices: devices, directives: [haulRun()]).first?.headlineDesignation == nil)
     }
 
     // MARK: Pinned Haul Run

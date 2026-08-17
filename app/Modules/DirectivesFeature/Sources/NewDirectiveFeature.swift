@@ -211,47 +211,24 @@ public struct NewDirectiveFeature {
                 let returnToOrigin = isContinuous ? false : state.returnToOrigin
                 let origin = vessel.location.map { SiteAssay.system(of: $0) }
                 return .run { send in
-                    // `Brain.ensureSurvey`'s own resolution — never nil (see
-                    // `launcher-tag-resolution-error-narrowing.md`).
-                    let tag: FleetTag
-                    do {
-                        tag = try await database.read { db -> FleetTag in
-                            let view = try WorldView.read(from: db, now: now)
-                            guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device, goal: .survey)
-                            else {
-                                logger.notice("survey launch on \(vesselCode, privacy: .public): no theatre resolves — bare tag")
-                                return SurveyRun.defaultFleetTag
-                            }
-                            return SurveyRun.fleetTag(forTheatre: theatre.depot)
-                        }
-                    } catch {
-                        logger.error("survey launch on \(vesselCode, privacy: .public): theatre read failed: \(error) — bare tag")
-                        tag = SurveyRun.defaultFleetTag
-                    }
-                    let directive = Directive(
-                        id: id,
-                        kind: .surveyRun,
-                        status: .running,
-                        deviceCode: vesselCode,
-                        // Claimed at preflight from whatever is aboard then —
-                        // recording it here would go stale if the fleet moved.
-                        controllerCode: nil,
-                        // Non-nil is what makes the engine extend the queue
-                        // rather than finish when it empties.
-                        roamCentre: roamCentre,
-                        fleetTag: tag.string,
-                        // Empty on purpose: the engine plans the first target
-                        // from the census on its first evaluation.
-                        targets: targets,
-                        targetIndex: 0,
-                        step: SurveyRun().firstStep,
-                        stepStartedAt: now,
-                        // No queue to empty, so a return leg would never fire.
-                        returnToOrigin: returnToOrigin,
-                        originDesignation: origin,
-                        attentionReason: nil,
-                        createdAt: now,
-                        updatedAt: now
+                    let theatre = await LauncherTheatre.resolve(
+                        for: vesselCode, goal: .survey, database: database, now: now
+                    )
+                    let directive = Directive.launch(
+                        .init(
+                            kind: .surveyRun,
+                            deviceCode: vesselCode,
+                            theatre: theatre,
+                            // Empty for a roam: the engine plans the first
+                            // target from the census on its first evaluation.
+                            targets: targets,
+                            // Non-nil is what makes the engine extend the queue
+                            // rather than finish when it empties.
+                            roamCentre: roamCentre,
+                            returnToOrigin: returnToOrigin,
+                            originDesignation: origin
+                        ),
+                        id: id, now: now
                     )
                     try? await database.write { db in
                         try Directive.insert { directive }.execute(db)

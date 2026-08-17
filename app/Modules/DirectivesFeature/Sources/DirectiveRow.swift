@@ -267,17 +267,16 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
             )
         }
         let custom = directives.map { directive -> DirectiveRow in
-            guard directive.kind == .haulRun else { return .custom(directive) }
+            // The row's own stamp is the sink — every launcher writes it, and an
+            // unstamped row delivers nowhere this list could name.
+            guard directive.kind == .haulRun, let delivery = directive.theatreDepot else {
+                return .custom(directive)
+            }
             if HaulRun.pinnedSource(of: directive) != nil {
                 // A pinned row drives its OWN device, and its per-belt tag is
                 // worn by nothing — the tag lookup below cannot see its ferry.
                 let ferry = devices.first { $0.deviceCode == directive.deviceCode }
-                return .custom(
-                    directive,
-                    haulTarget: ferry.flatMap {
-                        HaulRun.drainedPile(of: $0, delivery: HaulRun.deliveryLocation)
-                    }
-                )
+                return .custom(directive, haulTarget: ferry.flatMap { HaulRun.drainedPile(of: $0, delivery: delivery) })
             }
             // Resolved by TAG, exactly as the machine resolves its working set
             // on every evaluation — the row must agree with what the run is
@@ -287,9 +286,7 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                 haulTarget: HaulRun.currentHaulTarget(
                     devices: devices,
                     tag: directive.fleetTag.flatMap(FleetTag.init(parsing:)) ?? HaulRun.defaultFleetTag,
-                    // The fallback: this row has no `WorldSnapshot` to derive
-                    // the live sink from.
-                    delivery: HaulRun.deliveryLocation
+                    delivery: delivery
                 )
             )
         }

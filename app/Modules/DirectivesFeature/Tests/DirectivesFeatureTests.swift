@@ -14,7 +14,9 @@ import GameDatabase
 import GameModels
 import GameServices
 import SQLiteData
+import SwiftUI
 import Testing
+import UI
 import UniverseModels
 import Utils
 @testable import DirectivesFeature
@@ -504,33 +506,87 @@ struct DirectivesFeatureTests {
 @Suite("Directives — Print Mine Fleet")
 @MainActor
 struct PrintMineFleetTests {
+    nonisolated static let printBlurb =
+        "Eleven devices, 3,455 units from hub stock, plus a surge carrier if none is idle. The brain sites and delivers it when complete."
+
+    /// One theatre with a bench: the plain confirm dialog, no picker.
     @Test func tappingPresentsTheConfirmDialog() async throws {
         let database = try GameDatabase.bootstrap()
-        let store = TestStore(initialState: DirectivesFeature.State()) {
-            DirectivesFeature()
-        } withDependencies: {
-            $0.defaultDatabase = database
+        try await database.write { db in
+            try Self.seedTwoTheatres(db)
+            try Device.delete().where { $0.deviceCode.eq("AAA-B") }.execute(db)
         }
-        store.exhaustivity = .off
+        let store = Self.launchStore(database)
 
         await store.send(.printMineFleetTapped)
+        await store.receive(\.printMineFleetSitesLoaded)
         #expect(store.state.printMineFleetDialog?.title == TextState("Print a mine fleet?"))
         #expect(store.state.printMineFleetDialog?.message == TextState(
             "Eleven devices, 3,455 units from hub stock, plus a surge carrier if none is idle. The brain sites and delivers it when complete."
         ))
     }
 
-    /// Confirming inserts exactly one row at the lowest-designated operational
-    /// theatre, on that depot's own lowest-coded hub — `AAA-B` is the lowest-coded
-    /// printer in the account and stands at the OTHER depot, so an account-wide
-    /// `min` picks it and is wrong.
+    /// Two benches, so the operator picks. Each depot is one button, rendered in
+    /// a mono token, with Cancel last.
+    @Test func twoTheatresPresentADepotPicker() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in try Self.seedTwoTheatres(db) }
+        let store = Self.launchStore(database)
+
+        await store.send(.printMineFleetTapped)
+        await store.receive(\.printMineFleetSitesLoaded)
+
+        let dialog = try #require(store.state.printMineFleetDialog)
+        #expect(dialog.title == TextState("Print a mine fleet at which depot?"))
+        #expect(dialog.buttons.count == 3, "one per depot, plus Cancel")
+        #expect(dialog.buttons[0].label == TextState("AINALRAM-BELT-1").font(.rcMono))
+        #expect(dialog.buttons[1].label == TextState("DENEBED-BELT-1").font(.rcMono))
+        #expect(dialog.buttons[2].role == .cancel)
+        #expect(
+            dialog.message == TextState("\(Self.printBlurb)\n\nDepots are listed in designation order."),
+            "no replicant is placed, so ordering is the only claim the hint may make"
+        )
+    }
+
+    /// The default is carried by ORDER and named in words — never by colour: the
+    /// active replicant's own theatre leads, out of designation order.
+    @Test func theActiveReplicantsOwnTheatreIsOfferedFirst() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Self.seedTwoTheatres(db)
+            try Device.insert {
+                Self.theatreDevice("HOST-1", type: "matrix_container", location: "DENEBED-BELT-1")
+            }.execute(db)
+            try Replicant.insert {
+                Replicant(
+                    replicantCode: "R9", name: "R9", createdAt: Date(timeIntervalSince1970: 0),
+                    currentLocation: "DENEBED-BELT-1", hostedDeviceCode: "HOST-1"
+                )
+            }.execute(db)
+        }
+        let store = Self.launchStore(database)
+        store.state.$activeReplicantCode.withLock { $0 = "R9" }
+
+        await store.send(.printMineFleetTapped)
+        await store.receive(\.printMineFleetSitesLoaded)
+
+        let dialog = try #require(store.state.printMineFleetDialog)
+        #expect(dialog.buttons[0].label == TextState("DENEBED-BELT-1").font(.rcMono))
+        #expect(dialog.buttons[1].label == TextState("AINALRAM-BELT-1").font(.rcMono))
+        #expect(dialog.message == TextState("\(Self.printBlurb)\n\nYour replicant's own theatre is listed first."))
+    }
+
+    /// Confirming inserts exactly one row at the chosen theatre, on that depot's
+    /// own lowest-coded hub — `AAA-B` is the lowest-coded printer in the account
+    /// and stands at the OTHER depot, so an account-wide `min` picks it and is wrong.
     @Test func confirmingInsertsOnTheDepotsOwnHost() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try Self.seedTwoTheatres(db) }
         let store = Self.launchStore(database)
 
         await store.send(.printMineFleetTapped)
-        await store.send(.printMineFleetDialog(.presented(.confirm)))
+        await store.receive(\.printMineFleetSitesLoaded)
+        await store.send(.printMineFleetDialog(.presented(.confirm(depot: "AINALRAM-BELT-1"))))
         await store.receive(\.printMineFleetLaunched)
 
         let created = try await database.read { db in try Directive.all.fetchAll(db) }
@@ -539,7 +595,10 @@ struct PrintMineFleetTests {
         #expect(created[0].status == .running)
         #expect(created[0].deviceCode == "HUB-A")
         #expect(created[0].theatreDepot == "AINALRAM-BELT-1")
-        #expect(created[0].fleetTag == MineRecipe.fleetTag.string)
+        #expect(
+            created[0].fleetTag == MineRecipe.fleetTag(forTheatre: "AINALRAM-BELT-1").string,
+            "per-theatre: the bare tag would reserve every other theatre's ferries while this prints"
+        )
         #expect(created[0].step == MineFleetPrint().firstStep)
         #expect(created[0].targets.isEmpty)
         #expect(created[0].returnToOrigin == false)
@@ -557,7 +616,8 @@ struct PrintMineFleetTests {
         let store = Self.launchStore(database)
 
         await store.send(.printMineFleetTapped)
-        await store.send(.printMineFleetDialog(.presented(.confirm)))
+        await store.receive(\.printMineFleetSitesLoaded)
+        await store.send(.printMineFleetDialog(.presented(.confirm(depot: "AINALRAM-BELT-1"))))
         await store.receive(\.printMineFleetLaunched)
 
         let created = try await database.read { db in try Directive.all.fetchAll(db) }
@@ -582,16 +642,17 @@ struct PrintMineFleetTests {
         let store = Self.launchStore(database)
 
         await store.send(.printMineFleetTapped)
-        await store.send(.printMineFleetDialog(.presented(.confirm)))
+        await store.receive(\.printMineFleetSitesLoaded)
+        await store.send(.printMineFleetDialog(.presented(.confirm(depot: "AINALRAM-BELT-1"))))
         await store.receive(\.printMineFleetLaunched)
 
         let created = try await database.read { db in try Directive.all.fetchAll(db) }
         #expect(created[0].deviceCode == "HUB-A")
     }
 
-    /// No operational theatre means no bench to print at, so the launch declines
-    /// rather than pinning whatever print hub happens to sort first.
-    @Test func confirmingWithNoTheatreLaunchesNothing() async throws {
+    /// No operational theatre means no bench to print at, so the launcher offers
+    /// nothing rather than pinning whatever print hub happens to sort first.
+    @Test func noTheatreOffersNoDepotAndLaunchesNothing() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Device.insert { Self.printHub(code: "HUB1") }.execute(db)
@@ -599,8 +660,8 @@ struct PrintMineFleetTests {
         let store = Self.launchStore(database)
 
         await store.send(.printMineFleetTapped)
-        await store.send(.printMineFleetDialog(.presented(.confirm)))
-        await store.receive(\.printMineFleetHostMissing)
+        await store.receive(\.printMineFleetSitesLoaded)
+        #expect(store.state.printMineFleetDialog?.title == TextState("No autofactory found at the hub."))
 
         let created = try await database.read { db in try Directive.all.fetchAll(db) }
         #expect(created.isEmpty)
@@ -644,8 +705,7 @@ struct PrintMineFleetTests {
         store.exhaustivity = .off
 
         await store.send(.printMineFleetTapped)
-        await store.send(.printMineFleetDialog(.presented(.confirm)))
-        await store.receive(\.printMineFleetHostMissing)
+        await store.receive(\.printMineFleetSitesLoaded)
 
         #expect(store.state.printMineFleetDialog?.title == TextState("No autofactory found at the hub."))
         let created = try await database.read { db in try Directive.all.fetchAll(db) }
