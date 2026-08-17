@@ -255,6 +255,16 @@ public struct EventRun: MissionStepMachine {
         return printSlack + TimeInterval(longest)
     }
 
+    /// When this run last put a job on a bench — the newest print op it still
+    /// has open, or the step's start before it has ordered any. A bound shaped
+    /// as one job's time must not be measured against a whole tree of them.
+    static func lastOrderedAt(_ directive: Directive, in world: WorldSnapshot) -> Date {
+        world.dispatchedOperations.values
+            .filter { $0.kind == OperationKind.print.rawValue && $0.status.isOpen }
+            .map(\.startedAt)
+            .max() ?? directive.stepStartedAt
+    }
+
     /// What a printer THIS run has a print open on reports its queued job still
     /// missing — a narrower scope than the expansion, so the caller orders the
     /// GREATER of the two. A type with no blueprint is dropped as unorderable.
@@ -356,7 +366,7 @@ public struct EventRun: MissionStepMachine {
         // Every path that orders nothing consults the deadline: a free printer
         // with the bill in flight waits on the print an all-busy depot does.
         let noProgress: MissionAction =
-            world.now.timeIntervalSince(directive.stepStartedAt) > deadline
+            world.now.timeIntervalSince(Self.lastOrderedAt(directive, in: world)) > deadline
             ? .stall(.printBlockedOnComponents, detail: depot) : .wait
 
         guard let free = printers.first(where: { world.openOperation(for: $0.deviceCode) == nil })

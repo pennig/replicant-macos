@@ -269,6 +269,132 @@ struct EventRunEngineTests {
         #expect(row.step == EventRun.Step.printing)
     }
 
+    /// A bench that really queues: an accepted print leaves an OPEN op owned by
+    /// the run, so nothing more can be ordered until `finishJob` closes it.
+    private func benchGovernor(
+        _ database: any DatabaseWriter,
+        clock: LockIsolated<Date>,
+        into orders: LockIsolated<[Job]>
+    ) -> CommandGovernorClient {
+        let body: @Sendable (OperationKind, String, CommandParams) async -> CommandDispatchResult = { kind, deviceCode, params in
+            guard kind == .print, let deviceType = params.deviceType else {
+                return .dispatched(.accepted(operationID: nil))
+            }
+            let quantity = params.quantity ?? 1
+            let stamp = clock.value
+            let index = orders.withValue { queued -> Int in
+                queued.append(Job(type: deviceType, quantity: quantity, tags: params.printTags ?? []))
+                return queued.count - 1
+            }
+            try? await database.write { db in
+                try GameModels.Operation.insert {
+                    GameModels.Operation(
+                        id: "job-\(index)", entityCode: deviceCode,
+                        kind: OperationKind.print.rawValue, status: .active, source: .poll,
+                        startedAt: stamp, completesAt: nil, lastConfirmedAt: stamp,
+                        detail: .object(["params": .object([
+                            "device_type": .string(deviceType),
+                            "quantity": .number(Double(quantity)),
+                        ])]),
+                        directiveID: "d1", step: EventRun.Step.printing
+                    )
+                }.execute(db)
+            }
+            return .dispatched(.accepted(operationID: "job-\(index)"))
+        }
+        return CommandGovernorClient(
+            dispatch: body,
+            dispatchOwned: { kind, deviceCode, params, _ in await body(kind, deviceCode, params) }
+        )
+    }
+
+    /// One ordered print, as the bench fixture remembers it.
+    private struct Job: Sendable {
+        let type: String
+        let quantity: Int
+        let tags: [String]
+    }
+
+    /// The bench's other half: close round `round`'s op and stand its clones up
+    /// at the depot wearing the tags they were ordered with.
+    private func finishJob(
+        _ database: any DatabaseWriter, round: Int, job: Job, at stamp: Date
+    ) async {
+        try? await database.write { db in
+            guard var operation = try GameModels.Operation
+                .where({ $0.id.eq("job-\(round)") }).fetchOne(db)
+            else { return }
+            operation.status = .completed
+            operation.lastConfirmedAt = stamp
+            try GameModels.Operation.upsert { operation }.execute(db)
+            for index in 0..<job.quantity {
+                try Device.upsert {
+                    EventRunFixtures.device(
+                        "\(job.type)-\(index)", type: job.type, location: "HUB-1",
+                        tags: job.tags, updatedAt: stamp
+                    )
+                }.execute(db)
+            }
+        }
+    }
+
+    /// **The multi-round shape.** One bench, four sequential jobs: each finishes
+    /// inside its own bound while the tree as a whole outlasts that bound three
+    /// times over. A run printing perfectly must not surface.
+    @Test("a deep tree on one bench prints round after round without stalling")
+    func aSequentialTreePrintsPastOneJobsBound() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await seed(
+            database, step: EventRun.Step.printing,
+            event: EventRunFixtures.event(devices: [(1, "atmospheric_regulator")]),
+            blueprints: [
+                blueprint(
+                    "atmospheric_regulator",
+                    components: ["filtration_array": 1, "atmo_processor": 2]
+                ),
+                blueprint("filtration_array"),
+                blueprint("atmo_processor"),
+                blueprint(EventPlan.beaconDeviceType),
+            ]
+        )
+        let clock = LockIsolated(Self.now)
+        let orders = LockIsolated<[Job]>([])
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .init { clock.value }
+            $0.uuid = .incrementing
+            // The real `refreshFootprint` over a scripted census, so the reserve
+            // rail stays fed as the clock moves instead of vetoing every round.
+            $0.locationsClient.footprint = {
+                ["HUB-1": LocationCounts(
+                    devices: 2, resources: BrainCeiling.aggregateSpendFloor * 2
+                )]
+            }
+            $0.commandGovernor = benchGovernor(database, clock: clock, into: orders)
+        } operation: {
+            let core = DirectiveEngineCore(machines: [EventRun()], tick: .seconds(5))
+            for round in 0..<4 {
+                await core.evaluateOnce(directiveID: "d1")   // orders this round's job
+                clock.setValue(clock.value.addingTimeInterval(900))
+                await core.evaluateOnce(directiveID: "d1")   // the bench is busy
+                clock.setValue(clock.value.addingTimeInterval(900))
+                guard orders.value.count == round + 1, let job = orders.value.last else { break }
+                await finishJob(database, round: round, job: job, at: clock.value)
+            }
+            await core.evaluateOnce(directiveID: "d1")
+        }
+
+        #expect(orders.value.map(\.type) == [
+            "atmo_processor", "filtration_array", "atmospheric_regulator",
+            EventPlan.beaconDeviceType,
+        ], "one job per round, in tree order, and nothing ordered twice")
+        let row = try await row(database)
+        #expect(row.step == EventRun.Step.loading)
+        #expect(row.status == .running)
+        #expect(row.attentionReason == nil, "7,200s of real progress is not a blocked print")
+    }
+
     // MARK: - The commit
 
     /// **Required.** The commit is not idempotent from our side, so the POST must
