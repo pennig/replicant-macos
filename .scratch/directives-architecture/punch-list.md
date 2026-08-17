@@ -73,6 +73,16 @@ Small things deliberately not fixed when they were found, kept here so they are 
   but it is the case that would make several deliberately-dead scoped branches live.
   `DevicesFeature/Sources/TagsEditor.swift`.
 
+- [ ] **No test exercises a migration against a populated pre-migration database.** `GoldenSchemaTests`
+  dumps `GameDatabase.bootstrap()`, which is a fresh schema, so an `ALTER TABLE` that would fail on a real
+  upgrade from the previous last migration is not covered. Applies to every migration in the repo, not
+  only Stage 1 ticket 15's — surfaced by that ticket's review. The live database is the only thing
+  currently testing the upgrade path.
+- [ ] **Stage 2 must delete three prose fallbacks, not two.** `MissionLogBudget.lastDispatch`,
+  `MissionLogBudget.dispatchRounds(kind:)` and `DirectiveStallDetail.detail(for:in:)` each keep a legacy
+  parse for rows written before ticket 15's columns, each marked with a one-line comment. Whoever plans
+  Stage 2 (ticket 17) should count three.
+
 ## Constants and coupling
 
 - [ ] **`unresolvedReadBand` is tied to the engine tick by comment only.** The band (15 s) must exceed the worst observed tick period; the tick literal lives separately in `DirectiveEngine.swift`. Changing the tick silently breaks the pairing. Give them one shared constant, or a test that fails when they diverge.
