@@ -25,4 +25,14 @@ public enum FleetMembership {
             ?? (device.carries(FleetTag(goal: goal), policy: .exact)
                 && resolver.owningTheatre(of: device, goal: goal)?.depot == depot)
     }
+
+    /// `belongs`, narrowed to a device the census can place — what a theatre
+    /// may SPEND. A run launched on a vessel that is nowhere parks the
+    /// theatre's one slot the moment it faults, which is worse than idling.
+    public static func isDeployable(
+        _ device: Device, toDepot depot: String, goal: FleetTag.Goal, resolver: TheatreResolver
+    ) -> Bool {
+        belongs(device, toDepot: depot, goal: goal, resolver: resolver)
+            && resolver.owningTheatre(of: device, goal: nil) != nil
+    }
 }

@@ -107,16 +107,18 @@ public struct HaulRun: MissionStepMachine {
 
     /// `theatreDepot`, when given, scopes the result through `belongs` (see
     /// `haul-run-theatre-scoped-controllers.md`); nil preserves the old read.
-    /// A per-belt ferry row names a belt, not a theatre, so it is left alone.
     public static func controllers(in world: WorldSnapshot, tag: FleetTag, theatreDepot: String? = nil) -> [Device] {
         let matched = controllers(in: world.devices.values, tag: tag)
+        // The goal test states this overload's contract: a theatre scopes a
+        // haul fleet, never a per-belt ferry's. Every caller is pinned-guarded.
         guard let theatreDepot, tag.goal == .haul else { return matched }
         return matched.filter { belongs($0, to: theatreDepot, resolver: world.theatreResolver) }
     }
 
-    /// Whether `device` is `depot`'s haul fleet — `FleetMembership.belongs`.
+    /// Whether `depot` may spend `device` — `FleetMembership.isDeployable`:
+    /// its fleet by tag or location, and placeable by the census.
     public static func belongs(_ device: Device, to depot: String, resolver: TheatreResolver) -> Bool {
-        FleetMembership.belongs(device, toDepot: depot, goal: .haul, resolver: resolver)
+        FleetMembership.isDeployable(device, toDepot: depot, goal: .haul, resolver: resolver)
     }
 
     /// The tag `Brain.ensureHaul` stamps for a theatre at `depot`.

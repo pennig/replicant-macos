@@ -217,12 +217,6 @@ public struct WorldSnapshot: Equatable, Sendable {
         return theatres.contains { $0.depot != depot && $0.isOperational }
     }
 
-    /// `device`'s theatre. A `goal` lets its scoped tag outrank where it
-    /// stands; nil asks the location question alone.
-    public func owningTheatre(of device: Device, goal: FleetTag.Goal?) -> Theatre? {
-        theatreResolver.owningTheatre(of: device, goal: goal)
-    }
-
     /// One consistent read of everything a mission reasons over, taken from
     /// `database` at the instant `now` and scoped to `directive` — its targets,
     /// its origin, its log and the operations it dispatched.

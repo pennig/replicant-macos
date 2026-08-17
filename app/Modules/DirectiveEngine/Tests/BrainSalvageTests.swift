@@ -384,6 +384,31 @@ struct BrainSalvageReadinessTests {
         #expect(!reason.contains("VA"))
     }
 
+    /// The tag says whose it is, but a theatre spends only what the census can
+    /// place: launching on a vessel that is nowhere parks the theatre's slot on
+    /// the first fault. The owning theatre names it; the other one must not.
+    @Test("a scoped-tagged vessel the census cannot place is named, never launched on")
+    func aTaggedUnplaceableVesselIsNamedNotLaunchedOn() {
+        let (view, ainalram, denebed) = twoTheatreSalvageView(
+            ainalramFleet: salvageStagedFleet(
+                carrier: "VA", location: nil, tags: ["auto:salvage:DENEBED-BELT-1"]
+            ),
+            denebedFleet: [],
+            salvageUnits: ["AINALRAM": 900, "DENEBED": 900]
+        )
+
+        guard case let .idle(denebedReason) = Brain.salvageReadiness(view: view, directives: [], theatre: denebed) else {
+            Issue.record("expected DENEBED to idle — VA is its own, but nowhere")
+            return
+        }
+        #expect(denebedReason == "VA is tagged \(Brain.salvageCarrierTag) but not placeable — stowed or mid-cruise")
+        guard case let .idle(ainalramReason) = Brain.salvageReadiness(view: view, directives: [], theatre: ainalram) else {
+            Issue.record("expected AINALRAM to idle — VA wears DENEBED's tag")
+            return
+        }
+        #expect(!ainalramReason.contains("VA"))
+    }
+
     /// A carrier tagged for AINALRAM alone is never a candidate for DENEBED.
     @Test("a device tagged for one theatre is not selected for another")
     func aDeviceTaggedForOneTheatreIsNotSelectedForAnother() {

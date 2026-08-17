@@ -1920,7 +1920,10 @@ struct Brain: Sendable {
         view: WorldView, theatre: Theatre, reserved: Set<String>, directives: [Directive]
     ) -> String {
         let hulls = view.devices.values
-            .filter { $0.isCarrierHull && owningTheatre(of: $0, view: view, goal: .survey)?.depot == theatre.depot }
+            .filter {
+                $0.isCarrierHull && owningTheatre(of: $0, view: view, goal: .survey)?.depot == theatre.depot
+                    && owningTheatre(of: $0, view: view, goal: nil) != nil
+            }
             .sorted { $0.deviceCode < $1.deviceCode }
         // A tag on a non-carrier hull is a misapplied opt-in, not an untagged
         // fleet. Moving the tag is location-independent, so the scan is fleet-wide.

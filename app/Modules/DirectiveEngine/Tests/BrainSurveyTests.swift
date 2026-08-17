@@ -377,6 +377,31 @@ struct BrainSurveyTests {
         #expect(!reason.contains("VA"))
     }
 
+    /// The tag says whose it is, but a theatre spends only what the census can
+    /// place: launching on a vessel that is nowhere parks the theatre's slot on
+    /// the first fault. The owning theatre names it; the other one must not.
+    @Test("a scoped-tagged vessel the census cannot place is named, never launched on")
+    func aTaggedUnplaceableVesselIsNamedNotLaunchedOn() {
+        let (view, ainalram, denebed) = twoTheatreSurveyView(
+            ainalramFleet: surveyReadinessStagedFleet(
+                carrier: "VA", controller: "AMIA", drone: "DRONEA", location: nil,
+                tags: ["auto:survey:DENEBED-BELT-1"]
+            ),
+            denebedFleet: []
+        )
+
+        guard case let .idle(denebedReason) = Brain.surveyReadiness(view: view, directives: [], theatre: denebed) else {
+            Issue.record("expected DENEBED to idle — VA is its own, but nowhere")
+            return
+        }
+        #expect(denebedReason == "VA is tagged \(Brain.surveyCarrierTag) but not placeable — stowed or mid-cruise")
+        guard case let .idle(ainalramReason) = Brain.surveyReadiness(view: view, directives: [], theatre: ainalram) else {
+            Issue.record("expected AINALRAM to idle — VA wears DENEBED's tag")
+            return
+        }
+        #expect(!ainalramReason.contains("VA"))
+    }
+
     /// A carrier tagged for AINALRAM alone is never a candidate for DENEBED —
     /// the theatre it wears no tag for idles, naming no carrier at all.
     @Test("a device tagged for one theatre is not selected for another")

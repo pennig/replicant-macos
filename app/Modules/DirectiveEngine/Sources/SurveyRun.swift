@@ -588,9 +588,10 @@ public struct SurveyRun: MissionStepMachine {
         device.carries(fleetTag(forTheatre: depot), policy: .exactOrUnscoped)
     }
 
-    /// Whether `device` is `depot`'s survey fleet — `FleetMembership.belongs`.
+    /// Whether `depot` may spend `device` — `FleetMembership.isDeployable`:
+    /// its survey fleet by tag or location, and placeable by the census.
     static func isFleetTagged(_ device: Device, at depot: String, resolver: TheatreResolver) -> Bool {
-        FleetMembership.belongs(device, toDepot: depot, goal: .survey, resolver: resolver)
+        FleetMembership.isDeployable(device, toDepot: depot, goal: .survey, resolver: resolver)
     }
 
     /// Deploy the next service bot still aboard `vessel`, or move on when the

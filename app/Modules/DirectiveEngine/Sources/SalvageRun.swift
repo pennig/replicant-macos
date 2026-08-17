@@ -902,9 +902,10 @@ public struct SalvageRun: MissionStepMachine {
         device.carries(fleetTag(forTheatre: depot), policy: .exactOrUnscoped)
     }
 
-    /// Whether `device` is `depot`'s salvage fleet — `FleetMembership.belongs`.
+    /// Whether `depot` may spend `device` — `FleetMembership.isDeployable`:
+    /// its salvage fleet by tag or location, and placeable by the census.
     static func isFleetTagged(_ device: Device, at depot: String, resolver: TheatreResolver) -> Bool {
-        FleetMembership.belongs(device, toDepot: depot, goal: .salvage, resolver: resolver)
+        FleetMembership.isDeployable(device, toDepot: depot, goal: .salvage, resolver: resolver)
     }
 
     /// Confirm the recall landed before letting the run go anywhere, then decide the
