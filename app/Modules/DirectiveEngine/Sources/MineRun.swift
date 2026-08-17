@@ -18,27 +18,27 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dire
 
 public struct MineRun: MissionStepMachine {
     public let kind: DirectiveKind = .mineRun
-    public var firstStep: String { Step.preflight }
+    public var firstStep: String { Step.preflight.rawValue }
 
     public init() {}
 
-    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
-    public enum Step {
-        public static let preflight = "preflight"
+    /// This mission's step vocabulary, as `Directive.step` holds it (D6).
+    public enum Step: String, CaseIterable, Sendable {
+        case preflight
         /// Attach one carried member per round; `attach` moves one row at a time.
-        public static let attaching = "attaching"
-        public static let confirmingAttach = "confirmingAttach"
-        public static let travelling = "travelling"
-        public static let confirmingArrival = "confirmingArrival"
+        case attaching
+        case confirmingAttach
+        case travelling
+        case confirmingArrival
         /// Set the whole fleet down at the belt in one command.
-        public static let detaching = "detaching"
-        public static let confirmingDetach = "confirmingDetach"
-        public static let adopting = "adopting"
-        public static let confirmingAdopt = "confirmingAdopt"
-        public static let arming = "arming"
-        public static let confirmingArm = "confirmingArm"
+        case detaching
+        case confirmingDetach
+        case adopting
+        case confirmingAdopt
+        case arming
+        case confirmingArm
         /// Reached from `arming` only when the run carries `returnToOrigin`.
-        public static let returning = "returning"
+        case returning
     }
 
     /// The cap on one attach confirmation before the run surfaces the command
@@ -67,22 +67,23 @@ public struct MineRun: MissionStepMachine {
         guard let carrier = world.device(directive.deviceCode) else {
             return .stall(.unreachableDevice)
         }
-        switch directive.step {
-        case Step.preflight: return preflight(directive, carrier, world)
-        case Step.attaching: return attach(directive, carrier, world)
-        case Step.confirmingAttach: return confirmAttach(directive, carrier, world)
-        case Step.travelling: return travel(directive, carrier, world)
-        case Step.confirmingArrival: return confirmArrival(directive, carrier, world)
-        case Step.detaching: return detach(directive, carrier, world)
-        case Step.confirmingDetach: return confirmDetach(directive, carrier, world)
-        case Step.adopting: return adopt(directive, world)
-        case Step.confirmingAdopt: return confirmAdopt(directive, world)
-        case Step.arming: return arm(directive, world)
-        case Step.confirmingArm: return confirmArm(directive, world)
-        case Step.returning: return returnHome(directive, carrier, world)
-        default:
-            logger.notice("mine run \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
+        guard let step = Step(rawValue: directive.step) else {
+            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
             return .wait
+        }
+        switch step {
+        case .preflight: return preflight(directive, carrier, world)
+        case .attaching: return attach(directive, carrier, world)
+        case .confirmingAttach: return confirmAttach(directive, carrier, world)
+        case .travelling: return travel(directive, carrier, world)
+        case .confirmingArrival: return confirmArrival(directive, carrier, world)
+        case .detaching: return detach(directive, carrier, world)
+        case .confirmingDetach: return confirmDetach(directive, carrier, world)
+        case .adopting: return adopt(directive, world)
+        case .confirmingAdopt: return confirmAdopt(directive, world)
+        case .arming: return arm(directive, world)
+        case .confirmingArm: return confirmArm(directive, world)
+        case .returning: return returnHome(directive, carrier, world)
         }
     }
 
@@ -300,7 +301,7 @@ public struct MineRun: MissionStepMachine {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
         if MineRecipe.installedBelts(in: rows, hubs: depots).contains(belt) { return .done }
-        return .advanceStep(nextStep: Step.attaching)
+        return .advanceStep(nextStep: Step.attaching.rawValue)
     }
 
     /// Attach the next loose member. One per round: `attach` moves one row and
@@ -314,11 +315,11 @@ public struct MineRun: MissionStepMachine {
             guard roster.count == Self.carriedTotal else {
                 return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
             }
-            return .advanceStep(nextStep: Step.travelling)
+            return .advanceStep(nextStep: Step.travelling.rawValue)
         }
         return .dispatch(
             kind: .attach, deviceCode: carrier.deviceCode,
-            params: CommandParams(devices: [next.deviceCode]), nextStep: Step.confirmingAttach
+            params: CommandParams(devices: [next.deviceCode]), nextStep: Step.confirmingAttach.rawValue
         )
     }
 
@@ -331,11 +332,11 @@ public struct MineRun: MissionStepMachine {
     ) -> MissionAction {
         let roster = Self.roster(of: directive, in: world)
         let loose = roster.filter { $0.attachedToDeviceCode != carrier.deviceCode }
-        guard let next = loose.first else { return .advanceStep(nextStep: Step.attaching) }
+        guard let next = loose.first else { return .advanceStep(nextStep: Step.attaching.rawValue) }
         let rounds = MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.attaching, confirm: Step.confirmingAttach
+            world, dispatch: Step.attaching.rawValue, confirm: Step.confirmingAttach.rawValue
         )
-        if roster.count - loose.count >= rounds { return .advanceStep(nextStep: Step.attaching) }
+        if roster.count - loose.count >= rounds { return .advanceStep(nextStep: Step.attaching.rawValue) }
         return MissionConfirm.ladder(
             [next], directive, world,
             deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
@@ -347,13 +348,13 @@ public struct MineRun: MissionStepMachine {
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
         guard let belt = Self.targetBelt(of: directive) else { return .stall(.unreachableDevice) }
-        if carrier.location == belt { return .advanceStep(nextStep: Step.detaching) }
+        if carrier.location == belt { return .advanceStep(nextStep: Step.detaching.rawValue) }
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
         // The equality check above misreads a row still lagging an arrival.
         if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: belt), nextStep: Step.confirmingArrival
+            params: CommandParams(destination: belt), nextStep: Step.confirmingArrival.rawValue
         )
     }
 
@@ -364,7 +365,7 @@ public struct MineRun: MissionStepMachine {
     ) -> MissionAction {
         guard let belt = Self.targetBelt(of: directive) else { return .stall(.unreachableDevice) }
         if world.isFresh(carrier, since: directive.stepStartedAt), carrier.location == belt {
-            return .advanceStep(nextStep: Step.detaching)
+            return .advanceStep(nextStep: Step.detaching.rawValue)
         }
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
         return MissionConfirm.ladder(
@@ -379,10 +380,10 @@ public struct MineRun: MissionStepMachine {
     ) -> MissionAction {
         let aboard = Self.roster(of: directive, in: world)
             .filter { $0.attachedToDeviceCode == carrier.deviceCode }
-        guard !aboard.isEmpty else { return .advanceStep(nextStep: Step.adopting) }
+        guard !aboard.isEmpty else { return .advanceStep(nextStep: Step.adopting.rawValue) }
         return .dispatch(
             kind: .detach, deviceCode: carrier.deviceCode,
-            params: CommandParams(devices: aboard.map(\.deviceCode)), nextStep: Step.confirmingDetach
+            params: CommandParams(devices: aboard.map(\.deviceCode)), nextStep: Step.confirmingDetach.rawValue
         )
     }
 
@@ -400,7 +401,7 @@ public struct MineRun: MissionStepMachine {
             world.isFresh($0, since: directive.stepStartedAt)
                 && $0.attachedToDeviceCode == nil && $0.location == belt
         }
-        if landed { return .advanceStep(nextStep: Step.adopting) }
+        if landed { return .advanceStep(nextStep: Step.adopting.rawValue) }
         return MissionConfirm.ladder(
             roster, directive, world,
             deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
@@ -415,12 +416,12 @@ public struct MineRun: MissionStepMachine {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
         guard let next = adoptions.first(where: { !$0.pending.isEmpty }) else {
-            return .advanceStep(nextStep: Step.arming)
+            return .advanceStep(nextStep: Step.arming.rawValue)
         }
         return .dispatch(
             kind: .adopt, deviceCode: next.controller.deviceCode,
             params: CommandParams(devices: next.pending.map(\.deviceCode)),
-            nextStep: Step.confirmingAdopt
+            nextStep: Step.confirmingAdopt.rawValue
         )
     }
 
@@ -433,11 +434,11 @@ public struct MineRun: MissionStepMachine {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
         let done = adoptions.prefix { $0.pending.isEmpty }.count
-        guard done < adoptions.count else { return .advanceStep(nextStep: Step.adopting) }
+        guard done < adoptions.count else { return .advanceStep(nextStep: Step.adopting.rawValue) }
         let rounds = MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.adopting, confirm: Step.confirmingAdopt
+            world, dispatch: Step.adopting.rawValue, confirm: Step.confirmingAdopt.rawValue
         )
-        if done >= rounds { return .advanceStep(nextStep: Step.adopting) }
+        if done >= rounds { return .advanceStep(nextStep: Step.adopting.rawValue) }
         return MissionConfirm.ladder(
             adoptions[done].pending, directive, world,
             deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
@@ -453,7 +454,7 @@ public struct MineRun: MissionStepMachine {
         }
         guard let pending = targets.first(where: { Self.armState($0, in: world) < 2 }) else {
             guard directive.returnToOrigin else { return .done }
-            return .advanceStep(nextStep: Step.returning)
+            return .advanceStep(nextStep: Step.returning.rawValue)
         }
         guard Self.armState(pending, in: world) > 0 else {
             return .dispatch(
@@ -461,12 +462,12 @@ public struct MineRun: MissionStepMachine {
                 params: CommandParams(
                     directive: pending.directive, configuration: pending.configuration
                 ),
-                nextStep: Step.confirmingArm
+                nextStep: Step.confirmingArm.rawValue
             )
         }
         return .dispatch(
             kind: OperationKind.simple("activate"), deviceCode: pending.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingArm
+            params: CommandParams(), nextStep: Step.confirmingArm.rawValue
         )
     }
 
@@ -478,10 +479,10 @@ public struct MineRun: MissionStepMachine {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
         guard targets.contains(where: { Self.armState($0, in: world) < 2 }) else {
-            return .advanceStep(nextStep: Step.arming)
+            return .advanceStep(nextStep: Step.arming.rawValue)
         }
         let ordered = MissionLogBudget.lastDispatch(
-            world, dispatch: Step.arming, confirm: Step.confirmingArm
+            world, dispatch: Step.arming.rawValue, confirm: Step.confirmingArm.rawValue
         )
         if case let .dispatched(kind, deviceCode) = ordered,
            let judged = targets.first(where: { $0.deviceCode == deviceCode }),
@@ -489,11 +490,11 @@ public struct MineRun: MissionStepMachine {
             let landed = kind == OperationKind.setDirective.rawValue
                 ? Self.armState(judged, in: world) >= 1
                 : Self.armState(judged, in: world) == 2
-            return landed ? .advanceStep(nextStep: Step.arming) : Self.armLadder(device, directive, world)
+            return landed ? .advanceStep(nextStep: Step.arming.rawValue) : Self.armLadder(device, directive, world)
         }
         // A resolved stall re-enters holding no record of its own order, and
         // `arming` is the only step that can send one.
-        if ordered == .nothingSent { return .advanceStep(nextStep: Step.arming) }
+        if ordered == .nothingSent { return .advanceStep(nextStep: Step.arming.rawValue) }
         guard let pending = targets.first(where: { Self.armState($0, in: world) < 2 }),
               let device = world.device(pending.deviceCode)
         else { return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete) }
@@ -520,7 +521,7 @@ public struct MineRun: MissionStepMachine {
         if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
         return .dispatch(
             kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: hub), nextStep: Step.returning
+            params: CommandParams(destination: hub), nextStep: Step.returning.rawValue
         )
     }
 

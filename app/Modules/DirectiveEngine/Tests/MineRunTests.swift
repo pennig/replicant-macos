@@ -187,12 +187,12 @@ private func armLog(_ sent: [(kind: OperationKind, deviceCode: String)]) -> [Dir
     var out: [DirectiveLogEntry] = []
     for (i, command) in sent.enumerated() {
         let base = now.addingTimeInterval(Double(i - sent.count) * 10)
-        out.append(logEntry(MineRun.Step.arming, at: base))
-        out.append(logEntry(MineRun.Step.confirmingArm, at: base.addingTimeInterval(1)))
+        out.append(logEntry(MineRun.Step.arming.rawValue, at: base))
+        out.append(logEntry(MineRun.Step.confirmingArm.rawValue, at: base.addingTimeInterval(1)))
         out.append(DirectiveLogEntry(
             id: "C-\(i)", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
             summary: "Dispatched \(command.kind.rawValue) to \(command.deviceCode)",
-            step: MineRun.Step.confirmingArm, operationID: nil, eventID: nil,
+            step: MineRun.Step.confirmingArm.rawValue, operationID: nil, eventID: nil,
             occurredAt: base.addingTimeInterval(1)
         ))
     }
@@ -215,7 +215,7 @@ private func markerEntry(
 /// `DirectiveExecutor.dispatchSummary` would produce.
 private let unreadableDispatch = DirectiveLogEntry(
     id: "C-X", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
-    summary: "sent something somewhere", step: MineRun.Step.confirmingArm,
+    summary: "sent something somewhere", step: MineRun.Step.confirmingArm.rawValue,
     operationID: nil, eventID: nil, occurredAt: now.addingTimeInterval(-5)
 )
 
@@ -283,7 +283,7 @@ private func world(
 /// `theatreDepot` defaults to the file's canonical hub so a fixture that
 /// recognises one there resolves it without every call site stamping it.
 private func mineRunRow(
-    step: String = MineRun.Step.preflight,
+    step: String = MineRun.Step.preflight.rawValue,
     targets: [String] = [targetBelt],
     stepStartedAt: Date = now.addingTimeInterval(-60),
     deviceCode: String = carrierCode,
@@ -320,8 +320,8 @@ private func attachLog(rounds: Int) -> [DirectiveLogEntry] {
     var out: [DirectiveLogEntry] = []
     for i in 0..<rounds {
         let base = now.addingTimeInterval(Double(i - rounds) * 10)
-        out.append(logEntry(MineRun.Step.attaching, at: base))
-        out.append(logEntry(MineRun.Step.confirmingAttach, at: base.addingTimeInterval(1)))
+        out.append(logEntry(MineRun.Step.attaching.rawValue, at: base))
+        out.append(logEntry(MineRun.Step.confirmingAttach.rawValue, at: base.addingTimeInterval(1)))
     }
     return out
 }
@@ -355,7 +355,15 @@ struct MineRunTests {
     @Test("the engine runs mineRun rows through this machine")
     func isRegistered() {
         #expect(MissionRegistry.machine(for: .mineRun) is MineRun)
-        #expect(MissionRegistry.firstStep(for: .mineRun) == MineRun.Step.preflight)
+        #expect(MissionRegistry.firstStep(for: .mineRun) == MineRun.Step.preflight.rawValue)
+    }
+
+    @Test func stepVocabularyIsFrozen() {
+        #expect(MineRun.Step.allCases.map(\.rawValue) == [
+            "preflight", "attaching", "confirmingAttach", "travelling", "confirmingArrival",
+            "detaching", "confirmingDetach", "adopting", "confirmingAdopt", "arming",
+            "confirmingArm", "returning",
+        ])
     }
 
     /// The run delivers one fleet to one belt; it plans no targets of its own.
@@ -464,7 +472,7 @@ struct MineRunTests {
         let snapshot = world(devices: carriedFleet() + [mineCarrier(), beltRelay])
 
         #expect(MineRun().nextAction(directive: mineRunRow(), world: snapshot)
-                == .advanceStep(nextStep: MineRun.Step.attaching))
+                == .advanceStep(nextStep: MineRun.Step.attaching.rawValue))
     }
 
     // MARK: Attaching
@@ -476,11 +484,11 @@ struct MineRunTests {
         let snapshot = world(devices: carriedFleet() + [mineCarrier(), beltRelay])
 
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.attaching), world: snapshot)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.attaching.rawValue), world: snapshot)
                 == .dispatch(
                     kind: .attach, deviceCode: carrierCode,
                     params: CommandParams(devices: ["M01"]),
-                    nextStep: MineRun.Step.confirmingAttach
+                    nextStep: MineRun.Step.confirmingAttach.rawValue
                 )
         )
     }
@@ -490,14 +498,14 @@ struct MineRunTests {
     @Test("a part-attached fleet dispatches the next member, twice over")
     func attachChoiceIsStable() {
         let snapshot = world(devices: carriedFleet(attached: 4) + [mineCarrier(), beltRelay])
-        let directive = mineRunRow(step: MineRun.Step.attaching)
+        let directive = mineRunRow(step: MineRun.Step.attaching.rawValue)
 
         let first = MineRun().nextAction(directive: directive, world: snapshot)
         let second = MineRun().nextAction(directive: directive, world: snapshot)
 
         #expect(first == .dispatch(
             kind: .attach, deviceCode: carrierCode, params: CommandParams(devices: ["M05"]),
-            nextStep: MineRun.Step.confirmingAttach
+            nextStep: MineRun.Step.confirmingAttach.rawValue
         ))
         #expect(first == second)
     }
@@ -506,8 +514,8 @@ struct MineRunTests {
     func fullyAttachedFleetTravels() {
         let snapshot = world(devices: carriedFleet(attached: 9) + [mineCarrier(), beltRelay])
 
-        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.attaching), world: snapshot)
-                == .advanceStep(nextStep: MineRun.Step.travelling))
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.attaching.rawValue), world: snapshot)
+                == .advanceStep(nextStep: MineRun.Step.travelling.rawValue))
     }
 
     // MARK: Confirming an attach
@@ -523,8 +531,8 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingAttach), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.attaching)
+                directive: mineRunRow(step: MineRun.Step.confirmingAttach.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.attaching.rawValue)
         )
     }
 
@@ -540,7 +548,7 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingAttach), world: snapshot
+                directive: mineRunRow(step: MineRun.Step.confirmingAttach.rawValue), world: snapshot
             ) == .refreshDevices(deviceCodes: ["M01"], thenStall: nil)
         )
     }
@@ -555,7 +563,7 @@ struct MineRunTests {
             log: attachLog(rounds: 1)
         )
         let directive = mineRunRow(
-            step: MineRun.Step.confirmingAttach,
+            step: MineRun.Step.confirmingAttach.rawValue,
             stepStartedAt: now.addingTimeInterval(-(MineRun.attachConfirmDeadline + 60))
         )
 
@@ -575,8 +583,8 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingAttach), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.attaching)
+                directive: mineRunRow(step: MineRun.Step.confirmingAttach.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.attaching.rawValue)
         )
     }
 
@@ -592,7 +600,7 @@ struct MineRunTests {
                 + [mineCarrier(), beltRelay],
             log: attachLog(rounds: 2)
         )
-        let directive = mineRunRow(step: MineRun.Step.confirmingAttach)
+        let directive = mineRunRow(step: MineRun.Step.confirmingAttach.rawValue)
 
         #expect(MineRun().nextAction(directive: directive, world: fresh) == .wait)
         #expect(MineRun().nextAction(directive: directive, world: unread)
@@ -611,7 +619,7 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingAttach), world: snapshot
+                directive: mineRunRow(step: MineRun.Step.confirmingAttach.rawValue), world: snapshot
             ) == .wait
         )
     }
@@ -623,11 +631,11 @@ struct MineRunTests {
         let snapshot = world(devices: carriedFleet(attached: 9) + [mineCarrier(), beltRelay])
 
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.travelling), world: snapshot)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.travelling.rawValue), world: snapshot)
                 == .dispatch(
                     kind: .travel, deviceCode: carrierCode,
                     params: CommandParams(destination: targetBelt),
-                    nextStep: MineRun.Step.confirmingArrival
+                    nextStep: MineRun.Step.confirmingArrival.rawValue
                 )
         )
     }
@@ -643,7 +651,7 @@ struct MineRunTests {
             dispatchedOperations: closedTravel()
         )
 
-        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.travelling), world: snapshot)
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.travelling.rawValue), world: snapshot)
                 == .wait)
     }
 
@@ -656,8 +664,8 @@ struct MineRunTests {
                 + [mineCarrier(location: targetBelt), beltRelay]
         )
 
-        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.travelling), world: snapshot)
-                == .advanceStep(nextStep: MineRun.Step.detaching))
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.travelling.rawValue), world: snapshot)
+                == .advanceStep(nextStep: MineRun.Step.detaching.rawValue))
     }
 
     // MARK: Confirming the arrival
@@ -671,8 +679,8 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingArrival), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.detaching)
+                directive: mineRunRow(step: MineRun.Step.confirmingArrival.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.detaching.rawValue)
         )
     }
 
@@ -687,7 +695,7 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingArrival), world: snapshot
+                directive: mineRunRow(step: MineRun.Step.confirmingArrival.rawValue), world: snapshot
             ) == .wait
         )
     }
@@ -704,11 +712,11 @@ struct MineRunTests {
         )
 
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.detaching), world: snapshot)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.detaching.rawValue), world: snapshot)
                 == .dispatch(
                     kind: .detach, deviceCode: carrierCode,
                     params: CommandParams(devices: (1...9).map { "M\(String(format: "%02d", $0))" }),
-                    nextStep: MineRun.Step.confirmingDetach
+                    nextStep: MineRun.Step.confirmingDetach.rawValue
                 )
         )
     }
@@ -723,8 +731,8 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingDetach), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.adopting)
+                directive: mineRunRow(step: MineRun.Step.confirmingDetach.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.adopting.rawValue)
         )
     }
 
@@ -737,7 +745,7 @@ struct MineRunTests {
         )
 
         let action = MineRun().nextAction(
-            directive: mineRunRow(step: MineRun.Step.confirmingDetach), world: snapshot
+            directive: mineRunRow(step: MineRun.Step.confirmingDetach.rawValue), world: snapshot
         )
         guard case let .refreshDevices(codes, thenStall) = action else {
             Issue.record("expected a device read, got \(action)")
@@ -757,11 +765,11 @@ struct MineRunTests {
         )
 
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting.rawValue), world: snapshot)
                 == .dispatch(
                     kind: .adopt, deviceCode: "M01",
                     params: CommandParams(devices: ["M02", "M03", "M04"]),
-                    nextStep: MineRun.Step.confirmingAdopt
+                    nextStep: MineRun.Step.confirmingAdopt.rawValue
                 )
         )
     }
@@ -774,11 +782,11 @@ struct MineRunTests {
         )
 
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting.rawValue), world: snapshot)
                 == .dispatch(
                     kind: .adopt, deviceCode: "M05",
                     params: CommandParams(devices: ["M06", "M07"]),
-                    nextStep: MineRun.Step.confirmingAdopt
+                    nextStep: MineRun.Step.confirmingAdopt.rawValue
                 )
         )
     }
@@ -793,11 +801,11 @@ struct MineRunTests {
         )
 
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting.rawValue), world: snapshot)
                 == .dispatch(
                     kind: .adopt, deviceCode: transportCode,
                     params: CommandParams(devices: [freighterCode]),
-                    nextStep: MineRun.Step.confirmingAdopt
+                    nextStep: MineRun.Step.confirmingAdopt.rawValue
                 )
         )
     }
@@ -810,8 +818,8 @@ struct MineRunTests {
         )
 
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
-                == .advanceStep(nextStep: MineRun.Step.arming)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting.rawValue), world: snapshot)
+                == .advanceStep(nextStep: MineRun.Step.arming.rawValue)
         )
     }
 
@@ -824,7 +832,7 @@ struct MineRunTests {
         )
 
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting.rawValue), world: snapshot)
                 == .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         )
     }
@@ -840,13 +848,13 @@ struct MineRunTests {
                 adoptedBy: ["M02": "M01", "M03": "M01", "M04": "M01"],
                 updatedAt: now.addingTimeInterval(-61)
             ) + transportPair() + [mineCarrier(location: targetBelt), beltRelay],
-            log: loopLog(MineRun.Step.adopting, MineRun.Step.confirmingAdopt, rounds: 1)
+            log: loopLog(MineRun.Step.adopting.rawValue, MineRun.Step.confirmingAdopt.rawValue, rounds: 1)
         )
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingAdopt), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.adopting)
+                directive: mineRunRow(step: MineRun.Step.confirmingAdopt.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.adopting.rawValue)
         )
     }
 
@@ -859,12 +867,12 @@ struct MineRunTests {
                 adoptedBy: ["M02": "M01", "M03": "M01", "M04": "M01"],
                 updatedAt: now.addingTimeInterval(-300)
             ) + transportPair() + [mineCarrier(location: targetBelt), beltRelay],
-            log: loopLog(MineRun.Step.adopting, MineRun.Step.confirmingAdopt, rounds: 2)
+            log: loopLog(MineRun.Step.adopting.rawValue, MineRun.Step.confirmingAdopt.rawValue, rounds: 2)
         )
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingAdopt), world: snapshot
+                directive: mineRunRow(step: MineRun.Step.confirmingAdopt.rawValue), world: snapshot
             ) == .refreshDevices(deviceCodes: ["M06", "M07"], thenStall: nil)
         )
     }
@@ -876,16 +884,16 @@ struct MineRunTests {
     func retriedAdoptStallReturnsToAdopting() {
         let snapshot = world(
             devices: beltFleet() + transportPair() + [mineCarrier(location: targetBelt), beltRelay],
-            log: loopLog(MineRun.Step.adopting, MineRun.Step.confirmingAdopt, rounds: 1) + [
-                markerEntry(.stalled, on: MineRun.Step.confirmingAdopt, at: now.addingTimeInterval(-3)),
-                markerEntry(.resolved, on: MineRun.Step.confirmingAdopt, at: now.addingTimeInterval(-2)),
+            log: loopLog(MineRun.Step.adopting.rawValue, MineRun.Step.confirmingAdopt.rawValue, rounds: 1) + [
+                markerEntry(.stalled, on: MineRun.Step.confirmingAdopt.rawValue, at: now.addingTimeInterval(-3)),
+                markerEntry(.resolved, on: MineRun.Step.confirmingAdopt.rawValue, at: now.addingTimeInterval(-2)),
             ]
         )
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingAdopt), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.adopting)
+                directive: mineRunRow(step: MineRun.Step.confirmingAdopt.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.adopting.rawValue)
         )
     }
 
@@ -894,10 +902,10 @@ struct MineRunTests {
         let snapshot = world(
             devices: beltFleet(updatedAt: now.addingTimeInterval(-900)) + transportPair()
                 + [mineCarrier(location: targetBelt), beltRelay],
-            log: loopLog(MineRun.Step.adopting, MineRun.Step.confirmingAdopt, rounds: 1)
+            log: loopLog(MineRun.Step.adopting.rawValue, MineRun.Step.confirmingAdopt.rawValue, rounds: 1)
         )
         let directive = mineRunRow(
-            step: MineRun.Step.confirmingAdopt,
+            step: MineRun.Step.confirmingAdopt.rawValue,
             stepStartedAt: now.addingTimeInterval(-(MineRun.attachConfirmDeadline + 60))
         )
 
@@ -924,11 +932,11 @@ struct MineRunTests {
     func armStartsWithTheMiningController() {
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.arming), world: armedWorld([:])
+                directive: mineRunRow(step: MineRun.Step.arming.rawValue), world: armedWorld([:])
             ) == .dispatch(
                 kind: .setDirective, deviceCode: "M01",
                 params: CommandParams(directive: "gather_evenly", configuration: nil),
-                nextStep: MineRun.Step.confirmingArm
+                nextStep: MineRun.Step.confirmingArm.rawValue
             )
         )
     }
@@ -940,10 +948,10 @@ struct MineRunTests {
         let snapshot = armedWorld(["M01": (name: "gather_evenly", status: "paused", config: [:])])
 
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming.rawValue), world: snapshot)
                 == .dispatch(
                     kind: OperationKind.simple("activate"), deviceCode: "M01",
-                    params: CommandParams(), nextStep: MineRun.Step.confirmingArm
+                    params: CommandParams(), nextStep: MineRun.Step.confirmingArm.rawValue
                 )
         )
     }
@@ -952,7 +960,7 @@ struct MineRunTests {
     func armDispatchesTheFerryLast() {
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.arming), world: armedWorld(armedCarried)
+                directive: mineRunRow(step: MineRun.Step.arming.rawValue), world: armedWorld(armedCarried)
             ) == .dispatch(
                 kind: .setDirective, deviceCode: transportCode,
                 params: CommandParams(
@@ -962,7 +970,7 @@ struct MineRunTests {
                         "deliver": .string(HaulRun.deliveryLocation),
                     ]
                 ),
-                nextStep: MineRun.Step.confirmingArm
+                nextStep: MineRun.Step.confirmingArm.rawValue
             )
         )
     }
@@ -974,7 +982,7 @@ struct MineRunTests {
             ferry: (collect: targetBelt, deliver: HaulRun.deliveryLocation, status: "active")
         )
 
-        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming.rawValue), world: snapshot)
                 == .done)
     }
 
@@ -997,7 +1005,7 @@ struct MineRunTests {
         )
 
         #expect(HaulRun.deliverySink(in: snapshot, for: mineRunRow()) == hubLocation)
-        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming.rawValue), world: snapshot)
                 == .done)
     }
 
@@ -1021,7 +1029,7 @@ struct MineRunTests {
         let pair = try #require(MineRun.transport(of: mineRunRow(), in: snapshot))
         #expect(pair.controller.deviceCode == transportCode)
         #expect(pair.freighter.deviceCode == freighterCode)
-        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming.rawValue), world: snapshot)
                 == .done)
     }
 
@@ -1031,11 +1039,11 @@ struct MineRunTests {
     func spareControllerDoesNotStallAnInstalledFleet() {
         let snapshot = installedWorld(spare: sparePair(freighter: false))
 
-        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming.rawValue), world: snapshot)
                 == .done)
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting), world: snapshot)
-                == .advanceStep(nextStep: MineRun.Step.arming)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.adopting.rawValue), world: snapshot)
+                == .advanceStep(nextStep: MineRun.Step.arming.rawValue)
         )
     }
 
@@ -1088,7 +1096,7 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.arming, targets: [sameSystemBelt]), world: snapshot
+                directive: mineRunRow(step: MineRun.Step.arming.rawValue, targets: [sameSystemBelt]), world: snapshot
             ) == .done
         )
     }
@@ -1105,8 +1113,8 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.arming)
+                directive: mineRunRow(step: MineRun.Step.confirmingArm.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.arming.rawValue)
         )
     }
 
@@ -1126,8 +1134,8 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.arming)
+                directive: mineRunRow(step: MineRun.Step.confirmingArm.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.arming.rawValue)
         )
     }
 
@@ -1142,14 +1150,14 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.arming)
+                directive: mineRunRow(step: MineRun.Step.confirmingArm.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.arming.rawValue)
         )
         #expect(
-            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming), world: snapshot)
+            MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.arming.rawValue), world: snapshot)
                 == .dispatch(
                     kind: OperationKind.simple("activate"), deviceCode: "M01",
-                    params: CommandParams(), nextStep: MineRun.Step.confirmingArm
+                    params: CommandParams(), nextStep: MineRun.Step.confirmingArm.rawValue
                 )
         )
     }
@@ -1165,7 +1173,7 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
+                directive: mineRunRow(step: MineRun.Step.confirmingArm.rawValue), world: snapshot
             ) == .wait
         )
     }
@@ -1182,7 +1190,7 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
+                directive: mineRunRow(step: MineRun.Step.confirmingArm.rawValue), world: snapshot
             ) == .wait
         )
     }
@@ -1195,15 +1203,15 @@ struct MineRunTests {
         let snapshot = armedWorld(
             [:],
             log: armLog([(.setDirective, "M01")]) + [
-                markerEntry(.stalled, on: MineRun.Step.confirmingArm, at: now.addingTimeInterval(-3)),
-                markerEntry(.resolved, on: MineRun.Step.confirmingArm, at: now.addingTimeInterval(-2)),
+                markerEntry(.stalled, on: MineRun.Step.confirmingArm.rawValue, at: now.addingTimeInterval(-3)),
+                markerEntry(.resolved, on: MineRun.Step.confirmingArm.rawValue, at: now.addingTimeInterval(-2)),
             ]
         )
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
-            ) == .advanceStep(nextStep: MineRun.Step.arming)
+                directive: mineRunRow(step: MineRun.Step.confirmingArm.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.arming.rawValue)
         )
     }
 
@@ -1215,7 +1223,7 @@ struct MineRunTests {
 
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.confirmingArm), world: snapshot
+                directive: mineRunRow(step: MineRun.Step.confirmingArm.rawValue), world: snapshot
             ) == .wait
         )
     }
@@ -1232,7 +1240,7 @@ struct MineRunTests {
             log: armLog([(.setDirective, "M01"), (.setDirective, "M05"), (.setDirective, "M08")])
         )
         let directive = mineRunRow(
-            step: MineRun.Step.confirmingArm,
+            step: MineRun.Step.confirmingArm.rawValue,
             stepStartedAt: now.addingTimeInterval(-(MineRun.attachConfirmDeadline + 60))
         )
 
@@ -1246,7 +1254,7 @@ struct MineRunTests {
     func unarmedControllerSurfaces() {
         let snapshot = armedWorld([:], log: armLog([(.setDirective, "M01")]))
         let directive = mineRunRow(
-            step: MineRun.Step.confirmingArm,
+            step: MineRun.Step.confirmingArm.rawValue,
             stepStartedAt: now.addingTimeInterval(-(MineRun.attachConfirmDeadline + 60))
         )
 
@@ -1285,9 +1293,9 @@ struct MineRunTests {
     func armedFleetReturnsTheCarrier() {
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.arming, returnToOrigin: true),
+                directive: mineRunRow(step: MineRun.Step.arming.rawValue, returnToOrigin: true),
                 world: returningWorld(carrierAt: targetBelt)
-            ) == .advanceStep(nextStep: MineRun.Step.returning)
+            ) == .advanceStep(nextStep: MineRun.Step.returning.rawValue)
         )
     }
 
@@ -1297,12 +1305,12 @@ struct MineRunTests {
     func returnDispatchesTravelToTheHub() {
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                directive: mineRunRow(step: MineRun.Step.returning.rawValue, returnToOrigin: true),
                 world: returningWorld(carrierAt: targetBelt)
             ) == .dispatch(
                 kind: .travel, deviceCode: carrierCode,
                 params: CommandParams(destination: hubLocation),
-                nextStep: MineRun.Step.returning
+                nextStep: MineRun.Step.returning.rawValue
             )
         )
     }
@@ -1311,7 +1319,7 @@ struct MineRunTests {
     func carrierHomeFinishes() {
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                directive: mineRunRow(step: MineRun.Step.returning.rawValue, returnToOrigin: true),
                 world: returningWorld(carrierAt: hubLocation)
             ) == .done
         )
@@ -1322,7 +1330,7 @@ struct MineRunTests {
     func noHubFinishes() {
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                directive: mineRunRow(step: MineRun.Step.returning.rawValue, returnToOrigin: true),
                 world: returningWorld(carrierAt: targetBelt, hub: false)
             ) == .done
         )
@@ -1332,7 +1340,7 @@ struct MineRunTests {
     func openTravelHoldsTheReturn() {
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                directive: mineRunRow(step: MineRun.Step.returning.rawValue, returnToOrigin: true),
                 world: returningWorld(carrierAt: targetBelt, openOperations: openTravel())
             ) == .wait
         )
@@ -1344,7 +1352,7 @@ struct MineRunTests {
     func returnWaitsOnTheArrivalWatermark() {
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.returning, returnToOrigin: true),
+                directive: mineRunRow(step: MineRun.Step.returning.rawValue, returnToOrigin: true),
                 world: returningWorld(
                     carrierAt: targetBelt, dispatchedOperations: closedTravel(),
                     carrierUpdatedAt: now.addingTimeInterval(-5.139)
@@ -1359,7 +1367,7 @@ struct MineRunTests {
     func withoutTheFlagTheRunFinishesAtTheBelt() {
         #expect(
             MineRun().nextAction(
-                directive: mineRunRow(step: MineRun.Step.arming),
+                directive: mineRunRow(step: MineRun.Step.arming.rawValue),
                 world: returningWorld(carrierAt: targetBelt)
             ) == .done
         )
@@ -1425,7 +1433,7 @@ struct MineRunEngineTests {
             for _ in 0..<24 {
                 await core.evaluateOnce(directiveID: "D1")
                 let now = try await step(database)
-                if now == MineRun.Step.travelling {
+                if now == MineRun.Step.travelling.rawValue {
                     reached.setValue(now)
                     break
                 }
@@ -1435,7 +1443,7 @@ struct MineRunEngineTests {
         #expect(ordered.value == (1...9).map { "M\(String(format: "%02d", $0))" },
                 "every round attaches the NEXT member, so the loop ran nine times")
         #expect(reads.value.isEmpty, "and confirmed each one without buying a device read")
-        #expect(reached.value == MineRun.Step.travelling)
+        #expect(reached.value == MineRun.Step.travelling.rawValue)
 
         let row = try #require(
             await database.read { db in try Directive.where { $0.id.eq("D1") }.fetchOne(db) }
@@ -1446,7 +1454,7 @@ struct MineRunEngineTests {
 
     private func seedForAdoption(_ database: any DatabaseWriter) async throws {
         try await database.write { db in
-            try Directive.insert { mineRunRow(step: MineRun.Step.adopting) }.execute(db)
+            try Directive.insert { mineRunRow(step: MineRun.Step.adopting.rawValue) }.execute(db)
             let rows = beltFleet() + transportPair()
                 + [mineCarrier(location: targetBelt), beltRelay]
             for row in rows { try Device.upsert { row }.execute(db) }
@@ -1494,7 +1502,7 @@ struct MineRunEngineTests {
             for _ in 0..<12 {
                 await core.evaluateOnce(directiveID: "D1")
                 let now = try await step(database)
-                if now == MineRun.Step.arming {
+                if now == MineRun.Step.arming.rawValue {
                     reached.setValue(now)
                     break
                 }
@@ -1503,7 +1511,7 @@ struct MineRunEngineTests {
 
         #expect(ordered.value == [["M02", "M03", "M04"], ["M06", "M07"], [freighterCode]])
         #expect(reads.value.isEmpty, "and confirmed each one without buying a device read")
-        #expect(reached.value == MineRun.Step.arming)
+        #expect(reached.value == MineRun.Step.arming.rawValue)
 
         let row = try #require(
             await database.read { db in try Directive.where { $0.id.eq("D1") }.fetchOne(db) }
@@ -1517,7 +1525,7 @@ struct MineRunEngineTests {
 
     private func seedForArming(_ database: any DatabaseWriter) async throws {
         try await database.write { db in
-            try Directive.insert { mineRunRow(step: MineRun.Step.arming) }.execute(db)
+            try Directive.insert { mineRunRow(step: MineRun.Step.arming.rawValue) }.execute(db)
             let rows = Self.armedRows + [mineCarrier(location: targetBelt), beltRelay]
             for row in rows { try Device.upsert { row }.execute(db) }
         }
