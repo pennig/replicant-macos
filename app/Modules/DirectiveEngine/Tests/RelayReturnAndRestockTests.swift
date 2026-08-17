@@ -346,6 +346,17 @@ struct RestockRunTests {
         ))
     }
 
+    /// The headline case's own world, on an unrecognised step: `stocking`
+    /// would print here, so a fallback to it cannot pass this alongside
+    /// `.wait`.
+    @Test("an unknown step waits rather than falling through to stocking")
+    func unknownStepWaits() {
+        let directive = restockRun(step: "not-a-real-step", targets: ["VEGA", "ALTAIR"])
+        let snapshot = world(devices: [hub(), liveRelay("REL0", at: hubLocation)])
+
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
     /// Enough spares already standing for the demand on the row — stop. The
     /// printer is not run for its own sake.
     @Test("a pool that already meets demand waits")

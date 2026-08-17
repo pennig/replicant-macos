@@ -78,7 +78,7 @@ public struct HaulRun: MissionStepMachine {
     /// waits rather than dispatching — waiting is inert, guessing commands the fleet.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
         guard let step = Step(rawValue: directive.step) else {
-            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
+            logger.notice("\(kind.rawValue, privacy: .public) \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
         }
         switch step {

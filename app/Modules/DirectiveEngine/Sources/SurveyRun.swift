@@ -138,7 +138,7 @@ public struct SurveyRun: MissionStepMachine {
             return .stall(.unreachableDevice)
         }
         guard let step = Step(rawValue: directive.step) else {
-            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
+            logger.notice("\(kind.rawValue, privacy: .public) \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
         }
         switch step {

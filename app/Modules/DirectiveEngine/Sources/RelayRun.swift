@@ -119,7 +119,7 @@ public struct RelayRun: MissionStepMachine {
         }
         guard let step = Step(rawValue: directive.step) else {
             // Waiting is inert and recoverable; guessing would command the fleet.
-            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
+            logger.notice("\(kind.rawValue, privacy: .public) \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
         }
         switch step {
