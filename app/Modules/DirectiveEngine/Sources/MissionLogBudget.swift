@@ -41,9 +41,15 @@ public enum MissionLogBudget {
                 guard let step = entry.step, step == dispatch || step == confirm else { break }
                 continue
             }
-            guard entry.kind == .commandDispatched, entry.step == confirm,
-                  entry.commandKind == kind.rawValue
-            else { continue }
+            guard entry.kind == .commandDispatched, entry.step == confirm else { continue }
+            if let commandKind = entry.commandKind {
+                guard commandKind == kind.rawValue else { continue }
+            } else {
+                // Legacy row written before the columns existed; Stage 2 deletes this.
+                let words = entry.summary.split(separator: " ")
+                guard words.count >= 2, words[0] == "Dispatched", words[1] == kind.rawValue
+                else { continue }
+            }
             count += 1
         }
         return count

@@ -127,6 +127,22 @@ struct MissionLogBudgetTests {
         #expect(counted == 2)
     }
 
+    /// Legacy rows carry the verb only in the prose, so the fallback is the
+    /// only thing that can count them. Delete it and this reads 0. Stage 2
+    /// deletes both.
+    @Test func dispatchRoundsCountsLegacyRowsFromTheSummary() {
+        let log = [
+            stepEntry(dispatchStep, at: now.addingTimeInterval(-60)),
+            legacyDispatch(summary: "Dispatched travel to V1 — SOL", at: now.addingTimeInterval(-50)),
+            legacyDispatch(summary: "Dispatched travel to V2 — SOL", at: now.addingTimeInterval(-40)),
+            legacyDispatch(summary: "Dispatched attach to V3", at: now.addingTimeInterval(-30)),
+        ]
+        let counted = MissionLogBudget.dispatchRounds(
+            world(log), dispatch: dispatchStep, confirm: confirmStep, kind: .travel
+        )
+        #expect(counted == 2)
+    }
+
     /// The count is the CURRENT run's: an entry from before the loop was
     /// entered belongs to an earlier visit and cannot spend this visit's budget.
     @Test func dispatchRoundsStopsAtAnUnrelatedStep() {
