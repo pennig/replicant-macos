@@ -71,7 +71,9 @@ enum DirectiveExecutor {
                 case let .accepted(operationID):
                     var updated = directive
                     updated.step = nextStep
-                    updated.stepStartedAt = date.now
+                    // Same-step keeps its stamp, as in `move`: the stamp bounds
+                    // both the step deadline and the governor's dedup window.
+                    if nextStep != directive.step { updated.stepStartedAt = date.now }
                     updated.updatedAt = date.now
                     await commit(updated, [
                         entry(directive, .stepStarted, "Step: \(nextStep)",

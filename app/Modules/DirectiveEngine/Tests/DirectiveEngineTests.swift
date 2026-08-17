@@ -226,9 +226,13 @@ struct DirectiveEngineTests {
         }
     }
 
-    /// The `ab36b7d` end-to-end proof, over the REAL governor (only the network
-    /// client is stubbed): only the first tick reaches it, ticks 2 and 3 are
-    /// refused as duplicates, and `stepStartedAt` stops moving after tick 1.
+    /// The end-to-end proof, over the REAL governor (only the network client is
+    /// stubbed): only the first tick reaches it, ticks 2 and 3 are refused as
+    /// duplicates, and the same-step stamp never moves.
+    ///
+    /// The clock ADVANCES on every reading, as production's does: the op row is
+    /// written before the step stamp that follows it, so a re-stamp would carry
+    /// the dedup window past the row and re-issue the command every tick.
     @Test func sameStepDispatchReachesTheClientOnceOverTheRealGovernor() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -237,24 +241,32 @@ struct DirectiveEngineTests {
         let core = DirectiveEngineCore(machines: [SameStepDispatchMachine()], tick: .seconds(5))
         let governor = CommandGovernor()
         let calls = LockIsolated(0)
+        let readings = LockIsolated(0.0)
 
-        try await withDependencies {
+        await withDependencies {
             $0.defaultDatabase = database
-            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.date = DateGenerator {
+                readings.withValue { reading in
+                    reading += 1
+                    return Date(timeIntervalSince1970: 1_000 + reading)
+                }
+            }
             $0.uuid = .incrementing
             $0.gameClient = GameClient(
                 make: { ReplicantSpace.client(apiKey: "") },
                 budget: { _ in RateLimitGovernor.Snapshot(limit: 60, remaining: 40, resetAt: nil) }
             )
             $0.commandClient.dispatchOwned = { kind, deviceCode, params, owner in
+                @Dependency(\.date) var date
                 calls.withValue { $0 += 1 }
+                let stamp = date.now
                 try? await database.write { db in
                     try GameModels.Operation.insert {
                         GameModels.Operation(
                             id: "OP\(calls.value)", entityCode: deviceCode, kind: kind.rawValue,
                             status: .completed, source: .optimistic,
-                            startedAt: Date(timeIntervalSince1970: 1_000), completesAt: nil,
-                            lastConfirmedAt: Date(timeIntervalSince1970: 1_000), detail: .object([:]),
+                            startedAt: stamp, completesAt: nil,
+                            lastConfirmedAt: stamp, detail: .object([:]),
                             directiveID: owner?.directiveID, step: owner?.step, paramsDigest: params.dedupKey
                         )
                     }.execute(db)
@@ -275,8 +287,8 @@ struct DirectiveEngineTests {
             try Directive.where { $0.id.eq("D1") }.fetchOne(db)
         }
         #expect(directive?.step == "activating")
-        #expect(directive?.stepStartedAt == Date(timeIntervalSince1970: 1_000),
-                 "the accepted first tick stamps it once; deferred ticks must not re-stamp")
+        #expect(directive?.stepStartedAt == Date(timeIntervalSince1970: 0),
+                 "a dispatch that stays in its own step must leave the stamp alone")
     }
 
     /// A REJECTED command stalls the mission with `commandRejected` — the
