@@ -44,6 +44,17 @@ Small things deliberately not fixed when they were found, kept here so they are 
   `theatre-readiness-starves-richer-depots` note. **The cheapest middle path is not changing the sticky
   rule but giving `.claimed(missing: [.noStock])` on a sticky depot a visible surface.**
 
+- [ ] **Two membership rules disagree about a device wearing an unscoped AND a foreign scoped tag.**
+  `SurveyRun.wearsFleetTag`/`SalvageRun.wearsFleetTag` (`carries(_, .exactOrUnscoped)`) call it this
+  theatre's; `FleetMembership.belongs` calls it the other theatre's. Stage 1's final review asked for the
+  first to be routed through the second, and that was tried and reverted: `belongs` places a bare-tagged
+  device by location, so a stowed or mid-cruise one belongs to no theatre and vanishes from both
+  diagnostic pools — which exist precisely to name an un-migrated bare-tagged vessel the operator can act
+  on. Applying it failed 9 assertions across 6 tests that pin the opposite deliberately. All four callers
+  are diagnostic-only, so the live cost today is a misattributed idle reason. **Resolving it properly needs
+  a third rule** — "this theatre's member, OR a bare-tagged orphan no theatre can place" — which is a
+  design decision, not a refactor.
+
 ## Measurements owed
 
 - [ ] **Ticket 08's live-stream lag numbers.** The ≥500-event replay proves the route body makes zero network calls; the before/after `EventPipeline` lag under a real stream was never measured, because it needs a logged-in app. Collect during Checkpoint A from the OSLog `catch-up …` lines.
@@ -70,11 +81,14 @@ Small things deliberately not fixed when they were found, kept here so they are 
   the operator must literally type, so this may be correct as-is — it is a UI consistency question, and
   no test asserts either form.
 
-- [ ] **`DeviceListAttention.covers` is correct only because its caller passes a one-device fleet.** It
-  routes through `Ownership.resolve` over a synthetic single-device fleet, deliberately truncating the
-  stow/attach closure. The doc says so, but a future "bug fix" passing the real fleet would silently
-  make every stowed drone inherit its carrier's run's attention flag. `DeviceListAttention.swift`.
-  A named seeds-only entry point on `Ownership` would be safer than a `resolve` over a synthetic fleet.
+- [ ] **`DeviceListAttention.covers` resolves over a synthetic one-device fleet.** Stage 1's final review
+  established what this actually does, correcting an earlier framing here: `Ownership.dragEdges` drops any
+  edge whose target is absent from the dictionary, so with one device present the join fires on the row's
+  own columns **plus one hop down** stow/attach/adoption from them. That widening was accepted
+  deliberately — a drone aboard a stalled run's carrier is worth flagging — and is now documented and
+  tested. What remains deferred is the shape: a named seeds-only entry point on `Ownership` would be safer
+  than a `resolve` over a synthetic fleet, whose behaviour depends on which endpoint happens to be in the
+  dictionary. `DeviceListAttention.swift`.
 - [ ] **`DirectiveGroup.missionKeys` still hand-writes the `.deviceCode` seed.** Stage 1 ticket 11 left
   it alone deliberately: folding it into `Ownership` would change behaviour, because `missionKeys` is
   first-wins in newest-first row order while `holders(of:)` is id-ordered. `DirectiveGroup.swift`.
@@ -129,6 +143,14 @@ Small things deliberately not fixed when they were found, kept here so they are 
 - [ ] **The theatre picker's hint drops one of its claims.** When a preferred depot exists `pickerHint`
   names only that rule and stops mentioning designation order, which still governs the remaining buttons.
   Cosmetic. `DirectivesFeature.swift`.
+
+- [ ] **`.noHaulControllerTagged` is still the wrong words on the mission side.** Stage 1 gave
+  `Brain.haulReadiness` the "tagged but not placeable" branch its survey and salvage siblings already had,
+  so the launch-path idle reason is now true. But a *running* row whose controller stows or goes mid-cruise
+  still stalls `.noHaulControllerTagged` through `HaulRun.preflight`/`assign`, whose theatre-scoped
+  `controllers(in:tag:theatreDepot:)` drops it — and the controller plainly is tagged. Pre-existing and
+  unchanged by Stage 1. Re-pointing the enum reaches `brainDisposition`, `guidance` and the stall panel, so
+  it is a deliberate change rather than a rename. `HaulRun.swift`.
 
 ## Constants and coupling
 
