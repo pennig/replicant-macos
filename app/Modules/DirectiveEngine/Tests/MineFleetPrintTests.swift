@@ -112,7 +112,7 @@ private func openPrint(on entity: String, directiveID: String? = nil) -> [String
 }
 
 private func printRun(
-    step: String = MineFleetPrint.Step.stocking,
+    step: String = MineFleetPrint.Step.stocking.rawValue,
     hub code: String = "AF1",
     stepStartedAt: Date = now.addingTimeInterval(-60)
 ) -> Directive {
@@ -161,7 +161,7 @@ struct MineFleetPrintTests {
                 deviceType: MineRecipe.carrierDeviceType, quantity: 1,
                 printTags: [MineRecipe.carrierTag.string]
             ),
-            nextStep: MineFleetPrint.Step.printing
+            nextStep: MineFleetPrint.Step.printing.rawValue
         ))
     }
 
@@ -176,7 +176,7 @@ struct MineFleetPrintTests {
             params: CommandParams(
                 deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]
             ),
-            nextStep: MineFleetPrint.Step.printing
+            nextStep: MineFleetPrint.Step.printing.rawValue
         ))
     }
 
@@ -206,7 +206,7 @@ struct MineFleetPrintTests {
             params: CommandParams(
                 deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]
             ),
-            nextStep: MineFleetPrint.Step.printing
+            nextStep: MineFleetPrint.Step.printing.rawValue
         ))
     }
 
@@ -234,7 +234,7 @@ struct MineFleetPrintTests {
         )
 
         #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot)
-                == .refreshFootprint(nextStep: MineFleetPrint.Step.stocking, thenStall: nil))
+                == .refreshFootprint(nextStep: MineFleetPrint.Step.stocking.rawValue, thenStall: nil))
     }
 
     /// **Short stock idles, it never stalls.** The hub buffer refills from
@@ -255,17 +255,17 @@ struct MineFleetPrintTests {
     /// is whole, whichever job produced it.
     @Test("printing hands back to stocking once the shortfall is met")
     func printingAdvancesWhenSatisfied() {
-        let directive = printRun(step: MineFleetPrint.Step.printing)
+        let directive = printRun(step: MineFleetPrint.Step.printing.rawValue)
         let snapshot = world(devices: printedFleet() + [hub(), carrier()])
 
         #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: MineFleetPrint.Step.stocking))
+                == .advanceStep(nextStep: MineFleetPrint.Step.stocking.rawValue))
     }
 
     /// While the print is genuinely in flight the run holds still.
     @Test("printing holds while the print op is open")
     func printingWaitsOnTheOpenOp() {
-        let directive = printRun(step: MineFleetPrint.Step.printing)
+        let directive = printRun(step: MineFleetPrint.Step.printing.rawValue)
         let snapshot = world(
             devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
             openOperations: openPrint(on: "AF1")
@@ -280,7 +280,7 @@ struct MineFleetPrintTests {
     @Test("a closed op with the quantity still draining holds rather than re-dispatching")
     func printingHoldsWhileTheQuantityDrains() {
         let landed = printedFleet().filter { !["M03", "M04"].contains($0.deviceCode) }
-        let directive = printRun(step: MineFleetPrint.Step.printing)
+        let directive = printRun(step: MineFleetPrint.Step.printing.rawValue)
         let snapshot = world(devices: landed + [hub(), carrier()])
 
         #expect(MineRecipe.shortfall(at: hubLocation, in: snapshot.devices.values)
@@ -293,13 +293,13 @@ struct MineFleetPrintTests {
     @Test("a print that produces nothing within the deadline re-decides")
     func printingRedecidesPastTheDeadline() {
         let directive = printRun(
-            step: MineFleetPrint.Step.printing,
+            step: MineFleetPrint.Step.printing.rawValue,
             stepStartedAt: now.addingTimeInterval(-(RestockRun.printDeadline + 60))
         )
         let snapshot = world(devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()])
 
         #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: MineFleetPrint.Step.stocking))
+                == .advanceStep(nextStep: MineFleetPrint.Step.stocking.rawValue))
     }
 
     /// A bench is shared, and `openOperation` is keyed by device alone, so a
@@ -307,7 +307,7 @@ struct MineFleetPrintTests {
     @Test("the deadline still fires while an op holds the bench")
     func printingRedecidesPastTheDeadlineWithTheBenchBusy() {
         let directive = printRun(
-            step: MineFleetPrint.Step.printing,
+            step: MineFleetPrint.Step.printing.rawValue,
             stepStartedAt: now.addingTimeInterval(-(RestockRun.printDeadline + 60))
         )
         let snapshot = world(
@@ -316,7 +316,7 @@ struct MineFleetPrintTests {
         )
 
         #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: MineFleetPrint.Step.stocking))
+                == .advanceStep(nextStep: MineFleetPrint.Step.stocking.rawValue))
     }
 
     /// The carrier slot is filled by the TAGGED carrier the launcher flies and
@@ -332,8 +332,12 @@ struct MineFleetPrintTests {
                 deviceType: MineRecipe.carrierDeviceType, quantity: 1,
                 printTags: [MineRecipe.carrierTag.string]
             ),
-            nextStep: MineFleetPrint.Step.printing
+            nextStep: MineFleetPrint.Step.printing.rawValue
         ))
+    }
+
+    @Test func stepVocabularyIsFrozen() {
+        #expect(MineFleetPrint.Step.allCases.map(\.rawValue) == ["stocking", "printing"])
     }
 }
 
@@ -381,7 +385,7 @@ struct MineFleetPrintFreshEvidenceTests {
                 deviceType: "ami_transport_controller", quantity: 1,
                 printTags: [MineRecipe.fleetTag.string]
             ),
-            nextStep: MineFleetPrint.Step.printing
+            nextStep: MineFleetPrint.Step.printing.rawValue
         ))
     }
 
@@ -434,7 +438,7 @@ struct MineFleetPrintFreshEvidenceTests {
     func printingStillHandsBackOnTheDeadline() {
         let stale = now.addingTimeInterval(-rowLag)
         let directive = printRun(
-            step: MineFleetPrint.Step.printing,
+            step: MineFleetPrint.Step.printing.rawValue,
             stepStartedAt: now.addingTimeInterval(-(RestockRun.printDeadline + 60))
         )
         let snapshot = world(devices:
@@ -443,7 +447,7 @@ struct MineFleetPrintFreshEvidenceTests {
         )
 
         #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: MineFleetPrint.Step.stocking))
+                == .advanceStep(nextStep: MineFleetPrint.Step.stocking.rawValue))
     }
 }
 
@@ -547,7 +551,7 @@ struct MineFleetPrintEngineTests {
         let row = try #require(
             await database.read { db in try Directive.where { $0.id.eq("P1") }.fetchOne(db) }
         )
-        #expect(row.step == MineFleetPrint.Step.printing)
+        #expect(row.step == MineFleetPrint.Step.printing.rawValue)
         #expect(row.status == .running)
     }
 

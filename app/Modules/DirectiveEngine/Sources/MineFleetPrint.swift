@@ -25,15 +25,15 @@ public struct MineFleetPrint: MissionStepMachine {
         self.reserveFloor = reserveFloor
     }
 
-    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
-    public enum Step {
+    /// This mission's step vocabulary, as `Directive.step` holds it (D6).
+    public enum Step: String, CaseIterable, Sendable {
         /// Decide what the fleet is missing, and start one print if anything is.
-        public static let stocking = "stocking"
+        case stocking
         /// Wait for the printed devices to become rows.
-        public static let printing = "printing"
+        case printing
     }
 
-    public var firstStep: String { Step.stocking }
+    public var firstStep: String { Step.stocking.rawValue }
 
     /// Route `directive`'s current step against `world`. Stalls when no printer at
     /// the run's depot can take a job — printing somewhere else would be a
@@ -42,9 +42,13 @@ public struct MineFleetPrint: MissionStepMachine {
         guard let hub = Self.printer(for: directive, in: world) else {
             return .stall(.unreachableDevice)
         }
-        switch directive.step {
-        case Step.printing: return printing(directive, hub, world)
-        default: return stocking(directive, hub, world)
+        guard let step = Step(rawValue: directive.step) else {
+            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
+            return .wait
+        }
+        switch step {
+        case .printing: return printing(directive, hub, world)
+        case .stocking: return stocking(directive, hub, world)
         }
     }
 
@@ -113,7 +117,7 @@ public struct MineFleetPrint: MissionStepMachine {
         // Nothing polls `LocationFootprint`, so a stale census buys its own read.
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
-            return .refreshFootprint(nextStep: Step.stocking, thenStall: nil)
+            return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: location, world) { return .wait }
 
@@ -138,7 +142,7 @@ public struct MineFleetPrint: MissionStepMachine {
         return .dispatch(
             kind: .print, deviceCode: hub.deviceCode,
             params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag.string]),
-            nextStep: Step.printing
+            nextStep: Step.printing.rawValue
         )
     }
 
@@ -150,7 +154,7 @@ public struct MineFleetPrint: MissionStepMachine {
     private func printing(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let location = hub.location else { return .stall(.unreachableDevice) }
         if Self.remaining(at: location, in: world).isEmpty {
-            return .advanceStep(nextStep: Step.stocking)
+            return .advanceStep(nextStep: Step.stocking.rawValue)
         }
         // A bench is shared and `openOperation` is keyed by device alone, so gating
         // the deadline on one lets a co-tenant's print park this run past it.
@@ -158,7 +162,7 @@ public struct MineFleetPrint: MissionStepMachine {
             return .wait
         }
         logger.notice("mine fleet print \(directive.id, privacy: .public): print produced nothing within the deadline — re-deciding")
-        return .advanceStep(nextStep: Step.stocking)
+        return .advanceStep(nextStep: Step.stocking.rawValue)
     }
 
     /// The print run never roams: it plans no targets, so `context` is unread.

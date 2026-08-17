@@ -81,7 +81,7 @@ private func run(hub code: String, depot stamped: String? = depot) -> Directive 
         id: "P1", kind: .mineFleetPrint, status: .running, deviceCode: code,
         controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag.string,
         sourceRelayCode: nil, targets: [], targetIndex: 0,
-        step: MineFleetPrint.Step.stocking, stepStartedAt: now.addingTimeInterval(-60),
+        step: MineFleetPrint.Step.stocking.rawValue, stepStartedAt: now.addingTimeInterval(-60),
         returnToOrigin: false, originDesignation: "AINALRAM", attentionReason: nil,
         createdAt: now.addingTimeInterval(-600), updatedAt: now, theatreDepot: stamped
     )
