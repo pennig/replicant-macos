@@ -64,6 +64,24 @@ Stages 2–4 — planning tickets (`Type: task`, output = a plan file + tickets 
 | 18 | Write the Stage 3 (print scheduler) plan from spec §Stage 3 | 17 |
 | 19 | Write the Stage 4 (StageFleet + growFleet) plan from spec §Stage 4 | 18 |
 
+Stage 2 — step library (produced by ticket 17; the code lives in `plan-stage-2.md`, one task per ticket)
+
+| # | Ticket | Blocked by |
+|---|---|---|
+| 20 | `StepContext` / `StepResult` — the step frame | — |
+| 21 | `BotPhase` — the service-bot lifecycle | 20 |
+| 22 | `SurveyRun` adopts `BotPhase` | 21 |
+| 23 | `SalvageRun` adopts `BotPhase`; `RepairFleet` narrows | 22 |
+| 24 | `TravelTo` — the travel frame + arrival watermark | 20 |
+| 25 | The nine outbound travel sites adopt `TravelTo` | 24 |
+| 26 | `ReturnHome` and the four return legs | 25 |
+| 27 | `ConfirmRow`; the ten shared-ladder sites; `MissionConfirm` deleted | 20 |
+| 28 | The hand-rolled ladders adopt `ConfirmRow` | 27, 23 |
+| 29 | Delete the legacy prose fallbacks | 27 |
+| 30 | `PrintJob` over the three depot-anchored print sites | 27 |
+| 31 | `StowOrAttach` over families A and B | 27 |
+| 32 | Constants come home; the borrow count is measured | 26, 28, 29, 30, 31 |
+
 ## File structure
 
 **New files (Stages 0–1)**
