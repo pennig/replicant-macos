@@ -69,6 +69,7 @@ import Testing
         "Add 'components' to blueprints",
         "Add 'directiveID','step','paramsDigest' to 'operations'",
         "Add 'commandKind','targetDeviceCode','detail' to 'directiveLogEntries'",
+        "Create 'theatres'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

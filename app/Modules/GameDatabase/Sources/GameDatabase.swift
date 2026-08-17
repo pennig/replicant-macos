@@ -91,6 +91,7 @@ public enum GameDatabase {
         Blueprint.addComponents,
         GameModels.Operation.addOwnerColumns,
         DirectiveLogEntry.addCommandColumns,
+        TheatreRecord.createTheatres,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

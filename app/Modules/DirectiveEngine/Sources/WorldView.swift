@@ -45,6 +45,9 @@ public struct WorldView: Equatable, Sendable {
     /// Every recognised theatre this tick, ordered by depot — `TheatreRegistry`'s
     /// one rule for what counts as a hub.
     public let theatres: [Theatre]
+    /// The persisted depot per system that made `theatres` sticky, so the brain
+    /// can tell a newly recognised depot from one it has already written.
+    public let theatreRecords: [TheatreRecord]
     /// System → mesh-component label, from `MeshGraph.components(of:)`.
     public let components: [String: String]
     /// System → its belts, classified, for every SURVEYED system whether meshed or
@@ -108,6 +111,7 @@ public struct WorldView: Equatable, Sendable {
         salvageUnits: [String: Double],
         eventSystems: Set<String>,
         theatres: [Theatre] = [],
+        theatreRecords: [TheatreRecord] = [],
         components: [String: String] = [:],
         beltsBySystem: [String: [BeltInfo]] = [:],
         surveyedSystems: Set<String> = [],
@@ -127,6 +131,7 @@ public struct WorldView: Equatable, Sendable {
         self.salvageUnits = salvageUnits
         self.eventSystems = eventSystems
         self.theatres = theatres
+        self.theatreRecords = theatreRecords
         self.components = components
         self.beltsBySystem = beltsBySystem
         self.surveyedSystems = surveyedSystems
@@ -203,8 +208,9 @@ public struct WorldView: Equatable, Sendable {
             .reduce(into: [:]) { $0[$1.location] = $1.resources }
 
         let componentLabels = MeshGraph(positions: positions).components(of: mesh)
+        let theatreRecords = try TheatreRecord.all.fetchAll(db)
         let theatres = TheatreRegistry.recognise(
-            devices: allDevices, pins: pins, meshSystems: mesh,
+            devices: allDevices, pins: pins, records: theatreRecords, meshSystems: mesh,
             components: componentLabels, stockByLocation: hubStock
         )
 
@@ -242,6 +248,7 @@ public struct WorldView: Equatable, Sendable {
             salvageUnits: salvage,
             eventSystems: eventSystems,
             theatres: theatres,
+            theatreRecords: theatreRecords,
             components: componentLabels,
             beltsBySystem: belts,
             surveyedSystems: Set(surveyed),

@@ -333,7 +333,8 @@ public struct WorldSnapshot: Equatable, Sendable {
             // of theatres in one process would be a real hazard.
             let pins = try TheatrePin.all.fetchAll(db)
             let theatres = TheatreRegistry.recognise(
-                devices: devices, pins: pins, meshSystems: mesh,
+                devices: devices, pins: pins,
+                records: try TheatreRecord.all.fetchAll(db), meshSystems: mesh,
                 components: components, stockByLocation: footprints.mapValues(\.resources)
             )
 

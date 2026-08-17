@@ -24,6 +24,16 @@ public struct Theatre: Equatable, Sendable, Identifiable {
         /// Carries the claiming `system_hub` device's code.
         case systemHub(String)
         case derived
+
+        /// The case name, as `TheatreRecord.origin` stores it — the claiming
+        /// device code is not part of a system's persisted identity.
+        public var recordValue: String {
+            switch self {
+            case .pinned: "pinned"
+            case .systemHub: "systemHub"
+            case .derived: "derived"
+            }
+        }
     }
 
     public enum Readiness: Equatable, Sendable {

@@ -2,16 +2,17 @@
 //  EstablishTheatreSheet.swift
 //  Replicould — Logistics feature
 //
-//  The operator's half of "brain proposes, operator establishes": pick a
-//  depot location and write a `TheatrePin`. Establishing writes the pin and
-//  nothing else — recognition does the rest on the engine's next tick.
+//  Pick a depot: the pin and the `theatres` row an operator's choice writes.
 //
 
 import ComposableArchitecture
+import DirectiveEngine
 import Foundation
 import GameModels
+import SQLiteData
 import SwiftUI
 import UI
+import UniverseModels
 
 @Reducer
 public struct EstablishTheatreSheet {
@@ -82,6 +83,15 @@ public struct EstablishTheatreSheet {
                         // ordinary outcome, not a constraint violation to surface.
                         try await database.write { db in
                             try TheatrePin.upsert { TheatrePin(location: location, createdAt: date.now) }.execute(db)
+                            let system = SiteAssay.system(of: location)
+                            try TheatreRecord.where { $0.system.eq(system) }.delete().execute(db)
+                            try TheatreRecord.upsert {
+                                TheatreRecord(
+                                    depot: location, system: system,
+                                    origin: Theatre.Origin.pinned.recordValue, establishedAt: date.now
+                                )
+                            }
+                            .execute(db)
                         }
                         await send(.pinWritten(location))
                     } catch {

@@ -73,7 +73,7 @@ struct TheatreRowModelTests {
 @Suite("Establish theatre sheet")
 @MainActor
 struct EstablishTheatreSheetTests {
-    @Test("Confirming writes a pin and nothing else, then delegates and dismisses")
+    @Test("Confirming writes the pin and the theatre record, then delegates and dismisses")
     func confirmingWritesAPin() async throws {
         let database = try GameDatabase.bootstrap()
         var initial = EstablishTheatreSheet.State(suggestedSystem: "OMEROPE")
@@ -93,6 +93,44 @@ struct EstablishTheatreSheetTests {
         let pins = try await database.read { try TheatrePin.all.fetchAll($0) }
         #expect(pins.map(\.location) == ["OMEROPE-BELT-1"])
         #expect(pins.first?.createdAt == fixtureNow)
+
+        let records = try await database.read { try TheatreRecord.all.fetchAll($0) }
+        #expect(records.map(\.depot) == ["OMEROPE-BELT-1"])
+        #expect(records.first?.system == "OMEROPE")
+        #expect(records.first?.origin == "pinned")
+    }
+
+    /// Re-pinning is how an operator MOVES a system's depot, so the derived row
+    /// the brain wrote must be replaced rather than left to compete with it.
+    @Test("A pin overwrites the system's derived record")
+    func aPinOverwritesADerivedRecord() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try TheatreRecord.insert {
+                TheatreRecord(
+                    depot: "OMEROPE-BELT-9", system: "OMEROPE", origin: "derived",
+                    establishedAt: .distantPast
+                )
+            }
+            .execute(db)
+        }
+        var initial = EstablishTheatreSheet.State()
+        initial.location = "OMEROPE-BELT-1"
+        let store = TestStore(initialState: initial) {
+            EstablishTheatreSheet()
+        } withDependencies: {
+            $0.defaultDatabase = database
+            $0.date = .constant(fixtureNow)
+        }
+        store.exhaustivity = .off
+
+        await store.send(.confirmTapped) { $0.isSaving = true }
+        await store.receive(\.pinWritten) { $0.isSaving = false }
+        await store.finish()
+
+        let records = try await database.read { try TheatreRecord.all.fetchAll($0) }
+        #expect(records.map(\.depot) == ["OMEROPE-BELT-1"])
+        #expect(records.first?.origin == "pinned")
     }
 
     @Test("A blank location cannot be established")

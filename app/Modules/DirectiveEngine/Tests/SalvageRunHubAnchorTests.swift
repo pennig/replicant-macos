@@ -58,7 +58,7 @@ private func anchorWorld(hub: String?) -> WorldSnapshot {
     let mesh = SalvageTargetPlanner.meshSystems(in: devices)
     let components = Dictionary(uniqueKeysWithValues: mesh.map { ($0, $0) })
     let theatres = TheatreRegistry.recognise(
-        devices: devices, pins: [], meshSystems: mesh,
+        devices: devices, pins: [], records: [], meshSystems: mesh,
         components: components, stockByLocation: footprintsByLocation.mapValues(\.resources)
     )
     return WorldSnapshot(

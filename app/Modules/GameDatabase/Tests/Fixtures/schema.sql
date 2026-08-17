@@ -278,3 +278,10 @@ CREATE TABLE "theatrePins" (
   "location" TEXT PRIMARY KEY NOT NULL,
   "createdAt" TEXT NOT NULL
 ) STRICT;
+
+CREATE TABLE "theatres" (
+  "depot" TEXT PRIMARY KEY NOT NULL,
+  "system" TEXT NOT NULL,
+  "origin" TEXT NOT NULL,
+  "establishedAt" TEXT NOT NULL
+) STRICT;

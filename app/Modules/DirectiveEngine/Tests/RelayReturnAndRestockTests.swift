@@ -104,7 +104,7 @@ private func theatres(devices: [Device], footprints: [String: LocationFootprint]
     let mesh = SalvageTargetPlanner.meshSystems(in: devices)
     let components = Dictionary(uniqueKeysWithValues: mesh.map { ($0, $0) })
     return TheatreRegistry.recognise(
-        devices: devices, pins: [], meshSystems: mesh,
+        devices: devices, pins: [], records: [], meshSystems: mesh,
         components: components, stockByLocation: footprints.mapValues(\.resources)
     )
 }

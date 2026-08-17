@@ -66,6 +66,7 @@ struct TheatreRecognitionTests {
         let theatres = TheatreRegistry.recognise(
             devices: [printer("AF1", at: "AINALRAM-BELT-1"), printer("AF2", at: "OMEROPE-BELT-1")],
             pins: [],
+            records: [],
             meshSystems: ["AINALRAM", "GRAZ", "OMEROPE", "DENEBED"],
             components: homeAndPocket,
             stockByLocation: ["AINALRAM-BELT-1": 40_000, "OMEROPE-BELT-1": 900]
@@ -81,6 +82,7 @@ struct TheatreRecognitionTests {
         let theatres = TheatreRegistry.recognise(
             devices: [printer("AF1", at: "AINALRAM-BELT-1"), printer("AF2", at: "AINALRAM-2-L4")],
             pins: [TheatrePin(location: "AINALRAM-2-L4", createdAt: .distantPast)],
+            records: [],
             meshSystems: ["AINALRAM"],
             components: ["AINALRAM": "AINALRAM"],
             stockByLocation: ["AINALRAM-BELT-1": 40_000, "AINALRAM-2-L4": 10]
@@ -96,6 +98,7 @@ struct TheatreRecognitionTests {
         let theatres = TheatreRegistry.recognise(
             devices: [systemHub("SH1", at: "DENEBED-3-L4"), printer("AF2", at: "DENEBED-BELT-1")],
             pins: [TheatrePin(location: "DENEBED-BELT-1", createdAt: .distantPast)],
+            records: [],
             meshSystems: ["DENEBED"],
             components: ["DENEBED": "DENEBED"],
             stockByLocation: ["DENEBED-BELT-1": 700]
@@ -110,6 +113,7 @@ struct TheatreRecognitionTests {
         let theatres = TheatreRegistry.recognise(
             devices: [systemHub("SH1", at: "DENEBED-3-L4"), printer("AF2", at: "DENEBED-BELT-1")],
             pins: [],
+            records: [],
             meshSystems: ["DENEBED"],
             components: ["DENEBED": "DENEBED"],
             stockByLocation: ["DENEBED-BELT-1": 700]
@@ -126,6 +130,7 @@ struct TheatreRecognitionTests {
         let theatres = TheatreRegistry.recognise(
             devices: [systemHub("SH1", at: "OMEROPE-6-L4")],
             pins: [],
+            records: [],
             meshSystems: ["OMEROPE"],
             components: ["OMEROPE": "OMEROPE"],
             stockByLocation: [:]
@@ -142,6 +147,7 @@ struct TheatreRecognitionTests {
         let theatres = TheatreRegistry.recognise(
             devices: [printer("AF1", at: "AINALRAM-BELT-1")],
             pins: [TheatrePin(location: "GRAZ-1-L4", createdAt: .distantPast)],
+            records: [],
             meshSystems: ["AINALRAM", "GRAZ"],
             components: ["AINALRAM": "AINALRAM", "GRAZ": "AINALRAM"],
             stockByLocation: ["AINALRAM-BELT-1": 40_000]
@@ -156,6 +162,7 @@ struct TheatreRecognitionTests {
         let theatres = TheatreRegistry.recognise(
             devices: [printer("AF1", at: "OMEROPE-BELT-1")],
             pins: [TheatrePin(location: "OMEROPE-BELT-1", createdAt: .distantPast)],
+            records: [],
             meshSystems: [],
             components: ["OMEROPE": "OMEROPE"],
             stockByLocation: ["OMEROPE-BELT-1": 900]
@@ -169,11 +176,11 @@ struct TheatreRecognitionTests {
         let devices = [printer("AF1", at: "AINALRAM-BELT-1"), printer("AF2", at: "AINALRAM-BELT-2")]
         let stock = ["AINALRAM-BELT-1": 500, "AINALRAM-BELT-2": 500]
         let first = TheatreRegistry.recognise(
-            devices: devices, pins: [], meshSystems: ["AINALRAM"],
+            devices: devices, pins: [], records: [], meshSystems: ["AINALRAM"],
             components: ["AINALRAM": "AINALRAM"], stockByLocation: stock
         )
         let second = TheatreRegistry.recognise(
-            devices: devices.reversed(), pins: [], meshSystems: ["AINALRAM"],
+            devices: devices.reversed(), pins: [], records: [], meshSystems: ["AINALRAM"],
             components: ["AINALRAM": "AINALRAM"], stockByLocation: stock
         )
 
@@ -187,6 +194,7 @@ struct TheatreRecognitionTests {
         let theatres = TheatreRegistry.recognise(
             devices: [printer("AF1", at: "AINALRAM-BELT-1"), printer("AF2", at: "GRAZ-BELT-1")],
             pins: [TheatrePin(location: "AINALRAM-2-L4", createdAt: .distantPast)],
+            records: [],
             meshSystems: ["AINALRAM", "GRAZ"],
             components: ["AINALRAM": "AINALRAM", "GRAZ": "AINALRAM"],
             stockByLocation: ["AINALRAM-BELT-1": 40_000, "GRAZ-BELT-1": 900]
@@ -199,6 +207,111 @@ struct TheatreRecognitionTests {
         let pin = theatres.first { $0.depot == "AINALRAM-2-L4" }
         #expect(pin?.origin == .pinned)
         #expect(pin?.isOperational == false)
+    }
+}
+
+private func record(_ depot: String, in system: String, origin: String = "derived") -> TheatreRecord {
+    TheatreRecord(depot: depot, system: system, origin: origin, establishedAt: .distantPast)
+}
+
+/// `BELT-1` is the richer print location throughout, so every case whose
+/// record names `BELT-2` fails unless the persisted depot actually decides.
+private let twoPrinters = [printer("AF1", at: "AINALRAM-BELT-1"), printer("AF2", at: "AINALRAM-BELT-2")]
+private let lopsidedStock = ["AINALRAM-BELT-1": 40_000, "AINALRAM-BELT-2": 900]
+
+@Suite("Theatre recognition — persisted identity")
+struct StickyTheatreRecognitionTests {
+    @Test("A derived theatre keeps its persisted depot over a richer sibling")
+    func derivedKeepsPersistedDepot() {
+        let theatres = TheatreRegistry.recognise(
+            devices: twoPrinters,
+            pins: [],
+            records: [record("AINALRAM-BELT-2", in: "AINALRAM")],
+            meshSystems: ["AINALRAM"],
+            components: ["AINALRAM": "AINALRAM"],
+            stockByLocation: lopsidedStock
+        )
+
+        #expect(theatres.count == 1)
+        #expect(theatres[0].depot == "AINALRAM-BELT-2")
+        #expect(theatres[0].origin == .derived)
+    }
+
+    @Test("A persisted depot that lost its printer falls through to derivation")
+    func derivedFallsThroughWithoutAPrinter() {
+        let theatres = TheatreRegistry.recognise(
+            devices: [printer("AF1", at: "AINALRAM-BELT-1")],
+            pins: [],
+            records: [record("AINALRAM-BELT-2", in: "AINALRAM")],
+            meshSystems: ["AINALRAM"],
+            components: ["AINALRAM": "AINALRAM"],
+            stockByLocation: lopsidedStock
+        )
+
+        #expect(theatres.count == 1)
+        #expect(theatres[0].depot == "AINALRAM-BELT-1")
+    }
+
+    @Test("A system_hub claim keeps its persisted depot over a richer sibling")
+    func hubKeepsPersistedDepot() {
+        let theatres = TheatreRegistry.recognise(
+            devices: twoPrinters + [systemHub("SH1", at: "AINALRAM-3-L4")],
+            pins: [],
+            records: [record("AINALRAM-BELT-2", in: "AINALRAM", origin: "systemHub")],
+            meshSystems: ["AINALRAM"],
+            components: ["AINALRAM": "AINALRAM"],
+            stockByLocation: lopsidedStock
+        )
+
+        #expect(theatres.count == 1)
+        #expect(theatres[0].depot == "AINALRAM-BELT-2")
+        #expect(theatres[0].origin == .systemHub("SH1"))
+    }
+
+    @Test("A hub's persisted depot that lost its printer falls through to derivation")
+    func hubFallsThroughWithoutAPrinter() {
+        let theatres = TheatreRegistry.recognise(
+            devices: [printer("AF1", at: "AINALRAM-BELT-1"), systemHub("SH1", at: "AINALRAM-3-L4")],
+            pins: [],
+            records: [record("AINALRAM-BELT-2", in: "AINALRAM", origin: "systemHub")],
+            meshSystems: ["AINALRAM"],
+            components: ["AINALRAM": "AINALRAM"],
+            stockByLocation: lopsidedStock
+        )
+
+        #expect(theatres.count == 1)
+        #expect(theatres[0].depot == "AINALRAM-BELT-1")
+    }
+
+    @Test("A pin outranks the persisted depot")
+    func pinOutranksTheRecord() {
+        let theatres = TheatreRegistry.recognise(
+            devices: twoPrinters,
+            pins: [TheatrePin(location: "AINALRAM-BELT-1", createdAt: .distantPast)],
+            records: [record("AINALRAM-BELT-2", in: "AINALRAM")],
+            meshSystems: ["AINALRAM"],
+            components: ["AINALRAM": "AINALRAM"],
+            stockByLocation: lopsidedStock
+        )
+
+        #expect(theatres.count == 1)
+        #expect(theatres[0].depot == "AINALRAM-BELT-1")
+        #expect(theatres[0].origin == .pinned)
+    }
+
+    @Test("A record for another system decides nothing here")
+    func aForeignRecordIsIgnored() {
+        let theatres = TheatreRegistry.recognise(
+            devices: twoPrinters,
+            pins: [],
+            records: [record("GRAZ-BELT-1", in: "GRAZ")],
+            meshSystems: ["AINALRAM"],
+            components: ["AINALRAM": "AINALRAM"],
+            stockByLocation: lopsidedStock
+        )
+
+        #expect(theatres.count == 1)
+        #expect(theatres[0].depot == "AINALRAM-BELT-1")
     }
 }
 

@@ -270,12 +270,15 @@ struct ReplicantApp: App {
                 UserDefaultsEventCursorStore().clear()
             })
         )
-        // Theatre pins are account-scoped: a second account must not inherit
-        // the first's pinned depots.
+        // Theatre pins and the depots recognised from them are account-scoped:
+        // a second account must not inherit the first's theatres.
         accountManager.registerHandler(
             SessionLifecycleHandler(id: "theatrePins", onLogout: {
                 @Dependency(\.defaultDatabase) var database
-                try? await database.write { db in try TheatrePin.delete().execute(db) }
+                try? await database.write { db in
+                    try TheatrePin.delete().execute(db)
+                    try TheatreRecord.delete().execute(db)
+                }
             })
         )
         // Deliberately NOT cleared: `EventLog` — the SSE diagnostic ledger is

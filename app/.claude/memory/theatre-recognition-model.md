@@ -23,6 +23,8 @@ pinning an empty system would blind the brain to a working depot elsewhere in
 the same component. A `.claimed` theatre and a `.derived` operational one can
 coexist in one component.
 
+**Identity is now PERSISTED** in the `theatres` table (`TheatreRecord`, one row per system), making tiers 2 and 3 sticky while the row's depot still prints — written by `Brain.persistTheatres` and, for a pin, by `EstablishTheatreSheet`.
+
 **Identity is the depot location** (`Theatre.id { depot }`): a theatre that
 moves is a different theatre, and a stateless brain must name the same one
 every tick from world state alone — the same reason `WorldView.hubLocation`

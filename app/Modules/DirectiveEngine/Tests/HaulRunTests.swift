@@ -84,7 +84,7 @@ private func world(
     let components = Dictionary(uniqueKeysWithValues: mesh.map { ($0, "MESH") })
     let footprintsByLocation = Dictionary(footprints.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last })
     let theatres = TheatreRegistry.recognise(
-        devices: devices, pins: [], meshSystems: mesh,
+        devices: devices, pins: [], records: [], meshSystems: mesh,
         components: components, stockByLocation: footprintsByLocation.mapValues(\.resources)
     )
     return WorldSnapshot(

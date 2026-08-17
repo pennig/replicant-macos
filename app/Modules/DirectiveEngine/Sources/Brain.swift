@@ -105,6 +105,7 @@ struct Brain: Sendable {
             )
         }
 
+        await persistTheatres(snapshot, database: database)
         snapshot = await adoptTheatreStamps(snapshot, database: database)
         snapshot = await rehomeHaulRuns(snapshot, database: database)
 
@@ -189,6 +190,54 @@ struct Brain: Sendable {
                 devices: snapshot.view.devices
             )
         )
+    }
+
+    /// Write each newly recognised depot down, so the next tick recognises the
+    /// same theatre for that system rather than re-deriving one as stock moves.
+    /// The only site that writes `theatres`; a pin is `EstablishTheatreSheet`'s.
+    private func persistTheatres(_ snapshot: Snapshot, database: any DatabaseWriter) async {
+        guard !Task.isCancelled else { return }
+        let rows = Self.theatreRecords(view: snapshot.view, now: now)
+        guard !rows.isEmpty else { return }
+
+        do {
+            try await database.write { db in
+                // Re-checked inside the transaction: a pin written since the
+                // snapshot was read owns its system's row, and outranks this.
+                let pinned = Set(
+                    try TheatrePin.all.fetchAll(db).map { SiteAssay.system(of: $0.location) }
+                )
+                for row in rows where !pinned.contains(row.system) {
+                    try TheatreRecord
+                        .where { $0.system.eq(row.system) && $0.depot.neq(row.depot) }
+                        .delete()
+                        .execute(db)
+                    try TheatreRecord.upsert { row }.execute(db)
+                }
+            }
+        } catch {
+            logger.error("theatre persistence failed: \(error)")
+        }
+    }
+
+    /// The `theatres` rows `view` implies that are not already written. A pin
+    /// is skipped: the operator's own row is the sheet's to write. A depot that
+    /// has not moved keeps its original `establishedAt`.
+    static func theatreRecords(view: WorldView, now: Date) -> [TheatreRecord] {
+        let existing = Dictionary(
+            view.theatreRecords.map { ($0.system, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        return view.theatres.compactMap { theatre -> TheatreRecord? in
+            guard theatre.origin != .pinned else { return nil }
+            let origin = theatre.origin.recordValue
+            let held = existing[theatre.system]
+            let unmoved = held?.depot == theatre.depot
+            guard !unmoved || held?.origin != origin else { return nil }
+            return TheatreRecord(
+                depot: theatre.depot, system: theatre.system, origin: origin,
+                establishedAt: unmoved ? (held?.establishedAt ?? now) : now
+            )
+        }
     }
 
     /// Stamp `snapshot`'s adopted rows with their depot before any goal below

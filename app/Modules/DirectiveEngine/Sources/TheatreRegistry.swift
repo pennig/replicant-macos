@@ -2,7 +2,7 @@
 //  TheatreRegistry.swift
 //  Replicould — DirectiveEngine
 //
-//  Theatre recognition: a pin, else an owned system_hub, else derivation.
+//  Theatre recognition: a pin, else a system_hub, else derivation — sticky per system.
 //
 
 import Foundation
@@ -15,6 +15,7 @@ public enum TheatreRegistry {
     public static func recognise(
         devices: [Device],
         pins: [TheatrePin],
+        records: [TheatreRecord],
         meshSystems: Set<String>,
         components: [String: String],
         stockByLocation: [String: Int]
@@ -34,6 +35,16 @@ public enum TheatreRegistry {
                 depot: depot, system: SiteAssay.system(of: depot), origin: origin,
                 readiness: readiness(of: depot), stock: stockByLocation[depot] ?? 0
             )
+        }
+
+        let established = Dictionary(
+            records.map { ($0.system, $0.depot) }, uniquingKeysWith: { first, _ in first }
+        )
+        /// The depot already established for `system`, still print-capable.
+        /// Stock is deliberately not a condition: a depot going quiet is
+        /// exactly what this outranks.
+        func persistedDepot(of system: String) -> String? {
+            established[system].flatMap { printLocations.contains($0) ? $0 : nil }
         }
 
         /// Richest stocked print location among `candidates`, designation as the
@@ -60,9 +71,8 @@ public enum TheatreRegistry {
             let system = SiteAssay.system(of: hubLocation)
             guard !claimedSystems.contains(system) else { continue }
             let inSystem = Set(printLocations.filter { SiteAssay.system(of: $0) == system })
-            result.append(
-                theatre(depot: richest(among: inSystem) ?? hubLocation, origin: .systemHub(hub.deviceCode))
-            )
+            let depot = persistedDepot(of: system) ?? richest(among: inSystem) ?? hubLocation
+            result.append(theatre(depot: depot, origin: .systemHub(hub.deviceCode)))
             claimedSystems.insert(system)
         }
 
@@ -77,7 +87,8 @@ public enum TheatreRegistry {
         for (component, candidates) in byComponent.sorted(by: { $0.key < $1.key }) {
             guard !servedComponents.contains(component) else { continue }
             let unclaimed = candidates.filter { !claimedSystems.contains(SiteAssay.system(of: $0)) }
-            guard let depot = richest(among: unclaimed) else { continue }
+            let sticky = unclaimed.filter { persistedDepot(of: SiteAssay.system(of: $0)) == $0 }.min()
+            guard let depot = sticky ?? richest(among: unclaimed) else { continue }
             result.append(theatre(depot: depot, origin: .derived))
         }
 
