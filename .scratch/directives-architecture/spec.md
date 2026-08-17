@@ -74,13 +74,31 @@ Decisions:
 - **S0.4 Reads never re-stamp the mission's own clock.** `DirectiveExecutor.move` gains
   `restamp: Bool`; the four best-effort read/housekeeping actions (`.refreshSystem`,
   `.scanSystem`, `.refreshBody`, `.setDeviceTags`) and the `.refreshFootprint` fallback pass
-  `restamp: nextStep != directive.step`. `.advanceStep`, `.dispatch`, `.assignController`,
-  `.claimRelay`, `.advanceTarget` keep re-stamping (a real transition starts a new deadline).
+  `restamp: nextStep != directive.step`. `.dispatch` applies the same rule: it re-stamps when it
+  names a different step, and leaves the clock alone when it names its own, because a dispatch
+  into the current step is not a transition. S0.2 requires this — `since` is
+  `directive.stepStartedAt`, so an unconditional re-stamp pushes the de-dup window past the row
+  the dispatch just wrote and no repeat can ever match. `.advanceStep`, `.assignController`,
+  `.claimRelay` and `.advanceTarget` keep re-stamping unconditionally (a real transition starts a
+  new deadline). A step that dispatches into itself and also carries a deadline must measure that
+  deadline from its own progress witness rather than from `stepStartedAt`: `EventRun.printing`
+  measures from the newest print op it still holds open.
 - **S0.5 `.failed` is not `.rejected`.** A transport error or undeclared status is transient.
   The executor counts this directive's `.failed` ops in the current step since `stepStartedAt`;
   below `DirectiveExecutor.failedDispatchBudget = 3` it logs and returns `true` (wait); at the
   budget it stalls with a new reason `.commandFailed` (`brainDisposition: .retry`,
   `displayName: "Command failed"`, guidance: transient server error, retry).
+  Two carve-outs, both found while building this: a failure that wrote **no** `Operation` row is
+  not transient — the count cannot advance, so the executor stalls on the first tick rather than
+  retrying a malformed request forever. And `DirectiveExecutor.nonRetryableKinds` (`print`,
+  `dequeuePrint`, `collectResources`, `depositResources`) stall immediately, because a `.failed`
+  here often means the command landed and only the response was lost — this API's default
+  `ErrorSchema` forbids the `error` key the server actually sends, so every undeclared status
+  throws a decode error — and repeating those four spends materials, double-transfers cargo, or
+  dequeues a different job. `.commandFailed` is `brainDisposition: .retry`, so the brain's own
+  budgeted retry still applies to them, and it re-reads the world first.
+  Worst case for a retryable verb against a persistent failure is 16 dispatch attempts: the brain
+  re-stamps `stepStartedAt`, so each of its 3 retries opens a fresh 4-attempt window.
 - **S0.6 The snapshot answers ownership and freshness.** `WorldSnapshot.openOperation(for
   deviceCode: String, owner directiveID: String?)` returns the device's live op only if its
   `directiveID` matches (nil owner = today's behaviour). `WorldSnapshot.dispatchedOperations`
