@@ -155,7 +155,7 @@ private func relayRun(
 }
 
 private func restockRun(
-    step: String = RestockRun.Step.stocking,
+    step: String = RestockRun.Step.stocking.rawValue,
     hub code: String = "AF1",
     targets: [String],
     stepStartedAt: Date = Date(timeIntervalSince1970: 9_900),
@@ -342,7 +342,7 @@ struct RestockRunTests {
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .dispatch(
             kind: .print, deviceCode: "AF1",
             params: CommandParams(deviceType: RelayRun.relayDeviceType),
-            nextStep: RestockRun.Step.printing
+            nextStep: RestockRun.Step.printing.rawValue
         ))
     }
 
@@ -427,7 +427,7 @@ struct RestockRunTests {
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
-                == .refreshFootprint(nextStep: RestockRun.Step.stocking, thenStall: nil))
+                == .refreshFootprint(nextStep: RestockRun.Step.stocking.rawValue, thenStall: nil))
     }
 
     /// **`thenStall` is nil, and that is a contract rather than an omission.** A
@@ -547,17 +547,17 @@ struct RestockRunTests {
     /// pool count.
     @Test("a topped-up pool sends the run back to deciding")
     func printingReturnsToStockingOnceThePoolIsUp() {
-        let directive = restockRun(step: RestockRun.Step.printing, targets: ["VEGA"])
+        let directive = restockRun(step: RestockRun.Step.printing.rawValue, targets: ["VEGA"])
         let snapshot = world(devices: [hub(), liveRelay("REL0", at: hubLocation), spare("RLY1")])
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: RestockRun.Step.stocking))
+                == .advanceStep(nextStep: RestockRun.Step.stocking.rawValue))
     }
 
     /// While the print is genuinely in flight the run holds still.
     @Test("waiting on a clone holds while the print op is open")
     func printingWaitsWhileTheOpIsOpen() {
-        let directive = restockRun(step: RestockRun.Step.printing, targets: ["VEGA"])
+        let directive = restockRun(step: RestockRun.Step.printing.rawValue, targets: ["VEGA"])
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
             openOperations: openOp("AF1", kind: .print)
@@ -572,11 +572,11 @@ struct RestockRunTests {
     @Test("a print that produced no relay re-decides instead of parking")
     func printingReDecidesWhenNothingArrived() {
         let stale = now.addingTimeInterval(-(RestockRun.printDeadline + 60))
-        let directive = restockRun(step: RestockRun.Step.printing, targets: ["VEGA"], stepStartedAt: stale)
+        let directive = restockRun(step: RestockRun.Step.printing.rawValue, targets: ["VEGA"], stepStartedAt: stale)
         let snapshot = world(devices: [hub(), liveRelay("REL0", at: hubLocation)])
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: RestockRun.Step.stocking))
+                == .advanceStep(nextStep: RestockRun.Step.stocking.rawValue))
     }
 
     /// Owner-scoped: a co-tenant's print at the hub is invisible to this
@@ -592,7 +592,7 @@ struct RestockRunTests {
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .dispatch(
             kind: .print, deviceCode: "AF1",
             params: CommandParams(deviceType: RelayRun.relayDeviceType),
-            nextStep: RestockRun.Step.printing
+            nextStep: RestockRun.Step.printing.rawValue
         ))
     }
 
@@ -600,7 +600,7 @@ struct RestockRunTests {
     /// still holds the step — owner-scoping must not make the guard toothless.
     @Test("waiting on the clone holds while OUR OWN print op is open")
     func printingWaitsOnOwnOp() {
-        let directive = restockRun(step: RestockRun.Step.printing, targets: ["VEGA"])
+        let directive = restockRun(step: RestockRun.Step.printing.rawValue, targets: ["VEGA"])
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
             openOperations: openOp("AF1", kind: .print, directiveID: directive.id)
@@ -615,14 +615,18 @@ struct RestockRunTests {
     @Test("a co-tenant's print past the deadline does not extend the wait")
     func coTenantPrintDoesNotExtendDeadline() {
         let stale = now.addingTimeInterval(-(RestockRun.printDeadline + 60))
-        let directive = restockRun(step: RestockRun.Step.printing, targets: ["VEGA"], stepStartedAt: stale)
+        let directive = restockRun(step: RestockRun.Step.printing.rawValue, targets: ["VEGA"], stepStartedAt: stale)
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
             openOperations: openOp("AF1", kind: .print, directiveID: "OTHER")
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: RestockRun.Step.stocking))
+                == .advanceStep(nextStep: RestockRun.Step.stocking.rawValue))
+    }
+
+    @Test func stepVocabularyIsFrozen() {
+        #expect(RestockRun.Step.allCases.map(\.rawValue) == ["stocking", "printing"])
     }
 }
 
@@ -654,7 +658,7 @@ struct RestockEngineTests {
                     id: "R1", kind: .restockRun, status: .running, deviceCode: "AF1",
                     controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
                     targets: targets, targetIndex: 0,
-                    step: RestockRun.Step.stocking,
+                    step: RestockRun.Step.stocking.rawValue,
                     stepStartedAt: Self.instant, returnToOrigin: false,
                     originDesignation: hubSystem, attentionReason: nil,
                     createdAt: Self.instant, updatedAt: Self.instant
@@ -705,7 +709,7 @@ struct RestockEngineTests {
         )
         #expect(row.status == .running, "a top-up that cannot read the stockpile is not a halt")
         #expect(row.attentionReason == nil, "…and never asks a human to look at it")
-        #expect(row.step == RestockRun.Step.stocking, "it re-decides next tick rather than parking")
+        #expect(row.step == RestockRun.Step.stocking.rawValue, "it re-decides next tick rather than parking")
     }
 
     /// The point of the whole change: with the read landing, the run gets from
@@ -757,7 +761,7 @@ struct RestockEngineTests {
         let row = try #require(
             await database.read { db in try Directive.where { $0.id.eq("R1") }.fetchOne(db) }
         )
-        #expect(row.step == RestockRun.Step.printing)
+        #expect(row.step == RestockRun.Step.printing.rawValue)
         #expect(row.attentionReason == nil)
     }
 

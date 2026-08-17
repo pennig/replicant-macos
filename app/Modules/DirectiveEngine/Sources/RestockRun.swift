@@ -36,15 +36,15 @@ public struct RestockRun: MissionStepMachine {
         self.reserveFloor = reserveFloor
     }
 
-    /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
-    public enum Step {
+    /// This mission's step vocabulary, as `Directive.step` holds it (D6).
+    public enum Step: String, CaseIterable, Sendable {
         /// Decide whether to print, and start one if so.
-        public static let stocking = "stocking"
+        case stocking
         /// Wait for the clone to become a device row.
-        public static let printing = "printing"
+        case printing
     }
 
-    public var firstStep: String { Step.stocking }
+    public var firstStep: String { Step.stocking.rawValue }
 
     /// The most idle relays this will leave parked at the hub.
     ///
@@ -72,9 +72,13 @@ public struct RestockRun: MissionStepMachine {
         guard let hub = MineFleetPrint.printer(for: directive, in: world) else {
             return .stall(.unreachableDevice)
         }
-        switch directive.step {
-        case Step.printing: return printing(directive, hub, world)
-        default: return stocking(directive, hub, world)
+        guard let step = Step(rawValue: directive.step) else {
+            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
+            return .wait
+        }
+        switch step {
+        case .printing: return printing(directive, hub, world)
+        case .stocking: return stocking(directive, hub, world)
         }
     }
 
@@ -115,7 +119,7 @@ public struct RestockRun: MissionStepMachine {
         // the price is one census read per tick while demand is unmet.
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
-            return .refreshFootprint(nextStep: Step.stocking, thenStall: nil)
+            return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: location, world) { return .wait }
 
@@ -129,7 +133,7 @@ public struct RestockRun: MissionStepMachine {
         return .dispatch(
             kind: .print, deviceCode: hub.deviceCode,
             params: CommandParams(deviceType: RelayRun.relayDeviceType),
-            nextStep: Step.printing
+            nextStep: Step.printing.rawValue
         )
     }
 
@@ -154,14 +158,14 @@ public struct RestockRun: MissionStepMachine {
     private func printing(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let location = hub.location else { return .stall(.unreachableDevice) }
         if RelayRun.idleRelays(at: location, in: world).count >= Self.desiredIdle(for: directive) {
-            return .advanceStep(nextStep: Step.stocking)
+            return .advanceStep(nextStep: Step.stocking.rawValue)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline {
             logger.notice("restock \(directive.id, privacy: .public): print produced no relay within the deadline — re-deciding")
-            return .advanceStep(nextStep: Step.stocking)
+            return .advanceStep(nextStep: Step.stocking.rawValue)
         }
         if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
-        return .advanceStep(nextStep: Step.stocking)
+        return .advanceStep(nextStep: Step.stocking.rawValue)
     }
 
     /// Restock never roams: it plans no targets, so `context` is unread.
