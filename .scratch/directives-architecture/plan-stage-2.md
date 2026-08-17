@@ -23,7 +23,7 @@ Every task's requirements implicitly include this section. Copied verbatim from 
 - **Comment budget is hard:** file header ≤ 10 lines, `///` ≤ 3 lines, inline `//` ≤ 2 lines. No dated history, no rejected alternatives, no rationale for *why we chose this* — that goes to `app/.claude/memory/` (with an index line in `app/.claude/memory/MEMORY.md`) or this spec. Run `./app/scripts/check-comments.sh <paths>` from the repo root.
 - **Logging:** `os.Logger` only, subsystem `name.pennig.replicould`, category = module or service name.
 - **Loud test doubles:** a shared client's `testValue` uses `unimplemented(...)`; rich fixtures belong on `previewValue`.
-- **UI:** never hard-code colours, spacing or font sizes — use `DesignSystem.swift` tokens. Every system and location designation renders in a monospace token. List-row structs live in their own file, never beside a `#Preview`. **Stage 2 touches no UI.**
+- **UI:** never hard-code colours, spacing or font sizes — use `DesignSystem.swift` tokens. Every system and location designation renders in a monospace token. List-row structs live in their own file, never beside a `#Preview`. **Stage 2 renders nothing new.** Task 10 is the only task that leaves `DirectiveEngine`, and it changes one pure namespace in `DirectivesFeature` (`DirectiveStallDetail`), not a view.
 - **Git:** commit directly to `main`, or to a worktree branch merged to `main` on review. No PRs, no pushing, `origin` is not part of the workflow. One commit per ticket step group is fine; the ticket's `## Comments` records the shas.
 - **Naming:** the domain word is **Theatre** (British). A **bench** is one print-capable device's queue. A **lease** is a device reserved by a running directive row. A **scoped** tag carries a theatre or belt; an **unscoped** tag does not.
 - **`Sources/Steps/` needs no `Package.swift` edit.** `DirectiveEngine` is a path-based target (`path: "DirectiveEngine/Sources"`, `Package.swift:272`), so SPM picks up subdirectories automatically.
@@ -147,7 +147,9 @@ Task 12 delivers `StowOrAttach` over **families A and B — six sites** — and 
 | `DirectiveEngine/Sources/EventCourierPrint.swift` | `PrintJob`; the wrong-device poll guard fixed |
 | `DirectiveEngine/Sources/MissionLogBudget.swift` | `MissionConfirm` deleted; both legacy prose fallbacks deleted |
 | `DirectiveEngine/Sources/RepairFleet.swift` | `answers` and `repairThreshold` become non-public |
+| `DirectivesFeature/Sources/DirectiveStallDetail.swift` | The third legacy prose fallback deleted; the prefix MATCH kept |
 | `DirectiveEngine/Tests/MissionLogBudgetTests.swift` | The two legacy-fallback tests retired; the fail-closed tests kept |
+| `DirectivesFeature/Tests/DirectiveStallDetailTests.swift` | The prose-fallback test retired; the column-wins test kept |
 
 ## Order of work and checkpoints
 
@@ -2254,12 +2256,16 @@ git commit -m "refactor(directives): the hand-rolled confirm ladders adopt Confi
 
 **Files:**
 - Modify: `MissionLogBudget.swift:47-52`, `:83-90`
+- Modify: `app/Modules/DirectivesFeature/Sources/DirectiveStallDetail.swift:26-28`
 - Modify: `app/Modules/DirectiveEngine/Tests/MissionLogBudgetTests.swift:75-81`, `:133-144`
-- Test: `MissionLogBudgetTests`, `MineRunTests`
+- Modify: `app/Modules/DirectivesFeature/Tests/DirectiveStallDetailTests.swift:39-43`
+- Test: `MissionLogBudgetTests`, `MineRunTests`, **`DirectiveStallDetailTests`**
 
-**Interfaces:** no signature changes. `dispatchRounds(_:dispatch:confirm:kind:)` and `lastDispatch(_:dispatch:confirm:)` keep their shapes and stop reading `summary`.
+**Interfaces:** no signature changes. `dispatchRounds(_:dispatch:confirm:kind:)`, `lastDispatch(_:dispatch:confirm:)` and `DirectiveStallDetail.detail(for:in:)` keep their shapes and stop reading `summary` for content.
 
-Ticket 15 left two prose parsers behind for rows written before the typed columns existed, each marked `// Legacy row written before the columns existed; Stage 2 deletes this`. Both are pinned by tests whose own doc comments say "Stage 2 deletes both".
+Ticket 15 left **three** prose parsers behind for rows written before the typed columns existed, each marked `// Legacy row written before the columns existed; Stage 2 deletes this`. Two are in `DirectiveEngine`; **the third is in `DirectivesFeature`** (`DirectiveStallDetail.swift:26-28`) and is easy to miss because every other Stage 2 task stays inside `DirectiveEngine`. Ticket 17 names it explicitly.
+
+**`DirectiveStallDetail`'s prefix MATCH at `:24` stays.** There is no typed reason column on `DirectiveLogEntry` — the summary prefix is how an entry is matched to the row's current reason, so an entry recording an earlier stall never speaks under a different one. Only the detail-from-prose at `:27` goes.
 
 **The fail-closed leg must survive.** `lastDispatch`'s parse currently returns `.nothingSent` when the prose is unparseable, and two tests pin that: `MissionLogBudgetTests.swift:85-91` `anUnparseableLegacyRowNamesNoOrder` and `MineRunTests.swift:1223` `unnamedDispatchReturnsToArming` (fixture `unnamedDispatch` at `MineRunTests.swift:217-221`). Deleting the parse is only safe if the removed branch returns `.nothingSent` too.
 
@@ -2305,15 +2311,42 @@ Replace the two deleted tests with one that pins the new rule:
     }
 ```
 
-- [ ] **Step 3: Run and commit**
+- [ ] **Step 3: Delete the third fallback, in `DirectivesFeature`**
+
+`DirectiveStallDetail.swift:25-28` becomes:
+
+```swift
+        guard let detail = newest.detail, !detail.isEmpty else { return nil }
+        return detail
+```
+
+`DirectiveStallDetailTests.swift:39-43` is the test that pins the prose path — its fixture passes no `detail:` and expects `"MEREDIANA-3"` recovered from the summary. Retire it and replace it with the new rule:
+
+```swift
+    /// The column is the record. A row written before it existed carries no
+    /// detail, whatever its summary says.
+    @Test("a legacy row with no detail column names nothing")
+    func aLegacyRowNamesNothing() {
+        let entries = [entry("L1", summary: "\(reason.rawValue): MEREDIANA-3", at: 10)]
+        #expect(DirectiveStallDetail.detail(for: reason, in: entries) == nil)
+    }
+```
+
+The four other tests in that suite pass `detail:` explicitly or assert `nil` for a non-matching reason, and stay as they are — including `:29-34`, which pins that the **column wins over a disagreeing summary** (`summary: "…MEREDIANA-9"`, `detail: "MEREDIANA-3"`, expecting `MEREDIANA-3`). That one is the whole point of the change and must stay green.
+
+- [ ] **Step 4: Run and commit**
 
 ```bash
-cd app/Modules && swift test --filter "MissionLogBudgetTests|MineRunTests" \
+cd app/Modules && swift test \
+  --filter "MissionLogBudgetTests|MineRunTests|DirectiveStallDetailTests" \
   --event-stream-output-path /tmp/task10.jsonl 2>&1 | tail -5
-./app/scripts/check-comments.sh app/Modules/DirectiveEngine/Sources/MissionLogBudget.swift
-git add app/Modules/DirectiveEngine
+./app/scripts/check-comments.sh app/Modules/DirectiveEngine/Sources/MissionLogBudget.swift \
+  app/Modules/DirectivesFeature/Sources/DirectiveStallDetail.swift
+git add app/Modules/DirectiveEngine app/Modules/DirectivesFeature
 git commit -m "refactor(log): the typed columns are the only record; prose parsing deleted"
 ```
+
+This is the one Stage 2 task that touches `DirectivesFeature`, so run that target as well as `DirectiveEngineTests`.
 
 **Checkpoint D** is due here — see Order of work.
 
