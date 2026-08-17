@@ -83,6 +83,22 @@ Small things deliberately not fixed when they were found, kept here so they are 
   parse for rows written before ticket 15's columns, each marked with a one-line comment. Whoever plans
   Stage 2 (ticket 17) should count three.
 
+- [ ] **`HaulRun.deliveryLocation` still exists in the engine.** Stage 1 ticket 13 retired it from the UI,
+  which is what spec §S1.8 asks, and deferred the engine half deliberately. Three production readers
+  remain — `HaulRun.deliverySink`'s fallback, `HaulRun.hasTakenSomeHaulConfig`, `MineRun.isInForce` — plus
+  eight `deliverySink` call sites and ~42 test lines. Deleting it makes `plans()` return `[]` for a nil
+  sink and `assign` fall through to `.advanceStep(.hauling)`: a silent no-op cycle, no stall. It cannot go
+  until legacy unstamped rows are drained, and nothing drains them today.
+- [ ] **Nothing backfills `theatreDepot` on legacy directive rows.** `Brain.adoptTheatres` stamps only via
+  `originDesignation` or when exactly one theatre is operational, and no migration fills the column, so a
+  row launched before Stage 1 with neither can stay unstamped forever. Blocks the item above.
+- [ ] **`NewHaulRunFeature`'s sheet renders "no theatre" while it resolves.** `deliveryDepot` starts nil,
+  so for the duration of the `.task` read the sheet briefly asserts something false. A distinct
+  "resolving" state, or hiding the row until resolved, would avoid it.
+- [ ] **The theatre picker's hint drops one of its claims.** When a preferred depot exists `pickerHint`
+  names only that rule and stops mentioning designation order, which still governs the remaining buttons.
+  Cosmetic. `DirectivesFeature.swift`.
+
 ## Constants and coupling
 
 - [ ] **`unresolvedReadBand` is tied to the engine tick by comment only.** The band (15 s) must exceed the worst observed tick period; the tick literal lives separately in `DirectiveEngine.swift`. Changing the tick silently breaks the pairing. Give them one shared constant, or a test that fails when they diverge.

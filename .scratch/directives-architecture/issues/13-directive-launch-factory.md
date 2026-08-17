@@ -1,7 +1,7 @@
 # 13 — `Directive.launch` factory; thirteen sites; launchers stamp theatre; theatre picker; retire the `AINALRAM-BELT-1` UI literal
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 11
 Labels: directives-architecture, stage-1
 
@@ -38,22 +38,71 @@ Spec S1.4 / S1.8. Thirteen sites call the 20-parameter `Directive.init` and hand
 
 ---
 
-- [ ] **Step 1: Failing tests (DirectiveLaunchTests)**
+- [x] **Step 1: Failing tests (DirectiveLaunchTests)**
 
 One test per kind asserting the invariants: `status == .running`, `targetIndex == 0`, `step == <Kind>().firstStep`, `stepStartedAt == createdAt == updatedAt == now`, `attentionReason == nil`, `theatreDepot == theatre.depot`, `fleetTag == expected.string`. Plus: `haulRun` with `belt` → `auto:haul:<belt>`; `relayRun` → `fleetTag == nil`.
 
-- [ ] **Step 2: Implement; migrate the eight Brain sites**
+- [x] **Step 2: Implement; migrate the eight Brain sites**
 
 Each Brain `Directive(` becomes `Directive.launch(.init(kind:…), id: uuid().uuidString, now: now)`. `Brain*Tests` fixtures that assert exact rows must still pass — the factory produces the same values; if a test breaks, the factory found a drift (e.g. a site that forgot `theatreDepot`); fix the test's expectation to the factory's value and record which site drifted in `## Comments`.
 
-- [ ] **Step 3: Migrate the five launcher sites; stamp the theatre**
+- [x] **Step 3: Migrate the five launcher sites; stamp the theatre**
 
 The three sheet launchers already resolve a theatre for the tag (the duplicated ~15-line block); pass it into `Launch.theatre` and delete the block in favour of one helper `LauncherTheatre.resolve(for deviceCode:) async -> Theatre?` in `DirectivesFeature` (uses `WorldView.read` + `theatreResolver.owningTheatre(of:goal:)`). Print Mine Fleet / Print Event Courier: replace `mineFleetSite`/`courierSite`'s alphabetical pick with a theatre picker when `theatres.filter(\.isOperational).count > 1` — a `ConfirmationDialogState` listing depots in mono (`.rcMono`), default = the theatre owning the active replicant's host location; the row then launches with that theatre and Print Mine Fleet's tag is `auto:mine:<depot>`.
 
-- [ ] **Step 4: Retire the UI literal**
+- [x] **Step 4: Retire the UI literal**
 
 Delete `HaulRun.deliveryLocation`; `deliverySink(in:for:)` requires `directive.theatreDepot` (nil → returns nil, callers show "no theatre"). `DirectiveRow.merge` and `DirectiveTargetsSection.assignments` pass `delivery: directive.theatreDepot`. Update `DirectiveRowTests`/`DirectiveTargetsSectionTests` fixtures to stamp `theatreDepot`.
 
-- [ ] **Step 5: `grep -rn "Directive(" app/Modules --include=*.swift | grep -v Tests | grep -v "Directive.launch"` → only `Directive.swift`'s own init and `DirectiveLaunch.swift`. Run all targets; commit**
+- [x] **Step 5: `grep -rn "Directive(" app/Modules --include=*.swift | grep -v Tests | grep -v "Directive.launch"` → only `Directive.swift`'s own init and `DirectiveLaunch.swift`. Run all targets; commit**
 
 `refactor(directives): one Directive.launch factory; launchers stamp their theatre`.
+
+## Comments
+
+Resolved in `889fcbd` (factory + sites + picker) and `b469844` (review fixes).
+
+Seven targets green: DirectiveEngine 1488, DirectivesFeature 270, GameServices 285, GameSync 65,
+GameModels 117, DevicesFeature 153, GameDatabase 20. From-scratch build clean. Step 5's gate returns one
+hit, `DirectiveLaunch.swift:62`. Note the ticket's literal regex also matches `setDirective(`,
+`holdingDirective(` and `BuiltInDirective(` — a word-boundaried `\bDirective\(` is the right form.
+
+**This ticket's `fleetTag` rule for `.haulRun` + `belt` was WRONG and was corrected.** The ticket says
+`.haul` scoped `.belt(belt)`; the deleted `Brain.mineFerryTag` was literally
+`FleetTag(goal: .mine, scope: .belt(designation: belt))`, stamped on a `kind: .haulRun` row. Following
+the ticket would have retagged every mine ferry `auto:haul:<belt>`, and since `FleetTag(parsing:)`
+assigns `.theatre` scope for every goal except `.mine`, `Brain.isGeneralHaul` would then read each ferry
+as the general drainer. The factory produces `.mine`; `DirectiveLaunchTests` pins both directions and
+`BrainMineTests.twoInstalledMinesEachGetTheirOwnFerry` now pins the tag at the Brain site too.
+
+**One site drifted: `Brain.launch(goal:)` for `.relayRun` never passed `theatreDepot`.** The row went in
+nil and only `adoptTheatres` filled it later, while `ensureOne.owns` treated the nil row as blocking
+every theatre's launch of that kind. No test caught it —
+`brainLaunchesRelayRunForTheTopGrowCandidate` claims to assert every field and omitted exactly that one.
+The assertion was ADDED rather than an expectation edited. `Plan.grow`'s `hub`/`origin` were replaced by
+a `theatre`, both being projections of it; verified lossless at the construction site and the consumer.
+Sites 1–7 reproduced their values exactly with no expectation touched.
+
+**Step 4's engine half is deliberately DEFERRED.** Spec §S1.8 scopes the literal's retirement to the UI,
+and the UI half is complete — `deliveryLocation` has zero references outside `DirectiveEngine`. Deleting
+it from the engine would change live behaviour: `plans()` returns `[]` for a nil sink and `assign` falls
+through to `.advanceStep(.hauling)`, a silent no-op cycle with no stall. The spec's premise "always
+stamped after S1.4" holds for newly launched rows but **not** for legacy rows in the live database, and
+those can be permanent — `adoptTheatres` stamps only via `originDesignation` or when exactly one theatre
+is operational, and no migration backfills the column. On the punch list.
+
+**An operator-launched haul run could be permanently unstamped** and was fixed here:
+`NewHaulRunFeature` passed no `originDesignation`, so with 2+ operational theatres and a nil
+`LauncherTheatre.resolve` nothing could ever stamp it and its detail pane read "no theatre" forever. It
+now stamps the anchor's system, matching the survey and salvage launchers. Refusing the launch the way
+`printSite` does was the alternative and was rejected as a heavier response than letting `adoptTheatres`
+resolve it a tick later.
+
+**`LauncherTheatre.resolve` takes a `goal:` the ticket's signature omits**, and it is required:
+`TheatreResolver` gates its entire scoped-tag branch on `if let goal`, so passing nil would reinstate the
+`haul-retag-is-the-handover` defect ticket 12 closed. The `goal: nil` at the replicant-host lookup is
+correct — a host wears no goal tag.
+
+**Picker:** depots render in `.rcMono`, the default rides position and wording rather than hue, and
+unavailable depots are filtered out rather than greyed, so no disabled-state colour is needed. The
+operator is colour-vision deficient; nothing in the picker encodes meaning in hue alone.
