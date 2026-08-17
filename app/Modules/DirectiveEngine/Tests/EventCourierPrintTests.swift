@@ -75,7 +75,7 @@ struct EventCourierPrintTests {
     @Test("with no container at the depot, it prints one")
     func printsContainer() {
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.printing),
+            directive: directive(step: EventCourierPrint.Step.printing.rawValue),
             world: world([EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)])
         )
         #expect(action == .dispatch(
@@ -83,14 +83,14 @@ struct EventCourierPrintTests {
             params: CommandParams(
                 deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag.string]
             ),
-            nextStep: EventCourierPrint.Step.awaitingClone
+            nextStep: EventCourierPrint.Step.awaitingClone.rawValue
         ))
     }
 
     @Test("with a container standing, it asks the operator to replicate")
     func asksForReplication() {
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.replicating),
+            directive: directive(step: EventCourierPrint.Step.replicating.rawValue),
             world: world(standing() + [spareMatrix()])
         )
         #expect(action == .stall(.awaitingCourierReplication, detail: "HUB-1"))
@@ -103,7 +103,7 @@ struct EventCourierPrintTests {
         let fleet = standing() + residentVessel() + [racer, spareMatrix()]
         let peopled = world(fleet, hosts: ["HEAVEN", "RACER"])
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.replicating), world: peopled
+            directive: directive(step: EventCourierPrint.Step.replicating.rawValue), world: peopled
         )
         #expect(action == .stall(.awaitingCourierReplication, detail: "HUB-1"))
         #expect(!EventCourierPrint.courierStands(at: "HUB-1", in: peopled))
@@ -116,7 +116,7 @@ struct EventCourierPrintTests {
         matrix.stowedInDeviceCode = "BOX"
         let hosted = world(standing() + [matrix], hosts: ["BOX"])
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.replicating), world: hosted
+            directive: directive(step: EventCourierPrint.Step.replicating.rawValue), world: hosted
         )
         #expect(action == .done)
         #expect(EventCourierPrint.courierStands(at: "HUB-1", in: hosted))
@@ -125,7 +125,7 @@ struct EventCourierPrintTests {
     @Test("no spare matrix stalls rather than printing a 14,400s one silently")
     func noSpareMatrix() {
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.replicating), world: world(standing())
+            directive: directive(step: EventCourierPrint.Step.replicating.rawValue), world: world(standing())
         )
         #expect(action == .stall(.unreachableDevice, detail: "no empty replicant matrix at HUB-1"))
     }
@@ -167,7 +167,7 @@ struct EventCourierPrintTests {
             anchorContainer(),
         ]
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.printing),
+            directive: directive(step: EventCourierPrint.Step.printing.rawValue),
             world: world(fleet, hosts: ["ANCHOR"])
         )
         #expect(action == .dispatch(
@@ -175,16 +175,16 @@ struct EventCourierPrintTests {
             params: CommandParams(
                 deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag.string]
             ),
-            nextStep: EventCourierPrint.Step.awaitingClone
+            nextStep: EventCourierPrint.Step.awaitingClone.rawValue
         ))
     }
 
-    @Test("a row stranded on a retired step rejoins the machine")
-    func unknownStepRejoins() {
+    @Test("a row stranded on an unknown step waits rather than rejoining the machine")
+    func unknownStepWaits() {
         let action = EventCourierPrint().nextAction(
             directive: directive(step: "stowing"), world: world(standing() + [spareMatrix()])
         )
-        #expect(action == .advanceStep(nextStep: EventCourierPrint.Step.replicating))
+        #expect(action == .wait)
     }
 
     /// Owner-scoped, mirroring `RestockRun`'s guard: a print another directive
@@ -197,7 +197,7 @@ struct EventCourierPrintTests {
             lastConfirmedAt: now, detail: .object([:]), directiveID: "OTHER"
         )]
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.printing),
+            directive: directive(step: EventCourierPrint.Step.printing.rawValue),
             world: world(
                 [EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)],
                 openOperations: openOperations
@@ -208,7 +208,7 @@ struct EventCourierPrintTests {
             params: CommandParams(
                 deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag.string]
             ),
-            nextStep: EventCourierPrint.Step.awaitingClone
+            nextStep: EventCourierPrint.Step.awaitingClone.rawValue
         ))
     }
 
@@ -221,7 +221,7 @@ struct EventCourierPrintTests {
             lastConfirmedAt: now, detail: .object([:]), directiveID: "c1"
         )]
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.awaitingClone),
+            directive: directive(step: EventCourierPrint.Step.awaitingClone.rawValue),
             world: world(
                 [EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)],
                 openOperations: openOperations
@@ -241,12 +241,19 @@ struct EventCourierPrintTests {
             lastConfirmedAt: now, detail: .object([:]), directiveID: "c1"
         )]
         let action = EventCourierPrint().nextAction(
-            directive: directive(step: EventCourierPrint.Step.awaitingClone, entered: stale),
+            directive: directive(step: EventCourierPrint.Step.awaitingClone.rawValue, entered: stale),
             world: world(
                 [EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)],
                 openOperations: openOperations
             )
         )
-        #expect(action == .advanceStep(nextStep: EventCourierPrint.Step.printing))
+        #expect(action == .advanceStep(nextStep: EventCourierPrint.Step.printing.rawValue))
+    }
+
+    @Test func stepVocabularyIsFrozen() {
+        #expect(
+            EventCourierPrint.Step.allCases.map(\.rawValue)
+                == ["printing", "awaitingClone", "replicating"]
+        )
     }
 }

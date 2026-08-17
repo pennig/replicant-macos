@@ -20,13 +20,13 @@ public struct EventCourierPrint: MissionStepMachine {
         self.reserveFloor = reserveFloor
     }
 
-    public enum Step {
-        public static let printing = "printing"
-        public static let awaitingClone = "awaitingClone"
-        public static let replicating = "replicating"
+    public enum Step: String, CaseIterable, Sendable {
+        case printing
+        case awaitingClone
+        case replicating
     }
 
-    public var firstStep: String { Step.printing }
+    public var firstStep: String { Step.printing.rawValue }
 
     /// A courier of ours standing at `depot`, by the one predicate `EventRun`
     /// also selects on — so what this reports ready is what a convoy can fly.
@@ -51,10 +51,14 @@ public struct EventCourierPrint: MissionStepMachine {
         guard let depot = world.theatreDepot(for: directive) else { return .stall(.unreachableDevice) }
         if Self.courierStands(at: depot, in: world) { return .done }
 
-        switch directive.step {
-        case Step.awaitingClone: return awaitingClone(directive, depot, world)
-        case Step.replicating: return replicating(directive, depot, world)
-        default: return printing(directive, depot, world)
+        guard let step = Step(rawValue: directive.step) else {
+            logger.notice("\(kind.rawValue) \(directive.id): unknown step \(directive.step) — waiting")
+            return .wait
+        }
+        switch step {
+        case .awaitingClone: return awaitingClone(directive, depot, world)
+        case .replicating: return replicating(directive, depot, world)
+        case .printing: return printing(directive, depot, world)
         }
     }
 
@@ -70,7 +74,7 @@ public struct EventCourierPrint: MissionStepMachine {
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {
         if container(at: depot, in: world) != nil {
-            return .advanceStep(nextStep: Step.replicating)
+            return .advanceStep(nextStep: Step.replicating.rawValue)
         }
         guard let printer = MineFleetPrint.printer(for: directive, in: world) else {
             return .stall(.unreachableDevice)
@@ -78,7 +82,7 @@ public struct EventCourierPrint: MissionStepMachine {
         if world.openOperation(for: printer.deviceCode, owner: directive.id) != nil { return .wait }
         let rail = RelayRun(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
-            return .refreshFootprint(nextStep: Step.printing, thenStall: nil)
+            return .refreshFootprint(nextStep: Step.printing.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }
         if MineFleetPrint.fleetEvidenceIsStale(directive, at: depot, in: world) {
@@ -95,19 +99,19 @@ public struct EventCourierPrint: MissionStepMachine {
             params: CommandParams(
                 deviceType: EventRun.courierDeviceType, quantity: 1, printTags: [EventRun.rootTag.string]
             ),
-            nextStep: Step.awaitingClone
+            nextStep: Step.awaitingClone.rawValue
         )
     }
 
     private func awaitingClone(
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {
-        if container(at: depot, in: world) != nil { return .advanceStep(nextStep: Step.replicating) }
+        if container(at: depot, in: world) != nil { return .advanceStep(nextStep: Step.replicating.rawValue) }
         if world.now.timeIntervalSince(directive.stepStartedAt) > RestockRun.printDeadline {
-            return .advanceStep(nextStep: Step.printing)
+            return .advanceStep(nextStep: Step.printing.rawValue)
         }
         if world.openOperation(for: directive.deviceCode, owner: directive.id) != nil { return .wait }
-        return .advanceStep(nextStep: Step.printing)
+        return .advanceStep(nextStep: Step.printing.rawValue)
     }
 
     /// Hand the one replication to the operator: it is irreversible, happens
@@ -117,7 +121,7 @@ public struct EventCourierPrint: MissionStepMachine {
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {
         guard container(at: depot, in: world) != nil else {
-            return .advanceStep(nextStep: Step.printing)
+            return .advanceStep(nextStep: Step.printing.rawValue)
         }
         guard Self.replicationSource(in: world) != nil else {
             return .stall(.unreachableDevice, detail: "no empty replicant matrix at \(depot)")
