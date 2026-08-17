@@ -226,13 +226,9 @@ struct DirectiveEngineTests {
         }
     }
 
-    /// The end-to-end proof, over the REAL governor (only the network client is
-    /// stubbed): only the first tick reaches it, ticks 2 and 3 are refused as
-    /// duplicates, and the same-step stamp never moves.
-    ///
-    /// The clock ADVANCES on every reading, as production's does: the op row is
-    /// written before the step stamp that follows it, so a re-stamp would carry
-    /// the dedup window past the row and re-issue the command every tick.
+    /// End to end over the REAL governor, on an ADVANCING clock: only the first
+    /// tick reaches the client, ticks 2 and 3 are refused as duplicates, and the
+    /// same-step stamp never moves.
     @Test func sameStepDispatchReachesTheClientOnceOverTheRealGovernor() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
