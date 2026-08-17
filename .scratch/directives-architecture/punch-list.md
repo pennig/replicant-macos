@@ -90,6 +90,11 @@ Small things deliberately not fixed when they were found, kept here so they are 
   Faithful to the `Brain.reservedDevices` test it was ported from, so not a regression — the weakest of
   the fourteen ported cases.
 
+- [ ] **`MineRun` and `SurveyRun` have no unknown-step test.** Stage 1 ticket 14 gave all nine machines one
+  unknown-step policy (`.wait` plus a log line) and added tests for seven of them. These two were already
+  `.wait` before the ticket, so their behaviour did not change and the gap predates the effort — but the
+  rule is unenforced on them. One test each, matching the seven that exist.
+
 ## Cosmetic
 
 - [ ] **`completeOpenOperation`'s `logger.notice` diagnostics are absent from the device-event path.** Inlining the op-close into `applyDeviceEvent` dropped the kind-mismatch and stale-time rejection lines. No behaviour depends on them; they are the lines that would explain a silent non-close. `Reconciler.swift`.
