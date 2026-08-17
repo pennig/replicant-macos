@@ -454,15 +454,16 @@ import Utils
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let mine = repairDevice(
             "BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL",
-            directives: ["service"], tags: ["auto:custom"]
+            directives: ["service"], tags: ["auto:survey:DENEBED-9"]
         )
         let theirs = repairDevice(
             "BOT2", type: "service_bot", location: nil, stowedIn: "VESSEL",
-            directives: ["service"], tags: ["auto:survey"]
+            directives: ["service"], tags: ["auto:survey:AINALRAM-1"]
         )
         let w = repairWorld(devices: [vessel, mine, theirs])
         let d = repairDirective(
-            step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL", fleetTag: "auto:custom"
+            step: SurveyRun.Step.deployingBots, deviceCode: "VESSEL",
+            fleetTag: "auto:survey:DENEBED-9"
         )
         #expect(SurveyRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("deploy"), deviceCode: "BOT1",

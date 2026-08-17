@@ -94,7 +94,7 @@ struct NewHaulRunFeatureTests {
         #expect(row.kind == .haulRun)
         #expect(row.status == .running)
         #expect(row.deviceCode == "C1")
-        #expect(row.fleetTag == HaulRun.defaultFleetTag)
+        #expect(row.fleetTag == HaulRun.defaultFleetTag.string)
         #expect(row.step == HaulRun.Step.preflight)
         // Empty and stays empty: the planner re-derives from the census every
         // cycle and records no history.
@@ -151,7 +151,7 @@ struct NewHaulRunFeatureTests {
         await store.receive(\.delegate.created)
 
         let row = try #require(try await database.read { db in try Directive.all.fetchAll(db) }.first)
-        #expect(row.fleetTag == HaulRun.fleetTag(forTheatre: "GRAZ-3"))
+        #expect(row.fleetTag == HaulRun.fleetTag(forTheatre: "GRAZ-3").string)
     }
 
     /// Launch with no tagged controller must write nothing at all.

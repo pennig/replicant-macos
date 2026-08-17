@@ -29,7 +29,7 @@ private let mineTransportType = "ami_transport_controller"
 private func mineDevice(
     _ code: String,
     type: String,
-    tags: [String] = [MineRecipe.fleetTag],
+    tags: [String] = [MineRecipe.fleetTag.string],
     location: String? = mineHub,
     status: String = "idle",
     directives: [String] = [],
@@ -69,7 +69,7 @@ private func minePrintedFleet(at hub: String = mineHub, suffix: String = "") -> 
 }
 
 private func mineCarrierDevice(
-    _ code: String = mineCarrier, status: String = "idle", tags: [String] = [MineRecipe.carrierTag],
+    _ code: String = mineCarrier, status: String = "idle", tags: [String] = [MineRecipe.carrierTag.string],
     location: String = mineHub
 ) -> Device {
     mineDevice(code, type: MineRecipe.carrierDeviceType, tags: tags, location: location, status: status)
@@ -292,7 +292,7 @@ struct BrainMineReadinessTests {
         )
         let live = directiveFixture(
             id: "M1", kind: .mineRun, deviceCode: "OTHERCARRIER",
-            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+            fleetTag: MineRecipe.fleetTag.string, targets: [mineBelt]
         )
         #expect(
             Brain.mineReadiness(view: view, directives: [], theatre: mineTheatre())
@@ -560,7 +560,7 @@ struct BrainMineStatusTests {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
         let live = directiveFixture(
             id: "M1", kind: .mineRun, status: .running, deviceCode: mineCarrier,
-            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+            fleetTag: MineRecipe.fleetTag.string, targets: [mineBelt]
         )
         #expect(
             Brain.mineStatus(directives: [live], view: view).status
@@ -573,7 +573,7 @@ struct BrainMineStatusTests {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
         let live = directiveFixture(
             id: "M1", kind: .mineRun, status: .needsAttention, deviceCode: mineCarrier,
-            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+            fleetTag: MineRecipe.fleetTag.string, targets: [mineBelt]
         )
         #expect(
             Brain.mineStatus(directives: [live], view: view).status
@@ -600,7 +600,7 @@ struct BrainMineStatusTests {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
         let completed = directiveFixture(
             id: "M1", kind: .mineRun, status: .completed, deviceCode: "OTHERCARRIER",
-            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+            fleetTag: MineRecipe.fleetTag.string, targets: [mineBelt]
         )
         #expect(Brain.mineStatus(directives: [completed], view: view).status == .ready(vessel: mineCarrier))
     }
@@ -625,7 +625,7 @@ struct BrainMineStatusTests {
         let view = mineWorldView(devices: minePrintedFleet() + [mineCarrierDevice()])
         let live = directiveFixture(
             id: "M1", kind: .mineRun, status: .running, deviceCode: mineCarrier,
-            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+            fleetTag: MineRecipe.fleetTag.string, targets: [mineBelt]
         )
         #expect(Brain.mineStatus(directives: [live], view: view).demandIncomplete == false)
     }
@@ -668,7 +668,7 @@ struct BrainMineStatusTheatreTests {
         )
         let live = directiveFixture(
             id: "M1", kind: .mineRun, deviceCode: mineCarrier,
-            fleetTag: MineRecipe.fleetTag(forTheatre: sol.depot), targets: [mineBelt], theatreDepot: sol.depot
+            fleetTag: MineRecipe.fleetTag(forTheatre: sol.depot).string, targets: [mineBelt], theatreDepot: sol.depot
         )
         #expect(
             Brain.mineStatus(directives: [live], view: view, theatre: sol).status
@@ -741,7 +741,7 @@ struct BrainMineHealthTests {
     func aBeltALiveMineRunTargetsIsExcluded() {
         let live = directiveFixture(
             id: "M1", kind: .mineRun, status: .running, deviceCode: mineCarrier,
-            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+            fleetTag: MineRecipe.fleetTag.string, targets: [mineBelt]
         )
         #expect(
             Brain.mineHealth(view: healthWorld(miningStatus: nil, surveyStatus: nil, ferryCollect: nil), directives: [live])
@@ -753,7 +753,7 @@ struct BrainMineHealthTests {
     func theSameBeltOnceTheMineRunCompletesReportsRealFlags() {
         let completed = directiveFixture(
             id: "M1", kind: .mineRun, status: .completed, deviceCode: mineCarrier,
-            fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+            fleetTag: MineRecipe.fleetTag.string, targets: [mineBelt]
         )
         #expect(
             Brain.mineHealth(view: healthWorld(miningStatus: nil, surveyStatus: nil, ferryCollect: nil), directives: [completed])
@@ -890,7 +890,7 @@ struct BrainEnsureMineTests {
         #expect(mine.kind == .mineRun)
         #expect(mine.deviceCode == mineCarrier)
         #expect(mine.targets == [mineBelt])
-        #expect(mine.fleetTag == MineRecipe.fleetTag(forTheatre: growHubLocation))
+        #expect(mine.fleetTag == MineRecipe.fleetTag(forTheatre: growHubLocation).string)
         #expect(mine.step == MineRun().firstStep)
         #expect(mine.status == .running)
         #expect(mine.roamCentre == nil)
@@ -966,7 +966,7 @@ struct BrainEnsureMineFerriesTests {
 
     private func haulController(_ code: String) -> Device {
         mineDevice(
-            code, type: mineTransportType, tags: [HaulRun.defaultFleetTag],
+            code, type: mineTransportType, tags: [HaulRun.defaultFleetTag.string],
             directives: [HaulRun.requiredDirective]
         )
     }
@@ -1045,7 +1045,7 @@ struct BrainEnsureMineFerriesTests {
             try self.seedInstalledMine(db, belt: mineBelt, controller: "MC1", transport: "TC1")
             try seedDirective(
                 db, id: "M1", kind: .mineRun, status: .running, deviceCode: mineCarrier,
-                fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+                fleetTag: MineRecipe.fleetTag.string, targets: [mineBelt]
             )
         }
 
@@ -1092,7 +1092,7 @@ struct BrainEnsureMineFerriesTests {
             try self.seedInstalledMine(db, belt: mineBelt, controller: "MC1", transport: "TC1")
             try seedDirective(
                 db, id: "M1", kind: .mineRun, status: .completed, deviceCode: mineCarrier,
-                fleetTag: MineRecipe.fleetTag, targets: [mineBelt]
+                fleetTag: MineRecipe.fleetTag.string, targets: [mineBelt]
             )
         }
 

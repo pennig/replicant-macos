@@ -69,7 +69,8 @@ extension DeviceListLayout {
     static func covers(_ directive: Directive, _ device: Device) -> Bool {
         if directive.deviceCode == device.deviceCode { return true }
         if directive.controllerCode == device.deviceCode { return true }
-        if let tag = directive.fleetTag, device.tags.contains(tag) { return true }
+        if let tag = directive.fleetTag.flatMap(FleetTag.init(parsing:)),
+           device.carries(tag, policy: .exact) { return true }
         return false
     }
 

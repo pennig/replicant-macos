@@ -187,14 +187,14 @@ struct SalvageRunPreflightTests {
     @Test func stallsWhenNoMiningControllerIsAboard() {
         let snapshot = world(devices: [vessel])
         #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
-                == .refreshFleet(tag: "auto:salvage", thenStall: .noMiningControllerAboard))
+                == .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .noMiningControllerAboard))
     }
 
     /// The controller is aboard, but nothing it has adopted is with it.
     @Test func stallsWhenTheControllerHasNoDroneAboard() {
         let snapshot = world(devices: [vessel, controller])
         #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
-                == .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard))
+                == .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .noMiningDroneAboard))
     }
 
     /// A fully staged vessel claims its controller and moves to travel.
@@ -256,25 +256,31 @@ struct SalvageRunPreflightTests {
         let snapshot = world(devices: [vessel])
         let directive = running(step: "preflight", fleetTag: nil)
         #expect(SalvageRun().nextAction(directive: directive, world: snapshot)
-                == .refreshFleet(tag: "auto:salvage", thenStall: .noMiningControllerAboard))
+                == .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .noMiningControllerAboard))
     }
 
     /// A row carrying its own `fleetTag` uses that instead of the default.
     @Test func usesTheRowsOwnFleetTagWhenItHasOne() {
         let snapshot = world(devices: [vessel])
-        let directive = running(step: "preflight", fleetTag: "auto:salvage-2")
+        let directive = running(step: "preflight", fleetTag: "auto:salvage:TOSLIT-3")
         #expect(SalvageRun().nextAction(directive: directive, world: snapshot)
-                == .refreshFleet(tag: "auto:salvage-2", thenStall: .noMiningControllerAboard))
+                == .refreshFleet(
+                    tag: FleetTag(goal: .salvage, scope: .theatre(depot: "TOSLIT-3")),
+                    thenStall: .noMiningControllerAboard
+                ))
     }
 
-    /// The WIRE READ must send a tag the server actually knows: `GET
-    /// devices/tags/auto:salvage:AINALRAM-BELT-1` answers zero devices live,
-    /// while `auto:salvage` answers the real fleet.
-    @Test func refreshesUsingTheRootTagNotThePerTheatreOne() {
+    /// The wire read sends the row's own per-theatre tag; `resolveFleetRefresh`
+    /// reads the unscoped form alongside it, so an un-migrated fleet is still
+    /// seen (the server does exact match with no hierarchy).
+    @Test func refreshesUsingTheRowsOwnPerTheatreTag() {
         let snapshot = world(devices: [vessel])
         let directive = running(step: "preflight", fleetTag: "auto:salvage:AINALRAM-BELT-1")
         #expect(SalvageRun().nextAction(directive: directive, world: snapshot)
-                == .refreshFleet(tag: "auto:salvage", thenStall: .noMiningControllerAboard))
+                == .refreshFleet(
+                    tag: FleetTag(goal: .salvage, scope: .theatre(depot: "AINALRAM-BELT-1")),
+                    thenStall: .noMiningControllerAboard
+                ))
     }
 }
 
@@ -295,7 +301,7 @@ struct SalvageRunStagingFreshnessTests {
         let stale = fixtureNow.addingTimeInterval(-SalvageRun.stagingFreshness - 1)
         let snapshot = world(devices: stagedFleet(updatedAt: stale))
         #expect(SalvageRun().nextAction(directive: running(step: "preflight"), world: snapshot)
-                == .refreshFleet(tag: "auto:salvage", thenStall: .unreachableDevice))
+                == .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .unreachableDevice))
     }
 
     /// Freshly synced rows are believed without a read — the demand is paid
@@ -667,7 +673,7 @@ struct SalvageRunMiningTests {
         let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-7 * 60 * 60))
         let world = world(devices: [atSystem, paused, deployed], now: now)
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshFleet(tag: "auto:salvage", thenStall: .miningDirectivePaused))
+            == .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .miningDirectivePaused))
     }
 
     /// The throttle still binds on the paused branch, so a controller that keeps
@@ -709,7 +715,7 @@ struct SalvageRunMiningTests {
         let directive = running(step: "awaiting", stepStartedAt: now) // launch just now; rows older
         let world = world(devices: [atSystem, staleCtrl, staleDrone], now: now)
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshFleet(tag: "auto:salvage", thenStall: nil))
+            == .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: nil))
     }
 
     /// The throttle guard: pre-launch rows read within `reconcileInterval` wait
@@ -768,7 +774,7 @@ struct SalvageRunMiningTests {
         let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-60))
         let world = world(devices: [atSystem, freshCtrl, staleDrone], now: now)
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshFleet(tag: "auto:salvage", thenStall: nil))
+            == .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: nil))
     }
 
     /// Still mining and the throttle allows a read: reconcile the fleet (catch a
@@ -786,13 +792,13 @@ struct SalvageRunMiningTests {
         let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-10 * 60))
         let world = world(devices: [atSystem, mining, deployed], now: now)
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshFleet(tag: "auto:salvage", thenStall: nil))
+            == .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: nil))
     }
 
-    /// `awaitCompletion`'s reconcile read carries the same wire-tag rule as
-    /// `preflight`'s — a per-theatre directive must still ask the server for
-    /// the tag it actually recognises.
-    @Test func reconcileRefreshesUsingTheRootTagNotThePerTheatreOne() {
+    /// `awaitCompletion`'s reconcile read carries the same rule as
+    /// `preflight`'s: the row's own per-theatre tag goes out, and the resolver
+    /// reads the unscoped form alongside it.
+    @Test func reconcileRefreshesUsingTheRowsOwnPerTheatreTag() {
         let mining = device("CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
                             controlled: ["DRONE"], directives: ["gather_salvage"],
                             currentDirective: "gather_salvage",
@@ -806,7 +812,10 @@ struct SalvageRunMiningTests {
         )
         let world = world(devices: [atSystem, mining, deployed], now: now)
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshFleet(tag: "auto:salvage", thenStall: nil))
+            == .refreshFleet(
+                tag: FleetTag(goal: .salvage, scope: .theatre(depot: "AINALRAM-BELT-1")),
+                thenStall: nil
+            ))
     }
 
     /// Mining done, a straggler whose ETA has already passed and the throttle
@@ -998,17 +1007,20 @@ struct SalvageRunVerificationTests {
         let stranded = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL")
         let world = world(devices: [atSystem, controller, stranded], systems: ["TOSLIT": miningToslit])
         #expect(SalvageRun().nextAction(directive: running(step: "verifying"), world: world)
-            == .refreshFleet(tag: "auto:salvage", thenStall: .dronesNotRecovered))
+            == .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .dronesNotRecovered))
     }
 
-    /// `verify`'s recovery read carries the same wire-tag rule: a per-theatre
-    /// directive must still ask the server for the tag it actually knows.
-    @Test func refreshesUsingTheRootTagNotThePerTheatreOne() {
+    /// `verify`'s recovery read carries the same rule: the row's own
+    /// per-theatre tag goes out, unscoped form alongside.
+    @Test func refreshesUsingTheRowsOwnPerTheatreTag() {
         let stranded = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5", controlledBy: "CTRL")
         let world = world(devices: [atSystem, controller, stranded], systems: ["TOSLIT": miningToslit])
         let directive = running(step: "verifying", fleetTag: "auto:salvage:AINALRAM-BELT-1")
         #expect(SalvageRun().nextAction(directive: directive, world: world)
-            == .refreshFleet(tag: "auto:salvage", thenStall: .dronesNotRecovered))
+            == .refreshFleet(
+                tag: FleetTag(goal: .salvage, scope: .theatre(depot: "AINALRAM-BELT-1")),
+                thenStall: .dronesNotRecovered
+            ))
     }
 
     /// The root of the live soft-stall: `directive.completed` tracks the DRONES,

@@ -52,7 +52,7 @@ struct EventRunLoadingTests {
             kind: .print, deviceCode: "PRINTER",
             params: CommandParams(
                 deviceType: "ftl_beacon", quantity: 1,
-                printTags: [EventRun.fleetTag(forTheatre: "HUB-1")]
+                printTags: [EventRun.fleetTag(forTheatre: "HUB-1").string]
             ),
             nextStep: EventRun.Step.printing
         ))
@@ -100,7 +100,7 @@ struct EventRunLoadingTests {
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
             EventRunFixtures.courier(),
-            EventRunFixtures.device("BEACON", type: "ftl_beacon", tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
+            EventRunFixtures.device("BEACON", type: "ftl_beacon", tags: [EventRun.fleetTag(forTheatre: "HUB-1").string]),
         ]
         let world = EventRunFixtures.world(
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
@@ -122,7 +122,7 @@ struct EventRunLoadingTests {
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
             EventRunFixtures.courier(attachedTo: "CARRIER"),
             EventRunFixtures.device("BEACON", type: "ftl_beacon", attachedTo: "CARRIER",
-                        tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
+                        tags: [EventRun.fleetTag(forTheatre: "HUB-1").string]),
         ]
         let world = EventRunFixtures.world(
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
@@ -181,7 +181,7 @@ struct EventRunLoadingTests {
             EventRunFixtures.courier(),
             EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
             EventRunFixtures.device("BEACON", type: "ftl_beacon",
-                        tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
+                        tags: [EventRun.fleetTag(forTheatre: "HUB-1").string]),
         ]
         let world = EventRunFixtures.world(
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
@@ -216,7 +216,7 @@ struct EventRunLoadingTests {
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.courier(),
             EventRunFixtures.device("BEACON", type: "ftl_beacon", attachedTo: "CARRIER",
-                        tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
+                        tags: [EventRun.fleetTag(forTheatre: "HUB-1").string]),
         ]
         let world = EventRunFixtures.world(
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
@@ -236,7 +236,7 @@ struct EventRunLoadingTests {
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter", cargoUsed: 120),
             EventRunFixtures.courier(attachedTo: "CARRIER"),
             EventRunFixtures.device("BEACON", type: "ftl_beacon", attachedTo: "CARRIER",
-                        tags: [EventRun.fleetTag(forTheatre: "HUB-1")]),
+                        tags: [EventRun.fleetTag(forTheatre: "HUB-1").string]),
         ]
         let world = EventRunFixtures.world(
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []), now: now
@@ -438,7 +438,7 @@ struct EventRunComponentPrintTests {
     ) -> MissionAction {
         .dispatch(
             kind: .print, deviceCode: deviceCode,
-            params: CommandParams(deviceType: deviceType, quantity: quantity, printTags: [tag]),
+            params: CommandParams(deviceType: deviceType, quantity: quantity, printTags: [tag.string]),
             nextStep: EventRun.Step.printing
         )
     }
@@ -459,8 +459,8 @@ struct EventRunComponentPrintTests {
             world: world(
                 [
                     factory(),
-                    EventRunFixtures.device("AP1", type: "atmo_processor", tags: [tag]),
-                    EventRunFixtures.device("AP2", type: "atmo_processor", tags: [tag]),
+                    EventRunFixtures.device("AP1", type: "atmo_processor", tags: [tag.string]),
+                    EventRunFixtures.device("AP2", type: "atmo_processor", tags: [tag.string]),
                 ],
                 stepStartedAt: now
             )
@@ -491,7 +491,7 @@ struct EventRunComponentPrintTests {
             world: world(
                 [
                     factory(),
-                    EventRunFixtures.device("AR1", type: "atmospheric_regulator", tags: [tag]),
+                    EventRunFixtures.device("AR1", type: "atmospheric_regulator", tags: [tag.string]),
                     EventRunFixtures.device("OLDBEACON", type: "ftl_beacon", location: "X-1"),
                 ],
                 stepStartedAt: now
@@ -513,7 +513,7 @@ struct EventRunComponentPrintTests {
                 directive: EventRunFixtures.directive(step: EventRun.Step.printing, now: now),
                 world: world(
                     [factory()] + (0..<held).map {
-                        EventRunFixtures.device("AP\($0)", type: "atmo_processor", tags: [tag])
+                        EventRunFixtures.device("AP\($0)", type: "atmo_processor", tags: [tag.string])
                     },
                     wanting: [(1, "atmo_processor"), (1, "climate_processor")],
                     stepStartedAt: now

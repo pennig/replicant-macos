@@ -17,7 +17,7 @@ import Utils
 /// in-force `ami_directive` block carries the pile it drains.
 private func controller(
     code: String,
-    tags: [String] = [HaulRun.defaultFleetTag],
+    tags: [String] = [HaulRun.defaultFleetTag.string],
     collecting: String? = nil,
     delivering: String = HaulRun.deliveryLocation,
     directive: String = "ferry"
@@ -189,10 +189,10 @@ struct DirectiveTargetsSectionTests {
     /// taken back by the operator.
     @Test func assignmentsHonourTheRunsFleetTag() {
         let devices = [
-            controller(code: "HAUL1", tags: ["auto:other"], collecting: "SOL-3"),
-            controller(code: "HAUL2", tags: ["auto:other"], collecting: "TAU-4"),
+            controller(code: "HAUL1", tags: ["auto:haul:SOL-9"], collecting: "SOL-3"),
+            controller(code: "HAUL2", tags: ["auto:haul:SOL-9"], collecting: "TAU-4"),
         ]
-        let directive = run(kind: .haulRun, fleetTag: "auto:other")
+        let directive = run(kind: .haulRun, fleetTag: "auto:haul:SOL-9")
         guard case let .assignments(_, assignments) = DirectiveTargetsSection.section(for: directive, devices: devices)
         else { return #expect(Bool(false), "expected assignments") }
         #expect(assignments.count == 2)

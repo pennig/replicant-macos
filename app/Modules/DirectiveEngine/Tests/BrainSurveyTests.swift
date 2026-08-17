@@ -70,7 +70,7 @@ private func surveyReadinessView(
 /// `location` is what `Brain.owningTheatre` resolves the carrier through.
 private func surveyReadinessStagedFleet(
     carrier: String = "V1", controller: String = "AMI1", drone: String = "DRONE1",
-    location: String? = "AINALRAM-1", tags: [String] = [Brain.surveyCarrierTag]
+    location: String? = "AINALRAM-1", tags: [String] = [Brain.surveyCarrierTag.string]
 ) -> [Device] {
     [
         surveyReadinessDevice(carrier, type: "heaven_vessel", tags: tags, location: location),
@@ -138,7 +138,7 @@ struct BrainSurveyTests {
             Issue.record("expected idle")
             return
         }
-        #expect(reason.contains(Brain.surveyCarrierTag))
+        #expect(reason.contains(Brain.surveyCarrierTag.string))
         #expect(reason.contains("V1"))
     }
 
@@ -148,7 +148,7 @@ struct BrainSurveyTests {
     @Test("a tagged vessel with no placeable location is named, not reported untagged")
     func aTaggedStowedVesselIsNamedNotReportedUntagged() {
         let devices = [
-            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: nil),
+            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag.string], location: nil),
         ]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
@@ -166,7 +166,7 @@ struct BrainSurveyTests {
     @Test("a tagged vessel with no survey controller aboard idles, never stalls")
     func noControllerAboardIdles() {
         let devices = [
-            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
+            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag.string], location: "AINALRAM-1"),
         ]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
@@ -184,7 +184,7 @@ struct BrainSurveyTests {
     @Test("a tagged vessel whose controller has adopted no drone aboard idles, naming that")
     func noAdoptedDroneAboardIdles() {
         let devices = [
-            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
+            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag.string], location: "AINALRAM-1"),
             surveyReadinessDevice(
                 "AMI1", type: "ami_survey_controller", stowedIn: "V1", directives: ["survey_system"]
             ),
@@ -230,7 +230,7 @@ struct BrainSurveyTests {
     func untaggedHullsAndMistaggedDeviceAreBothNamed() {
         let devices = [
             surveyReadinessDevice("V1", type: "heaven_vessel", location: "AINALRAM-1"),
-            surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag]),
+            surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag.string]),
         ]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
@@ -250,7 +250,7 @@ struct BrainSurveyTests {
     /// test the survey gate does not run.
     @Test("a mistagged-only fleet names the device, not a freedom test")
     func mistaggedOnlyFleetNamesTheDevice() {
-        let devices = [surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag])]
+        let devices = [surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag.string])]
         let view = surveyReadinessView(
             devices: devices, depot: "AINALRAM-BELT-1",
             starPositions: ["AINALRAM": Position(x: 0, y: 0, z: 0)]
@@ -268,7 +268,7 @@ struct BrainSurveyTests {
     @Test("a tagged, staged racing vessel is a survey carrier")
     func racingVesselIsASurveyCarrier() {
         let devices = [
-            surveyReadinessDevice("V1", type: "racing_vessel", tags: [Brain.surveyCarrierTag], location: "AINALRAM-1"),
+            surveyReadinessDevice("V1", type: "racing_vessel", tags: [Brain.surveyCarrierTag.string], location: "AINALRAM-1"),
             surveyReadinessDevice(
                 "AMI1", type: "ami_survey_controller", stowedIn: "V1", directives: ["survey_system"]
             ),
@@ -320,7 +320,7 @@ struct BrainSurveyTests {
     @Test("a location-less mistagged device is still named in a multi-theatre world")
     func locationlessMistaggedDeviceIsStillNamedAcrossTheatres() {
         let (view, ainalram, _) = twoTheatreSurveyView(
-            ainalramFleet: [surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag])],
+            ainalramFleet: [surveyReadinessDevice("P1", type: "propulsor", tags: [Brain.surveyCarrierTag.string])],
             denebedFleet: []
         )
 
@@ -385,7 +385,7 @@ struct BrainSurveyTests {
         )
         let live = directiveFixture(
             id: "LIVE", kind: .surveyRun, deviceCode: "VA",
-            fleetTag: SurveyRun.defaultFleetTag, theatreDepot: ainalram.depot
+            fleetTag: SurveyRun.defaultFleetTag.string, theatreDepot: ainalram.depot
         )
 
         guard case let .idle(reason) = Brain.surveyReadiness(view: view, directives: [live], theatre: denebed) else {
@@ -402,15 +402,15 @@ struct BrainSurveyTests {
     @Test("a nil fleetTag leaves bare-tagged fleet siblings unprotected; a stamped bare tag does not")
     func nilFleetTagLeavesSiblingsUnprotected() {
         let devices = [
-            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag]),
-            surveyReadinessDevice("BOT1", type: "service_bot", tags: [Brain.surveyCarrierTag]),
+            surveyReadinessDevice("V1", type: "heaven_vessel", tags: [Brain.surveyCarrierTag.string]),
+            surveyReadinessDevice("BOT1", type: "service_bot", tags: [Brain.surveyCarrierTag.string]),
         ].reduce(into: [String: Device]()) { $0[$1.deviceCode] = $1 }
 
         let nilTagged = directiveFixture(id: "NIL", kind: .surveyRun, deviceCode: "V1", fleetTag: nil)
         #expect(!Brain.reservedDevices(directives: [nilTagged], devices: devices).contains("BOT1"))
 
         let bareTagged = directiveFixture(
-            id: "BARE", kind: .surveyRun, deviceCode: "V1", fleetTag: SurveyRun.defaultFleetTag
+            id: "BARE", kind: .surveyRun, deviceCode: "V1", fleetTag: SurveyRun.defaultFleetTag.string
         )
         #expect(Brain.reservedDevices(directives: [bareTagged], devices: devices).contains("BOT1"))
     }
@@ -566,7 +566,7 @@ private func seedSurveyEnsureFleet(
     controller: String = "AMI1", drone: String = "DRONE1", location: String = growHubLocation
 ) throws {
     try seedSurveyEnsureDevice(
-        db, code: carrier, type: "heaven_vessel", tags: [Brain.surveyCarrierTag], location: location
+        db, code: carrier, type: "heaven_vessel", tags: [Brain.surveyCarrierTag.string], location: location
     )
     try seedSurveyEnsureDevice(
         db, code: controller, type: "ami_survey_controller", stowedIn: carrier, directives: ["survey_system"]
@@ -769,8 +769,8 @@ struct BrainEnsureSurveyTests {
         #expect(rows.count == 2, "both theatres must launch in the same tick")
         let first = try #require(rows.first { $0.deviceCode == surveyEnsureCarrier })
         let second = try #require(rows.first { $0.deviceCode == secondTheatreCarrier })
-        #expect(first.fleetTag == SurveyRun.fleetTag(forTheatre: growHubLocation))
-        #expect(second.fleetTag == SurveyRun.fleetTag(forTheatre: secondTheatreHubLocation))
+        #expect(first.fleetTag == SurveyRun.fleetTag(forTheatre: growHubLocation).string)
+        #expect(second.fleetTag == SurveyRun.fleetTag(forTheatre: secondTheatreHubLocation).string)
     }
 
     /// Candidate SCOPING only — SOL's per-theatre tag can never literally
@@ -782,7 +782,7 @@ struct BrainEnsureSurveyTests {
             try seedSurveyEnsureReadyWorld(db)
             try seedDirective(
                 db, id: "LIVE-SOL", kind: .surveyRun, status: .running,
-                deviceCode: surveyEnsureCarrier, fleetTag: SurveyRun.fleetTag(forTheatre: growHubLocation),
+                deviceCode: surveyEnsureCarrier, fleetTag: SurveyRun.fleetTag(forTheatre: growHubLocation).string,
                 theatreDepot: growHubLocation
             )
             try seedSecondTheatre(db)
@@ -808,7 +808,7 @@ struct BrainEnsureSurveyTests {
             try seedSurveyEnsureReadyWorld(db)
             try seedDirective(
                 db, id: "LIVE-SOL", kind: .surveyRun, status: .running,
-                deviceCode: surveyEnsureCarrier, fleetTag: SurveyRun.defaultFleetTag,
+                deviceCode: surveyEnsureCarrier, fleetTag: SurveyRun.defaultFleetTag.string,
                 theatreDepot: growHubLocation
             )
             try seedSecondTheatre(db)

@@ -93,7 +93,7 @@ public struct EventCourierPrint: MissionStepMachine {
         return .dispatch(
             kind: .print, deviceCode: printer.deviceCode,
             params: CommandParams(
-                deviceType: EventRun.courierDeviceType, quantity: 1, printTags: [EventRun.rootTag]
+                deviceType: EventRun.courierDeviceType, quantity: 1, printTags: [EventRun.rootTag.string]
             ),
             nextStep: Step.awaitingClone
         )

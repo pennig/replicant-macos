@@ -640,12 +640,12 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
     }
 
     @Test func aRunWithItsOwnTagClaimsOnlyItsOwnBots() {
-        let mine = bot("BOT1", tags: ["auto:salvage-2"])
-        let theirs = bot("BOT2", tags: [salvageTag])
+        let mine = bot("BOT1", tags: ["auto:salvage:DENEBED-9"])
+        let theirs = bot("BOT2", tags: ["auto:salvage:AINALRAM-1"])
         let w = repairWorld(devices: [vessel, mine, theirs])
         let d = salvageDirective(
             step: SalvageRun.Step.stowingBots, targets: ["TOSLIT"],
-            stepStartedAt: long, fleetTag: "auto:salvage-2"
+            stepStartedAt: long, fleetTag: "auto:salvage:DENEBED-9"
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("recall"), deviceCode: "BOT1",

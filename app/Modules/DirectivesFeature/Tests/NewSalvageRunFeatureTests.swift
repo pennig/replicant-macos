@@ -141,7 +141,7 @@ struct NewSalvageRunFeatureTests {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             var fleet = Self.stagedFleet()
-            fleet[0].tags = [SalvageRun.defaultFleetTag] // the vessel only
+            fleet[0].tags = [SalvageRun.defaultFleetTag.string] // the vessel only
             for device in fleet { try Device.insert { device }.execute(db) }
         }
         let store = TestStore(initialState: NewSalvageRunFeature.State()) {
@@ -259,7 +259,7 @@ struct NewSalvageRunFeatureTests {
         await store.receive(\.delegate.created)
 
         let row = try #require(try await database.read { db in try Directive.all.fetchAll(db) }.first)
-        #expect(row.fleetTag == SalvageRun.fleetTag(forTheatre: "SOL-3"))
+        #expect(row.fleetTag == SalvageRun.fleetTag(forTheatre: "SOL-3").string)
     }
 
     /// Launch is refused with no vessel chosen.
@@ -341,7 +341,7 @@ struct NewSalvageRunFeatureTests {
     nonisolated static func taggedFleet() -> [Device] {
         stagedFleet().map { fleetDevice in
             var tagged = fleetDevice
-            tagged.tags = [SalvageRun.defaultFleetTag]
+            tagged.tags = [SalvageRun.defaultFleetTag.string]
             return tagged
         }
     }

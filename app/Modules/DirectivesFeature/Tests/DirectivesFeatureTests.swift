@@ -204,7 +204,7 @@ struct DirectivesFeatureTests {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Device.insert {
-                Self.controller(code: "AMI1", directive: "belt_search", tags: [MineRecipe.fleetTag])
+                Self.controller(code: "AMI1", directive: "belt_search", tags: [MineRecipe.fleetTag.string])
             }.execute(db)
         }
         let dispatched = LockIsolated(false)
@@ -539,7 +539,7 @@ struct PrintMineFleetTests {
         #expect(created[0].status == .running)
         #expect(created[0].deviceCode == "HUB-A")
         #expect(created[0].theatreDepot == "AINALRAM-BELT-1")
-        #expect(created[0].fleetTag == MineRecipe.fleetTag)
+        #expect(created[0].fleetTag == MineRecipe.fleetTag.string)
         #expect(created[0].step == MineFleetPrint().firstStep)
         #expect(created[0].targets.isEmpty)
         #expect(created[0].returnToOrigin == false)
@@ -733,7 +733,7 @@ struct PrintMineFleetTests {
     nonisolated static func mineFleetPrintDirective(id: String, status: DirectiveStatus) -> Directive {
         Directive(
             id: id, kind: .mineFleetPrint, status: status, deviceCode: "HUB1",
-            fleetTag: MineRecipe.fleetTag, targets: [], targetIndex: 0,
+            fleetTag: MineRecipe.fleetTag.string, targets: [], targetIndex: 0,
             step: MineFleetPrint().firstStep, stepStartedAt: Date(timeIntervalSince1970: 0),
             returnToOrigin: false, originDesignation: nil, attentionReason: nil,
             createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)

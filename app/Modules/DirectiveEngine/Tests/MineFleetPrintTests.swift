@@ -60,7 +60,7 @@ private func printedFleet(omitting omitted: String? = nil, updatedAt: Date = now
             n += 1
             out.append(mineDevice(
                 "M\(String(format: "%02d", n))", type: type,
-                tags: [MineRecipe.fleetTag], location: hubLocation, updatedAt: updatedAt
+                tags: [MineRecipe.fleetTag.string], location: hubLocation, updatedAt: updatedAt
             ))
         }
     }
@@ -73,7 +73,7 @@ private func carrier(
 ) -> Device {
     mineDevice(
         code, type: MineRecipe.carrierDeviceType,
-        tags: tagged ? [MineRecipe.carrierTag] : [], location: location, status: status,
+        tags: tagged ? [MineRecipe.carrierTag.string] : [], location: location, status: status,
         updatedAt: updatedAt
     )
 }
@@ -118,7 +118,7 @@ private func printRun(
 ) -> Directive {
     Directive(
         id: "P1", kind: .mineFleetPrint, status: .running, deviceCode: code,
-        controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag, sourceRelayCode: nil,
+        controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag.string, sourceRelayCode: nil,
         targets: [], targetIndex: 0, step: step, stepStartedAt: stepStartedAt,
         returnToOrigin: false, originDesignation: hubSystem, attentionReason: nil,
         createdAt: now.addingTimeInterval(-600), updatedAt: now
@@ -159,7 +159,7 @@ struct MineFleetPrintTests {
             kind: .print, deviceCode: "AF1",
             params: CommandParams(
                 deviceType: MineRecipe.carrierDeviceType, quantity: 1,
-                printTags: [MineRecipe.carrierTag]
+                printTags: [MineRecipe.carrierTag.string]
             ),
             nextStep: MineFleetPrint.Step.printing
         ))
@@ -174,7 +174,7 @@ struct MineFleetPrintTests {
         #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .dispatch(
             kind: .print, deviceCode: "AF1",
             params: CommandParams(
-                deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag]
+                deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]
             ),
             nextStep: MineFleetPrint.Step.printing
         ))
@@ -204,7 +204,7 @@ struct MineFleetPrintTests {
         #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .dispatch(
             kind: .print, deviceCode: "AF1",
             params: CommandParams(
-                deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag]
+                deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]
             ),
             nextStep: MineFleetPrint.Step.printing
         ))
@@ -330,7 +330,7 @@ struct MineFleetPrintTests {
             kind: .print, deviceCode: "AF1",
             params: CommandParams(
                 deviceType: MineRecipe.carrierDeviceType, quantity: 1,
-                printTags: [MineRecipe.carrierTag]
+                printTags: [MineRecipe.carrierTag.string]
             ),
             nextStep: MineFleetPrint.Step.printing
         ))
@@ -379,7 +379,7 @@ struct MineFleetPrintFreshEvidenceTests {
             kind: .print, deviceCode: "AF1",
             params: CommandParams(
                 deviceType: "ami_transport_controller", quantity: 1,
-                printTags: [MineRecipe.fleetTag]
+                printTags: [MineRecipe.fleetTag.string]
             ),
             nextStep: MineFleetPrint.Step.printing
         ))
@@ -485,7 +485,7 @@ struct MineFleetPrintEngineTests {
         let dispatches = LockIsolated<[String]>([])
         let queries = LockIsolated<[String]>([])
         let clone = mineDevice(
-            "CLONE1", type: "ami_transport_controller", tags: [MineRecipe.fleetTag],
+            "CLONE1", type: "ami_transport_controller", tags: [MineRecipe.fleetTag.string],
             location: hubLocation
         )
 

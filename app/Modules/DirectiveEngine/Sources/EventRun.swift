@@ -48,10 +48,8 @@ public struct EventRun: MissionStepMachine {
     public static let carrierDeviceType = "surge_carrier"
     public static let freighterDeviceType = "cargo_freighter"
     public static let courierDeviceType = "matrix_container"
-    /// The bare tag every wire-bound query must use.
-    public static let rootTag = "auto:event"
-    /// The tag the carrier pool wears.
-    public static let carrierTag = "auto:carrier"
+    /// The unscoped tag the convoy's own devices wear.
+    public static let rootTag = FleetTag(goal: .event)
 
     /// Deadlines, all in the shape the sibling runs use.
     /// What a print gets on top of its own run time: queue wait and confirm lag.
@@ -64,9 +62,8 @@ public struct EventRun: MissionStepMachine {
     /// Generous: `progress` moves on the server's own schedule after a deposit.
     public static let progressDeadline: TimeInterval = 15 * 60
 
-    /// Local-only, never sent to `GET devices/tags/{tag}`.
-    public static func fleetTag(forTheatre depot: String) -> String {
-        "\(rootTag):\(depot.lowercased())"
+    public static func fleetTag(forTheatre depot: String) -> FleetTag {
+        FleetTag(goal: .event, scope: .theatre(depot: depot))
     }
 
     /// The event this run is working.
@@ -84,7 +81,7 @@ public struct EventRun: MissionStepMachine {
     /// A container this capability printed. An untagged one hosts some other
     /// automation's replicant, whatever it happens to stand beside.
     public static func isCourierHull(_ device: Device) -> Bool {
-        device.deviceType == courierDeviceType && device.hasTag(rootTag)
+        device.deviceType == courierDeviceType && device.carries(rootTag, policy: .exact)
     }
 
     /// A courier: an owned container with a replicant replicated into it.
@@ -189,13 +186,13 @@ public struct EventRun: MissionStepMachine {
     /// netted against what stands free at `depot` under this run's tag, the
     /// remainder expanded, then the component levels netted from the same pool.
     static func missingTree(
-        for option: EventPlan.Option, at depot: String, in world: WorldSnapshot, tag: String
+        for option: EventPlan.Option, at depot: String, in world: WorldSnapshot, tag: FleetTag
     ) -> Outstanding {
         // One pool, spent once: a type can be both a top-level requirement and
         // a sibling's component, and must not be counted for both.
         var remaining: [String: Int] = [:]
         for device in world.devices.values
-        where device.location == depot && device.hasTag(tag) {
+        where device.location == depot && device.carries(tag, policy: .exact) {
             remaining[device.deviceType, default: 0] += 1
         }
 
@@ -332,7 +329,7 @@ public struct EventRun: MissionStepMachine {
         order.insert(contentsOf: reported, at: 0)
         if !Self.beaconStands(at: event.location, in: world),
            !world.devices.values.contains(where: {
-               $0.deviceType == EventPlan.beaconDeviceType && $0.location == depot && $0.hasTag(tag)
+               $0.deviceType == EventPlan.beaconDeviceType && $0.location == depot && $0.carries(tag, policy: .exact)
            })
         {
             wanted[EventPlan.beaconDeviceType] = 1
@@ -378,7 +375,7 @@ public struct EventRun: MissionStepMachine {
 
         return .dispatch(
             kind: .print, deviceCode: free.deviceCode,
-            params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag]),
+            params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag.string]),
             nextStep: Step.printing
         )
     }
@@ -388,13 +385,13 @@ public struct EventRun: MissionStepMachine {
     /// The courier, then the beacon and the option's devices standing at `depot`,
     /// in the order `loading` attaches them.
     static func loadPayload(
-        courier: Device, option: EventPlan.Option, depot: String, tag: String,
+        courier: Device, option: EventPlan.Option, depot: String, tag: FleetTag,
         in world: WorldSnapshot
     ) -> [Device] {
         var payload = [courier]
         payload += world.devices.values
             .filter {
-                $0.hasTag(tag) && $0.location == depot
+                $0.carries(tag, policy: .exact) && $0.location == depot
                     && ($0.deviceType == EventPlan.beaconDeviceType || option.devices[$0.deviceType] != nil)
             }
             .sorted { $0.deviceCode < $1.deviceCode }

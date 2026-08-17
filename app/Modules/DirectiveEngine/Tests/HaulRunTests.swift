@@ -160,7 +160,7 @@ private func healthyPass(size n: Int) -> (directive: Directive, world: WorldSnap
 private func run(
     step: String,
     stepStartedAt: Date = fixtureNow,
-    fleetTag: String? = HaulRun.defaultFleetTag,
+    fleetTag: String? = HaulRun.defaultFleetTag.string,
     controllerCode: String? = nil,
     theatreDepot: String? = nil
 ) -> Directive {
@@ -205,7 +205,7 @@ struct HaulRunTests {
             directive: run(step: HaulRun.Step.preflight),
             world: world(devices: [stale] + meshed)
         )
-        #expect(action == .refreshFleet(tag: "auto:haul", thenStall: .noHaulControllerTagged))
+        #expect(action == .refreshFleet(tag: FleetTag(goal: .haul), thenStall: .noHaulControllerTagged))
     }
 
     /// A fresh, tagged controller needs no read at all.
@@ -223,42 +223,47 @@ struct HaulRunTests {
             directive: run(step: HaulRun.Step.preflight),
             world: world(devices: [controller("C1", tags: [])] + meshed)
         )
-        #expect(action == .refreshFleet(tag: "auto:haul", thenStall: .noHaulControllerTagged))
+        #expect(action == .refreshFleet(tag: FleetTag(goal: .haul), thenStall: .noHaulControllerTagged))
     }
 
     /// Capability, not device type: a controller is one because it offers
     /// `ferry`, so a differently-named device with the same capability works.
     @Test func aTaggedDeviceWithoutFerryIsNotAHaulController() {
         let notAController = controller("C1", directives: ["survey_system"])
-        #expect(HaulRun.controllers(in: world(devices: [notAController]), tag: "auto:haul").isEmpty)
+        #expect(HaulRun.controllers(in: world(devices: [notAController]), tag: FleetTag(goal: .haul)).isEmpty)
     }
 
     // MARK: - Per-theatre tag matching
 
     /// A bare-tagged controller still answers to a per-theatre tag query —
-    /// the migration fallback — case drift and all, since `isFleetTagged`
-    /// compares through `Device.normalizedTag` like every other tag test.
+    /// the migration fallback — case drift and all.
     @Test func perTheatreTagQueryFallsBackToTheBareTagAcrossCaseDrift() {
         let bare = controller("C1", tags: ["Auto:Haul"])
-        #expect(HaulRun.isFleetTagged(bare, tag: "AUTO:HAUL:SOL-3"))
+        #expect(HaulRun.isFleetTagged(bare, tag: FleetTag(goal: .haul, scope: .theatre(depot: "SOL-3"))))
     }
 
-    /// A genuinely custom, unrelated tag must NOT fall back to the bare
-    /// default — only a tag shaped `auto:haul:<depot>` does.
-    @Test func aCustomTagDoesNotFallBackToTheBareDefault() {
-        let bare = controller("C1", tags: ["auto:haul"])
-        #expect(!HaulRun.isFleetTagged(bare, tag: "auto:haul-b"))
+    /// Another goal's scoped tag must NOT fall back to the bare haul default —
+    /// a pinned mine ferry row carries `auto:mine:<belt>`, and its bare form is
+    /// worn by every printed recipe member.
+    @Test func anotherGoalsScopedTagDoesNotFallBackToTheBareDefault() {
+        let bareHaul = controller("C1", tags: ["auto:haul"])
+        let bareMine = controller("C2", tags: ["auto:mine"])
+        let belt = FleetTag(goal: .mine, scope: .belt(designation: "GRAZ-BELT-1"))
+        #expect(!HaulRun.isFleetTagged(bareHaul, tag: belt))
+        #expect(!HaulRun.isFleetTagged(bareMine, tag: belt))
     }
 
-    /// The wire read must send a tag the server knows: `GET
-    /// devices/tags/auto:haul:AINALRAM-BELT-1` answers zero devices live,
-    /// while `auto:haul` answers the real fleet.
-    @Test func preflightRefreshesUsingTheRootTagNotThePerTheatreOne() {
+    /// The refresh sends the row's own tag; `resolveFleetRefresh` reads the
+    /// unscoped form alongside it, so a half-migrated fleet is still seen.
+    @Test func preflightRefreshesUsingTheRowsOwnPerTheatreTag() {
         let action = HaulRun().nextAction(
             directive: run(step: HaulRun.Step.preflight, fleetTag: "auto:haul:AINALRAM-BELT-1"),
             world: world(devices: meshed)
         )
-        #expect(action == .refreshFleet(tag: "auto:haul", thenStall: .noHaulControllerTagged))
+        #expect(action == .refreshFleet(
+            tag: FleetTag(goal: .haul, scope: .theatre(depot: "AINALRAM-BELT-1")),
+            thenStall: .noHaulControllerTagged
+        ))
     }
 
     // MARK: surveying
@@ -372,18 +377,20 @@ struct HaulRunTests {
             directive: run(step: HaulRun.Step.assigning),
             world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
-        #expect(action == .refreshFleet(tag: "auto:haul", thenStall: .noHaulControllerTagged))
+        #expect(action == .refreshFleet(tag: FleetTag(goal: .haul), thenStall: .noHaulControllerTagged))
     }
 
-    /// The same wire-tag rule as `preflight`'s: a theatre-scoped directive
-    /// must not ask the server for a tag `GET devices/tags/{tag}` returns
-    /// zero devices for.
-    @Test func assigningRefreshesUsingTheRootTagNotThePerTheatreOne() {
+    /// The same rule as `preflight`'s: a theatre-scoped row asks under its own
+    /// tag, and the resolver reads the unscoped form alongside it.
+    @Test func assigningRefreshesUsingTheRowsOwnPerTheatreTag() {
         let action = HaulRun().nextAction(
             directive: run(step: HaulRun.Step.assigning, fleetTag: "auto:haul:AINALRAM-BELT-1"),
             world: world(devices: meshed, footprints: [footprint("ATIANFU-BELT-1", 3_537)])
         )
-        #expect(action == .refreshFleet(tag: "auto:haul", thenStall: .noHaulControllerTagged))
+        #expect(action == .refreshFleet(
+            tag: FleetTag(goal: .haul, scope: .theatre(depot: "AINALRAM-BELT-1")),
+            thenStall: .noHaulControllerTagged
+        ))
     }
 
     /// **CRITICAL regression guard (2026-07-31 review).** Once the first pinned
@@ -1345,10 +1352,10 @@ struct HaulRunTheatreScopingTests {
         let world = twoTheatreWorld(ctrlA, ctrlB)
 
         let forAinalram = HaulRun.controllers(
-            in: world, tag: "auto:haul:AINALRAM-BELT-1", theatreDepot: ainalram.depot
+            in: world, tag: FleetTag(goal: .haul, scope: .theatre(depot: "AINALRAM-BELT-1")), theatreDepot: ainalram.depot
         )
         let forDenebed = HaulRun.controllers(
-            in: world, tag: "auto:haul:DENEBED-BELT-1", theatreDepot: denebed.depot
+            in: world, tag: FleetTag(goal: .haul, scope: .theatre(depot: "DENEBED-BELT-1")), theatreDepot: denebed.depot
         )
 
         #expect(forAinalram.map(\.deviceCode) == ["CTRL-A"])
@@ -1393,7 +1400,7 @@ struct HaulRunTheatreScopingTests {
         let world = twoTheatreWorld(ctrlA, away)
 
         let forDenebed = HaulRun.controllers(
-            in: world, tag: "auto:haul:DENEBED-BELT-1", theatreDepot: denebed.depot
+            in: world, tag: FleetTag(goal: .haul, scope: .theatre(depot: "DENEBED-BELT-1")), theatreDepot: denebed.depot
         )
 
         #expect(forDenebed.map(\.deviceCode) == ["CTRL-B"])
@@ -1408,7 +1415,7 @@ struct HaulRunTheatreScopingTests {
         let world = twoTheatreWorld(controller("CTRL-A", tags: ["auto:haul"], location: "AINALRAM-BELT-1"), migrated)
 
         let forAinalram = HaulRun.controllers(
-            in: world, tag: "auto:haul:AINALRAM-BELT-1", theatreDepot: ainalram.depot
+            in: world, tag: FleetTag(goal: .haul, scope: .theatre(depot: "AINALRAM-BELT-1")), theatreDepot: ainalram.depot
         )
 
         #expect(forAinalram.map(\.deviceCode) == ["CTRL-A"])
@@ -1512,7 +1519,7 @@ struct HaulRunPinnedTests {
             operationalCapacity: 100, queueSize: 0,
             stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
             createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
-            features: ["ami"], tags: [HaulRun.defaultFleetTag], detail: .object(detail),
+            features: ["ami"], tags: [HaulRun.defaultFleetTag.string], detail: .object(detail),
             updatedAt: updatedAt, firstSeenAt: Date(timeIntervalSince1970: 0)
         )
     }
@@ -1562,7 +1569,7 @@ struct HaulRunPinnedTests {
         Directive(
             id: "D9", kind: .haulRun, status: .running, deviceCode: deviceCode,
             controllerCode: controllerCode,
-            fleetTag: HaulRun.defaultFleetTag, targets: targets, targetIndex: 0, step: step,
+            fleetTag: HaulRun.defaultFleetTag.string, targets: targets, targetIndex: 0, step: step,
             stepStartedAt: fixtureNow, returnToOrigin: false,
             originDesignation: nil, attentionReason: nil,
             createdAt: fixtureNow, updatedAt: fixtureNow

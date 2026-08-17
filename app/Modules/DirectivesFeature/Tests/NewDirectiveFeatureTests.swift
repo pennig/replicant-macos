@@ -143,7 +143,7 @@ struct NewDirectiveFeatureTests {
         #expect(created[0].step == SurveyRun().firstStep)
         #expect(created[0].originDesignation == "SOL")
         #expect(created[0].controllerCode == nil, "the engine claims the controller at preflight")
-        #expect(created[0].fleetTag == SurveyRun.defaultFleetTag, "never nil — see reservedDevices' tag sweep")
+        #expect(created[0].fleetTag == SurveyRun.defaultFleetTag.string, "never nil — see reservedDevices' tag sweep")
     }
 
     /// The operator-launched path must stamp the SAME per-theatre tag the
@@ -195,7 +195,7 @@ struct NewDirectiveFeatureTests {
         await store.receive(\.delegate.created)
 
         let row = try #require(try await database.read { db in try Directive.all.fetchAll(db) }.first)
-        #expect(row.fleetTag == SurveyRun.fleetTag(forTheatre: "GRAZ-3"))
+        #expect(row.fleetTag == SurveyRun.fleetTag(forTheatre: "GRAZ-3").string)
     }
 
     /// Launch is refused with no vessel or no targets — an empty queue would

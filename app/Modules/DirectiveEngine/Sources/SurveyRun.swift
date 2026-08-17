@@ -67,7 +67,7 @@ public struct SurveyRun: MissionStepMachine {
     }
 
     /// The tag a row falls back to when it carries none of its own.
-    public static let defaultFleetTag = "auto:survey"
+    public static let defaultFleetTag = FleetTag(goal: .survey)
 
     /// How long to let the AMI's post-survey recall get going before the first
     /// probe. Short: the point is only to avoid reading state that cannot
@@ -571,18 +571,20 @@ public struct SurveyRun: MissionStepMachine {
 
     /// The fleet tag `directive` resolves against, falling back to
     /// `defaultFleetTag` for a row that carries none of its own.
-    static func fleetTag(_ directive: Directive) -> String {
-        directive.fleetTag ?? Self.defaultFleetTag
+    static func fleetTag(_ directive: Directive) -> FleetTag {
+        directive.fleetTag.flatMap(FleetTag.init(parsing:)) ?? Self.defaultFleetTag
     }
 
-    /// The tag `Brain.ensureSurvey` stamps for a theatre at `depot` —
-    /// `auto:mine:<belt>`'s sibling, per theatre rather than per belt.
-    public static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
+    /// The tag `Brain.ensureSurvey` stamps for a theatre at `depot` — the mine
+    /// ferry tag's sibling, per theatre rather than per belt.
+    public static func fleetTag(forTheatre depot: String) -> FleetTag {
+        FleetTag(goal: .survey, scope: .theatre(depot: depot))
+    }
 
     /// Whether `device` may carry `depot`'s survey work: its own theatre tag,
     /// or (an un-migrated fleet) the bare tag it falls back from.
     static func isFleetTagged(_ device: Device, at depot: String) -> Bool {
-        device.hasTag(fleetTag(forTheatre: depot)) || device.hasTag(defaultFleetTag)
+        device.carries(fleetTag(forTheatre: depot), policy: .exactOrUnscoped)
     }
 
     /// Deploy the next service bot still aboard `vessel`, or move on when the

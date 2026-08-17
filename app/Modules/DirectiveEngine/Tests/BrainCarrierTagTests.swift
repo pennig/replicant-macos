@@ -55,7 +55,7 @@ struct BrainCarrierTagTests {
 
     @Test("a tagged vessel is")
     func taggedVesselIsFree() {
-        let devices = fleet([vessel("V1", tags: [Brain.carrierTag])])
+        let devices = fleet([vessel("V1", tags: [Brain.carrierTag.string])])
 
         #expect(Brain.freeCarrier(at: hubLocation, devices: devices, reserved: [])?.deviceCode == "V1")
     }
@@ -82,7 +82,7 @@ struct BrainCarrierTagTests {
     /// will see in the device inspector.
     @Test("the carrier tag is spelled in its normalised form")
     func carrierTagIsNormalised() {
-        #expect(Brain.carrierTag == Device.normalizedTag(Brain.carrierTag))
+        #expect(Brain.carrierTag.string == Device.normalizedTag(Brain.carrierTag.string))
     }
 
     /// The live fleet's exact shape: three idle vessels, none tagged. Before the
@@ -102,7 +102,7 @@ struct BrainCarrierTagTests {
         ("reserved", "idle", hubLocation, true),
     ])
     func tagDoesNotOverrideOtherClauses(_ label: String, status: String, location: String, reserved: Bool) {
-        let devices = fleet([vessel("V1", tags: [Brain.carrierTag], location: location, status: status)])
+        let devices = fleet([vessel("V1", tags: [Brain.carrierTag.string], location: location, status: status)])
 
         let carrier = Brain.freeCarrier(
             at: hubLocation, devices: devices, reserved: reserved ? ["V1"] : []
@@ -122,7 +122,7 @@ struct BrainCarrierTagTests {
             at: hubLocation, devices: devices, reserved: [], directives: []
         )
 
-        #expect(blocker.contains(Brain.carrierTag))
+        #expect(blocker.contains(Brain.carrierTag.string))
         #expect(blocker.contains("965AC2C3"))
         #expect(!blocker.contains("no free carrier"), "the untagged case must not be reported as busyness")
     }
@@ -146,7 +146,7 @@ struct BrainCarrierHullGateTests {
     /// not matter — cradle + surge is what makes it a carrier.
     @Test("an idle tagged racing vessel at the hub is a free carrier")
     func racingVesselIsAFreeCarrier() {
-        let devices = fleet([vessel("R1", type: "racing_vessel", tags: [Brain.carrierTag])])
+        let devices = fleet([vessel("R1", type: "racing_vessel", tags: [Brain.carrierTag.string])])
 
         #expect(
             Brain.freeCarrier(at: hubLocation, devices: devices, reserved: [])?.deviceCode == "R1"
@@ -159,7 +159,7 @@ struct BrainCarrierHullGateTests {
     @Test("a busy tagged racing vessel gets a per-vessel clause, not untagged")
     func busyRacingVesselGetsAPerVesselClause() {
         let devices = fleet([
-            vessel("R1", type: "racing_vessel", tags: [Brain.carrierTag], status: "travelling")
+            vessel("R1", type: "racing_vessel", tags: [Brain.carrierTag.string], status: "travelling")
         ])
 
         let blocker = Brain.carrierBlocker(
@@ -176,7 +176,7 @@ struct BrainCarrierHullGateTests {
     func taggedNonCarrierIsNamedMistagged() {
         let devices = fleet([
             vessel(
-                "P1", type: "propulsor", tags: [Brain.carrierTag],
+                "P1", type: "propulsor", tags: [Brain.carrierTag.string],
                 features: ["cruise", "stow", "diversion"]
             )
         ])
@@ -196,7 +196,7 @@ struct BrainCarrierHullGateTests {
     func stowedTaggedNonCarrierIsStillNamed() {
         let devices = fleet([
             vessel(
-                "P1", type: "propulsor", tags: [Brain.carrierTag], location: nil,
+                "P1", type: "propulsor", tags: [Brain.carrierTag.string], location: nil,
                 features: ["cruise", "stow", "diversion"]
             )
         ])

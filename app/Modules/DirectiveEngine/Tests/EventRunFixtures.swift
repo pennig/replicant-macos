@@ -45,7 +45,7 @@ enum EventRunFixtures {
     ) -> Device {
         device(
             code, type: "matrix_container", attachedTo: attachedTo, location: location,
-            tags: [EventRun.rootTag], updatedAt: updatedAt
+            tags: [EventRun.rootTag.string], updatedAt: updatedAt
         )
     }
 
@@ -156,7 +156,7 @@ enum EventRunFixtures {
         Directive(
             id: "d1", kind: .eventRun, status: .running, deviceCode: "CARRIER",
             controllerCode: nil, roamCentre: nil,
-            fleetTag: EventRun.fleetTag(forTheatre: "HUB-1"), sourceRelayCode: nil,
+            fleetTag: EventRun.fleetTag(forTheatre: "HUB-1").string, sourceRelayCode: nil,
             targets: ["X-1-EVT-001"], targetIndex: 0, step: step,
             stepStartedAt: now, returnToOrigin: true, originDesignation: "HUB",
             attentionReason: nil, createdAt: now, updatedAt: now,

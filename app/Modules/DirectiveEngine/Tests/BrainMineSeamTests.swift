@@ -45,14 +45,14 @@ private func seedMineSeamWorld(
 
     try seedDevice(
         db, code: mineSeamCarrier, type: MineRecipe.carrierDeviceType,
-        location: mineSeamHub, tags: [MineRecipe.carrierTag], updatedAt: mineSeamNow
+        location: mineSeamHub, tags: [MineRecipe.carrierTag.string], updatedAt: mineSeamNow
     )
     guard printedFleet else { return }
     for (type, quantity) in MineRecipe.all {
         for index in 0..<quantity {
             try seedDevice(
                 db, code: "\(type)-\(index)", type: type, location: mineSeamHub,
-                tags: [MineRecipe.fleetTag], updatedAt: mineSeamNow
+                tags: [MineRecipe.fleetTag.string], updatedAt: mineSeamNow
             )
         }
     }
@@ -96,7 +96,7 @@ struct BrainMineSeamTests {
         #expect(runs.count == 1)
         #expect(launched.deviceCode == mineSeamCarrier)
         #expect(launched.targets == [mineSeamBelt])
-        #expect(launched.fleetTag == MineRecipe.fleetTag(forTheatre: mineSeamHub))
+        #expect(launched.fleetTag == MineRecipe.fleetTag(forTheatre: mineSeamHub).string)
         // Without it the carrier stays at the belt and the next install prints one.
         #expect(launched.returnToOrigin)
         #expect(

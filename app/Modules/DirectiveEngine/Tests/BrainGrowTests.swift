@@ -255,7 +255,7 @@ struct BrainGrowTests {
             // fleet-tag reservation is what stops it. Tagged for tendMesh alone
             // it would be free; tagged for haul alone it would never be a
             // candidate, and the assertion would pass for the wrong reason.
-            try seedDevice(db, code: "V1", location: growHubLocation, tags: ["auto:haul", Brain.carrierTag])
+            try seedDevice(db, code: "V1", location: growHubLocation, tags: ["auto:haul", Brain.carrierTag.string])
             try seedDirective(db, id: "HAUL", kind: .haulRun, deviceCode: "SOMEVESSEL", fleetTag: "auto:haul")
         }
 

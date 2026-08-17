@@ -62,7 +62,7 @@ public struct SalvageRun: MissionStepMachine {
     static let retiredSteps: Set<String> = ["emplacing", "activating", "confirmingRelay", "restocking"]
 
     /// The tag a row falls back to when it carries none of its own.
-    public static let defaultFleetTag = "auto:salvage"
+    public static let defaultFleetTag = FleetTag(goal: .salvage)
 
     /// Anchors `.extendQueue`'s census read when a row carries no `roamCentre`, so
     /// a continuous run missing that optional field can still plan a target.
@@ -275,9 +275,7 @@ public struct SalvageRun: MissionStepMachine {
             }
             return .wait
         }
-        // Rooted for the WIRE read below — the server's tag endpoint has no
-        // notion of a per-theatre tag, unlike local selection through it.
-        let tag = RepairFleet.root(of: Self.fleetTag(directive))
+        let tag = Self.fleetTag(directive)
         // Both staging checks are NEGATIVE findings over local rows: silence
         // means either nothing is aboard or nobody has been allowed to look, and
         // only the first is worth stopping for. `.refreshFleet` buys one
@@ -635,9 +633,7 @@ public struct SalvageRun: MissionStepMachine {
         let drones = AMIFleet.adoptedDrones(of: controller, in: world)
         let lastLook = drones.map(\.updatedAt).min() ?? .distantPast
         let canRead = world.now.timeIntervalSince(lastLook) >= Self.reconcileInterval
-        // Rooted for every `.refreshFleet` below — the server's tag endpoint
-        // knows nothing of a per-theatre derivation.
-        let wireTag = RepairFleet.root(of: Self.fleetTag(directive))
+        let wireTag = Self.fleetTag(directive)
 
         // Never believe a row read BEFORE this step began: a pre-launch drone row
         // still shows it stowed aboard and reads as "recovered" the instant the
@@ -889,18 +885,20 @@ public struct SalvageRun: MissionStepMachine {
     /// The fleet tag `directive` resolves against, falling back to
     /// `defaultFleetTag` for a row that carries none of its own. Every step naming
     /// a tag for `.refreshFleet` goes through this, so the fallback lives once.
-    static func fleetTag(_ directive: Directive) -> String {
-        directive.fleetTag ?? Self.defaultFleetTag
+    static func fleetTag(_ directive: Directive) -> FleetTag {
+        directive.fleetTag.flatMap(FleetTag.init(parsing:)) ?? Self.defaultFleetTag
     }
 
-    /// The tag `Brain.ensureSalvage` stamps for a theatre at `depot` —
-    /// `auto:mine:<belt>`'s sibling, per theatre rather than per belt.
-    public static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
+    /// The tag `Brain.ensureSalvage` stamps for a theatre at `depot` — the mine
+    /// ferry tag's sibling, per theatre rather than per belt.
+    public static func fleetTag(forTheatre depot: String) -> FleetTag {
+        FleetTag(goal: .salvage, scope: .theatre(depot: depot))
+    }
 
     /// Whether `device` may carry `depot`'s salvage work: its own theatre
     /// tag, or (an un-migrated fleet) the bare tag it falls back from.
     static func isFleetTagged(_ device: Device, at depot: String) -> Bool {
-        device.hasTag(fleetTag(forTheatre: depot)) || device.hasTag(defaultFleetTag)
+        device.carries(fleetTag(forTheatre: depot), policy: .exactOrUnscoped)
     }
 
     /// Confirm the recall landed before letting the run go anywhere, then decide the
@@ -919,7 +917,7 @@ public struct SalvageRun: MissionStepMachine {
         let stranded = AMIFleet.adoptedDrones(of: controller, in: world)
             .filter { $0.stowedInDeviceCode != vessel.deviceCode }
         if !stranded.isEmpty {
-            return .refreshFleet(tag: RepairFleet.root(of: Self.fleetTag(directive)), thenStall: .dronesNotRecovered)
+            return .refreshFleet(tag: Self.fleetTag(directive), thenStall: .dronesNotRecovered)
         }
         // The controller flies its own recall leg, and `directive.completed`
         // tracks the DRONES, so it is routinely still airborne here. Departing

@@ -1252,7 +1252,7 @@ struct DirectiveRefreshFleetTests {
         let reads = LockIsolated<[String]>([])
         let core = DirectiveEngineCore(
             machines: [ScriptedMachine([
-                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .noMiningDroneAboard),
                 .advanceStep(nextStep: "travelling"),
             ])],
             tick: .seconds(5)
@@ -1283,6 +1283,44 @@ struct DirectiveRefreshFleetTests {
         #expect(reads.value == ["auto:salvage"])
     }
 
+    /// A scoped tag reads BOTH forms: the server does exact match with no
+    /// hierarchy, so a fleet half-migrated to per-theatre tags is only fully
+    /// seen when the unscoped form is read alongside it.
+    @Test func aScopedRefreshReadsTheScopedAndTheUnscopedTag() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { mission(step: "start") }.execute(db)
+        }
+        let reads = LockIsolated<[String]>([])
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([
+                .refreshFleet(
+                    tag: FleetTag(goal: .salvage, scope: .theatre(depot: "AINALRAM-BELT-1")),
+                    thenStall: .noMiningDroneAboard
+                ),
+                .advanceStep(nextStep: "travelling"),
+            ])],
+            tick: .seconds(5)
+        )
+
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.devicesClient.fetchByTag = { tag in
+                reads.withValue { $0.append(tag) }
+                return tag == "auto:salvage" ? [carrier("BARE")] : [carrier("SCOPED")]
+            }
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let stored = try await database.read { db in
+                try Device.all.fetchAll(db).map(\.deviceCode).sorted()
+            }
+            #expect(stored == ["BARE", "SCOPED"])
+        }
+        #expect(reads.value == ["auto:salvage:ainalram-belt-1", "auto:salvage"])
+    }
+
     /// Asked twice with an authoritative tag read in between and still
     /// unresolved: the carried reason surfaces. Bounded to ONE round — a machine
     /// that asks again after the re-ask gets the carried stall, never a loop.
@@ -1294,8 +1332,8 @@ struct DirectiveRefreshFleetTests {
         let reads = LockIsolated<[String]>([])
         let core = DirectiveEngineCore(
             machines: [ScriptedMachine([
-                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
-                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .noMiningDroneAboard),
             ])],
             tick: .seconds(5)
         )
@@ -1328,8 +1366,8 @@ struct DirectiveRefreshFleetTests {
         }
         let core = DirectiveEngineCore(
             machines: [ScriptedMachine([
-                .refreshFleet(tag: "auto:salvage", thenStall: nil),
-                .refreshFleet(tag: "auto:salvage", thenStall: nil),
+                .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: nil),
+                .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: nil),
             ])],
             tick: .seconds(5)
         )
@@ -1362,8 +1400,8 @@ struct DirectiveRefreshFleetTests {
         struct ReadFailure: Error {}
         let core = DirectiveEngineCore(
             machines: [ScriptedMachine([
-                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
-                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .noMiningDroneAboard),
             ])],
             tick: .seconds(5)
         )
@@ -1420,7 +1458,7 @@ struct DirectiveRefreshFleetTests {
         let core = DirectiveEngineCore(
             machines: [ScriptedMachine([
                 .extendQueue(centre: "CENTRE"),
-                .refreshFleet(tag: "auto:salvage", thenStall: .noMiningDroneAboard),
+                .refreshFleet(tag: FleetTag(goal: .salvage), thenStall: .noMiningDroneAboard),
                 .advanceStep(nextStep: "travelling"),
             ])],
             tick: .seconds(5)
@@ -2421,7 +2459,7 @@ private struct RefreshCarouselMachine: MissionStepMachine {
         switch (n - 1) % 4 {
         case 0: return .refreshDevices(deviceCodes: ["VES1"], thenStall: .unreachableDevice)
         case 1: return .refreshFootprint(nextStep: "start", thenStall: .printStockShort)
-        case 2: return .refreshFleet(tag: "auto:survey", thenStall: .noSurveyDroneAboard)
+        case 2: return .refreshFleet(tag: FleetTag(goal: .survey), thenStall: .noSurveyDroneAboard)
         default: return .refreshDevicesInSystem(designation: "SOL", thenStall: .noSurveyControllerAboard)
         }
     }

@@ -46,11 +46,11 @@ private func shortFleet() -> [Device] {
         for _ in 0..<wanted {
             n += 1
             out.append(device(
-                "M\(String(format: "%02d", n))", type: type, tags: [MineRecipe.fleetTag]
+                "M\(String(format: "%02d", n))", type: type, tags: [MineRecipe.fleetTag.string]
             ))
         }
     }
-    out.append(device("SC1", type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag]))
+    out.append(device("SC1", type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag.string]))
     return out
 }
 
@@ -79,7 +79,7 @@ private func world(
 private func run(hub code: String, depot stamped: String? = depot) -> Directive {
     Directive(
         id: "P1", kind: .mineFleetPrint, status: .running, deviceCode: code,
-        controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag,
+        controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag.string,
         sourceRelayCode: nil, targets: [], targetIndex: 0,
         step: MineFleetPrint.Step.stocking, stepStartedAt: now.addingTimeInterval(-60),
         returnToOrigin: false, originDesignation: "AINALRAM", attentionReason: nil,

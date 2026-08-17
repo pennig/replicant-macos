@@ -70,7 +70,7 @@ private func carriedFleet(
             n += 1
             guard type != omitting else { continue }
             out.append(mineRow(
-                "M\(String(format: "%02d", n))", type: type, tags: [MineRecipe.fleetTag],
+                "M\(String(format: "%02d", n))", type: type, tags: [MineRecipe.fleetTag.string],
                 location: location, attachedTo: n <= attached ? carrierCode : nil,
                 updatedAt: updatedAt
             ))
@@ -81,7 +81,7 @@ private func carriedFleet(
 
 private func mineCarrier(location: String? = hubLocation, updatedAt: Date = now) -> Device {
     mineRow(
-        carrierCode, type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag],
+        carrierCode, type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag.string],
         location: location, updatedAt: updatedAt
     )
 }
@@ -95,7 +95,7 @@ private let beltRelay = mineRow(
 /// A tagged mining controller already standing at the belt: the mine this run
 /// exists to install is installed.
 private let installedMine = mineRow(
-    "X01", type: "ami_mining_controller", tags: [MineRecipe.fleetTag], location: targetBelt
+    "X01", type: "ami_mining_controller", tags: [MineRecipe.fleetTag.string], location: targetBelt
 )
 
 // MARK: Adopt-and-arm fixtures
@@ -124,7 +124,7 @@ private func beltFleet(
             n += 1
             let code = memberCodes[n - 1]
             out.append(mineRow(
-                code, type: type, tags: [MineRecipe.fleetTag], location: location,
+                code, type: type, tags: [MineRecipe.fleetTag.string], location: location,
                 controlledBy: adoptedBy[code], directive: armed[code], updatedAt: updatedAt
             ))
         }
@@ -143,7 +143,7 @@ private func transportPair(
 ) -> [Device] {
     [
         mineRow(
-            transportCode, type: "ami_transport_controller", tags: [MineRecipe.fleetTag],
+            transportCode, type: "ami_transport_controller", tags: [MineRecipe.fleetTag.string],
             location: location,
             directive: ferry.map {
                 (
@@ -154,7 +154,7 @@ private func transportPair(
             updatedAt: updatedAt
         ),
         mineRow(
-            freighterCode, type: "cargo_freighter", tags: [MineRecipe.fleetTag],
+            freighterCode, type: "cargo_freighter", tags: [MineRecipe.fleetTag.string],
             location: location, controlledBy: adopted ? transportCode : nil,
             updatedAt: updatedAt
         ),
@@ -229,12 +229,12 @@ private let cleanCarriedRounds: [(kind: OperationKind, deviceCode: String)] = [
 /// spares accumulate there under the same fleet tag.
 private func sparePair(freighter: Bool = true) -> [Device] {
     var out = [mineRow(
-        "TC2", type: "ami_transport_controller", tags: [MineRecipe.fleetTag],
+        "TC2", type: "ami_transport_controller", tags: [MineRecipe.fleetTag.string],
         location: HaulRun.deliveryLocation
     )]
     if freighter {
         out.append(mineRow(
-            "FR2", type: "cargo_freighter", tags: [MineRecipe.fleetTag],
+            "FR2", type: "cargo_freighter", tags: [MineRecipe.fleetTag.string],
             location: HaulRun.deliveryLocation
         ))
     }
@@ -292,7 +292,7 @@ private func mineRunRow(
 ) -> Directive {
     Directive(
         id: "D1", kind: .mineRun, status: .running, deviceCode: deviceCode,
-        controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag, sourceRelayCode: nil,
+        controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag.string, sourceRelayCode: nil,
         targets: targets, targetIndex: 0, step: step, stepStartedAt: stepStartedAt,
         returnToOrigin: returnToOrigin, originDesignation: nil, attentionReason: nil,
         createdAt: now.addingTimeInterval(-600), updatedAt: now, theatreDepot: theatreDepot
@@ -1413,7 +1413,7 @@ struct MineRunEngineTests {
                 else { return .dispatched(.accepted(operationID: nil)) }
                 ordered.withValue { $0.append(code) }
                 let aboard = mineRow(
-                    code, type: row.deviceType, tags: [MineRecipe.fleetTag],
+                    code, type: row.deviceType, tags: [MineRecipe.fleetTag.string],
                     location: hubLocation, attachedTo: carrierCode,
                     updatedAt: now.addingTimeInterval(-1)
                 )
@@ -1480,7 +1480,7 @@ struct MineRunEngineTests {
                     for code in devices {
                         guard let row = existing.first(where: { $0.deviceCode == code }) else { continue }
                         let adopted = mineRow(
-                            code, type: row.deviceType, tags: [MineRecipe.fleetTag],
+                            code, type: row.deviceType, tags: [MineRecipe.fleetTag.string],
                             location: row.location, controlledBy: controller,
                             updatedAt: now.addingTimeInterval(-1)
                         )
@@ -1556,7 +1556,7 @@ struct MineRunEngineTests {
                 guard let base = Self.armedRows.first(where: { $0.deviceCode == code })
                 else { return .dispatched(.accepted(operationID: nil)) }
                 let row = mineRow(
-                    code, type: base.deviceType, tags: [MineRecipe.fleetTag],
+                    code, type: base.deviceType, tags: [MineRecipe.fleetTag.string],
                     location: base.location, controlledBy: base.controllerDeviceCode,
                     directive: armed.value[code], updatedAt: now.addingTimeInterval(-1)
                 )

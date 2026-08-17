@@ -48,7 +48,7 @@ private func printedFleet() -> [Device] {
     for (type, qty) in MineRecipe.all {
         for _ in 0..<qty {
             n += 1
-            out.append(mineDevice("M\(String(format: "%02d", n))", type: type, tags: [MineRecipe.fleetTag], location: hub))
+            out.append(mineDevice("M\(String(format: "%02d", n))", type: type, tags: [MineRecipe.fleetTag.string], location: hub))
         }
     }
     return out
@@ -79,7 +79,7 @@ struct MineRecipeTests {
         let tc = fleet.firstIndex { $0.deviceType == "ami_transport_controller" }!
         fleet[tc] = mineDevice(
             fleet[tc].deviceCode, type: "ami_transport_controller",
-            tags: [MineRecipe.fleetTag], location: hub, status: "coordinating",
+            tags: [MineRecipe.fleetTag.string], location: hub, status: "coordinating",
             directive: (name: "ferry", status: "active", config: [:])
         )
         #expect(MineRecipe.shortfall(at: hub, in: fleet) == ["ami_transport_controller": 1])
@@ -87,9 +87,9 @@ struct MineRecipeTests {
 
     @Test("a device away from the hub, stowed, attached, or adopted is not unassigned")
     func locationAndOwnershipGates() {
-        let away = mineDevice("A1", type: "mining_drone", tags: [MineRecipe.fleetTag], location: "ELSEWHERE-1")
-        let attached = mineDevice("A2", type: "mining_drone", tags: [MineRecipe.fleetTag], location: hub, attachedTo: "CARRIER")
-        let adopted = mineDevice("A3", type: "mining_drone", tags: [MineRecipe.fleetTag], location: hub, controllerDeviceCode: "AMI")
+        let away = mineDevice("A1", type: "mining_drone", tags: [MineRecipe.fleetTag.string], location: "ELSEWHERE-1")
+        let attached = mineDevice("A2", type: "mining_drone", tags: [MineRecipe.fleetTag.string], location: hub, attachedTo: "CARRIER")
+        let adopted = mineDevice("A3", type: "mining_drone", tags: [MineRecipe.fleetTag.string], location: hub, controllerDeviceCode: "AMI")
         for d in [away, attached, adopted] {
             #expect(!MineRecipe.isUnassigned(d, hub: hub))
         }
@@ -98,20 +98,20 @@ struct MineRecipeTests {
     @Test("installed belts are auto:mine mining controllers standing away from the hub")
     func installedBelts() {
         let installed = mineDevice(
-            "MC1", type: "ami_mining_controller", tags: [MineRecipe.fleetTag],
+            "MC1", type: "ami_mining_controller", tags: [MineRecipe.fleetTag.string],
             location: "AMEDIOHA-BELT-1", status: "coordinating",
             directive: (name: "gather_evenly", status: "active", config: [:])
         )
-        let atHub = mineDevice("MC2", type: "ami_mining_controller", tags: [MineRecipe.fleetTag], location: hub)
+        let atHub = mineDevice("MC2", type: "ami_mining_controller", tags: [MineRecipe.fleetTag.string], location: hub)
         let belts = MineRecipe.installedBelts(in: [installed, atHub], hub: hub)
         #expect(belts == ["AMEDIOHA-BELT-1"])
     }
 
     @Test("the idle carrier is the lowest-coded tagged surge carrier at the hub")
     func idleCarrier() {
-        let a = mineDevice("CB", type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag], location: hub)
-        let b = mineDevice("CA", type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag], location: hub)
-        let busy = mineDevice("AA", type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag], location: hub, status: "travelling")
+        let a = mineDevice("CB", type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag.string], location: hub)
+        let b = mineDevice("CA", type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag.string], location: hub)
+        let busy = mineDevice("AA", type: MineRecipe.carrierDeviceType, tags: [MineRecipe.carrierTag.string], location: hub, status: "travelling")
         #expect(MineRecipe.idleCarrier(at: hub, in: [a, b, busy])?.deviceCode == "CA")
     }
 }

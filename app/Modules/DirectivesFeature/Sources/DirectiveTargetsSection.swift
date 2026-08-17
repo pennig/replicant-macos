@@ -125,7 +125,7 @@ enum DirectiveTargetsSection: Equatable {
             fleet = devices.filter { $0.deviceCode == directive.deviceCode }
         } else {
             fleet = HaulRun.controllers(
-                in: devices, tag: directive.fleetTag ?? HaulRun.defaultFleetTag
+                in: devices, tag: directive.fleetTag.flatMap(FleetTag.init(parsing:)) ?? HaulRun.defaultFleetTag
             )
         }
         return fleet.map { controller in

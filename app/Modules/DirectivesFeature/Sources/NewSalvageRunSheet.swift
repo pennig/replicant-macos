@@ -73,7 +73,7 @@ public struct NewSalvageRunSheet: View {
         RCContentUnavailableView(
             "No Vessel Ready",
             systemImage: "shippingbox",
-            description: Text("Stow an AMI Mining Controller and at least one adopted Mining Drone aboard a vessel. Then, from the device inspector, tag the vessel, the controller, its adopted drones, and any FTL relays aboard as \"auto:salvage\" — the run resolves its fleet by that tag, and a device without it is invisible to the run.")
+            description: Text("Stow an AMI Mining Controller and at least one adopted Mining Drone aboard a vessel. Then, from the device inspector, tag the vessel, the controller, its adopted drones, and any FTL relays aboard as \"\(SalvageRun.defaultFleetTag.string)\" — the run resolves its fleet by that tag, and a device without it is invisible to the run.")
         )
     }
 
@@ -89,7 +89,7 @@ public struct NewSalvageRunSheet: View {
             ContentUnavailableView {
                 Label("Staged But Untagged", systemImage: "tag")
             } description: {
-                Text("\(Text(vessel.deviceCode).font(.rcBodyEmphMono)) is staged — its mining controller and an adopted drone are aboard — but its fleet is missing the \"auto:salvage\" tag. From the device inspector, tag the vessel, its controller, its adopted drones, and any FTL relays aboard, then retry.")
+                Text("\(Text(vessel.deviceCode).font(.rcBodyEmphMono)) is staged — its mining controller and an adopted drone are aboard — but its fleet is missing the \"\(SalvageRun.defaultFleetTag.string)\" tag. From the device inspector, tag the vessel, its controller, its adopted drones, and any FTL relays aboard, then retry.")
             }
         }
     }

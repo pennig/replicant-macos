@@ -104,7 +104,7 @@ public struct MineRun: MissionStepMachine {
         for (type, quantity) in MineRecipe.carried {
             let aboard = rows
                 .filter {
-                    $0.deviceType == type && $0.hasTag(MineRecipe.fleetTag)
+                    $0.deviceType == type && $0.carries(MineRecipe.fleetTag, policy: .exact)
                         && $0.attachedToDeviceCode == carrier.deviceCode
                 }
                 .sorted { $0.deviceCode < $1.deviceCode }
@@ -133,7 +133,7 @@ public struct MineRun: MissionStepMachine {
         for (type, quantity) in MineRecipe.carried {
             out[type] = world.devices.values
                 .filter {
-                    $0.deviceType == type && $0.hasTag(MineRecipe.fleetTag) && $0.location == belt
+                    $0.deviceType == type && $0.carries(MineRecipe.fleetTag, policy: .exact) && $0.location == belt
                 }
                 .sorted { $0.deviceCode < $1.deviceCode }
                 .prefix(quantity)
@@ -154,7 +154,7 @@ public struct MineRun: MissionStepMachine {
         let free = MineRecipe.unassignedFleet(at: sink, in: rows)
         let controller = rows
             .filter {
-                $0.deviceType == "ami_transport_controller" && $0.hasTag(MineRecipe.fleetTag)
+                $0.deviceType == "ami_transport_controller" && $0.carries(MineRecipe.fleetTag, policy: .exact)
                     && $0.location == sink
                     && $0.currentDirectiveConfig?["collect"]?.stringValue == belt
             }
@@ -163,7 +163,7 @@ public struct MineRun: MissionStepMachine {
         guard let controller else { return nil }
         let freighter = rows
             .filter {
-                $0.deviceType == "cargo_freighter" && $0.hasTag(MineRecipe.fleetTag)
+                $0.deviceType == "cargo_freighter" && $0.carries(MineRecipe.fleetTag, policy: .exact)
                     && $0.location == sink
                     && $0.controllerDeviceCode == controller.deviceCode
             }

@@ -90,7 +90,7 @@ public enum MissionAction: Equatable, Sendable {
     /// the response, so treating that absence as "device gone" deletes the fleet.
     ///
     /// - `thenStall` nil: an unresolved re-ask waits instead of stalling.
-    case refreshFleet(tag: String, thenStall: DirectiveAttentionReason?)
+    case refreshFleet(tag: FleetTag, thenStall: DirectiveAttentionReason?)
     /// Replace `deviceCode`'s ENTIRE tag set with `tags`, then move to `nextStep`
     /// regardless of outcome — best-effort I/O and a plain step move, never a
     /// second evaluation. The engine confirm-reads the device afterward.

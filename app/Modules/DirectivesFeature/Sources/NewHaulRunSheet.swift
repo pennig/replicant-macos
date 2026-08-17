@@ -66,7 +66,7 @@ public struct NewHaulRunSheet: View {
         RCContentUnavailableView(
             "No Transport Controller",
             systemImage: "shippingbox",
-            description: Text("A Haul Run drives AMI Transport Controllers. Print or adopt one, then tag it \"auto:haul\" from the device inspector — the run resolves its fleet by that tag. The transports the controller has adopted need no tags of their own.")
+            description: Text("A Haul Run drives AMI Transport Controllers. Print or adopt one, then tag it \"\(HaulRun.defaultFleetTag.string)\" from the device inspector — the run resolves its fleet by that tag. The transports the controller has adopted need no tags of their own.")
         )
     }
 
@@ -78,7 +78,7 @@ public struct NewHaulRunSheet: View {
             ContentUnavailableView {
                 Label("Controller Untagged", systemImage: "tag")
             } description: {
-                Text("\(Text(controller.deviceCode).font(.rcBodyEmphMono)) can run a ferry directive but is missing the \"auto:haul\" tag. Tag it from the device inspector, then retry. Its adopted transports need no tags of their own.")
+                Text("\(Text(controller.deviceCode).font(.rcBodyEmphMono)) can run a ferry directive but is missing the \"\(HaulRun.defaultFleetTag.string)\" tag. Tag it from the device inspector, then retry. Its adopted transports need no tags of their own.")
             }
         }
     }

@@ -50,7 +50,7 @@ private func salvageDevice(
 /// `location` is what `Brain.owningTheatre` resolves the carrier through.
 private func salvageStagedFleet(
     carrier: String = "V1", controller: String = "AMI1", drone: String = "DRONE1",
-    location: String? = "AINALRAM-1", tags: [String] = [Brain.salvageCarrierTag]
+    location: String? = "AINALRAM-1", tags: [String] = [Brain.salvageCarrierTag.string]
 ) -> [Device] {
     [
         salvageDevice(carrier, type: "heaven_vessel", tags: tags, location: location),
@@ -131,7 +131,7 @@ struct BrainSalvageReadinessTests {
     @Test("a tagged, staged racing vessel is a salvage carrier")
     func racingVesselIsASalvageCarrier() {
         let view = salvageView(devices: [
-            salvageDevice("V1", type: "racing_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1"),
+            salvageDevice("V1", type: "racing_vessel", tags: [Brain.salvageCarrierTag.string], location: "AINALRAM-1"),
             salvageDevice(
                 "AMI1", type: "ami_mining_controller", stowedIn: "V1", directives: ["gather_salvage"]
             ),
@@ -148,7 +148,7 @@ struct BrainSalvageReadinessTests {
     @Test("a tagged non-carrier is named in the idle reason")
     func taggedNonCarrierIsNamedInTheIdleReason() {
         let view = salvageView(devices: [
-            salvageDevice("F1", type: "cargo_freighter", tags: [Brain.salvageCarrierTag])
+            salvageDevice("F1", type: "cargo_freighter", tags: [Brain.salvageCarrierTag.string])
         ])
         #expect(
             Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
@@ -171,7 +171,7 @@ struct BrainSalvageReadinessTests {
     @Test("a tagged vessel with no placeable location is named, not reported untagged")
     func aTaggedStowedVesselIsNamedNotReportedUntagged() {
         let view = salvageView(devices: [
-            salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: nil),
+            salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag.string], location: nil),
         ])
         guard case let .idle(reason) = Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre) else {
             Issue.record("expected idle")
@@ -197,13 +197,13 @@ struct BrainSalvageReadinessTests {
     @Test("a bare-tagged sibling held by this theatre's own live run gets no re-tag note")
     func sameTheatreHoldGetsNoUnmigratedNote() {
         let devices = [
-            salvageDevice("VA", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1"),
-            salvageDevice("VA2", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1"),
+            salvageDevice("VA", type: "heaven_vessel", tags: [Brain.salvageCarrierTag.string], location: "AINALRAM-1"),
+            salvageDevice("VA2", type: "heaven_vessel", tags: [Brain.salvageCarrierTag.string], location: "AINALRAM-1"),
         ]
         let view = salvageView(devices: devices)
         let live = directiveFixture(
             id: "LIVE", kind: .salvageRun, deviceCode: "VA",
-            fleetTag: Brain.salvageCarrierTag, theatreDepot: ainalramTheatre.depot
+            fleetTag: Brain.salvageCarrierTag.string, theatreDepot: ainalramTheatre.depot
         )
         guard case let .idle(reason) = Brain.salvageReadiness(view: view, directives: [live], theatre: ainalramTheatre)
         else {
@@ -216,7 +216,7 @@ struct BrainSalvageReadinessTests {
     @Test("a tagged carrier with no mining controller aboard is idle, never a stall")
     func noControllerIsIdle() {
         let view = salvageView(
-            devices: [salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1")]
+            devices: [salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag.string], location: "AINALRAM-1")]
         )
         #expect(
             Brain.salvageReadiness(view: view, directives: [], theatre: ainalramTheatre)
@@ -227,7 +227,7 @@ struct BrainSalvageReadinessTests {
     @Test("a controller with no adopted drone aboard is idle and names both codes")
     func noDroneIsIdle() {
         let view = salvageView(devices: [
-            salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-1"),
+            salvageDevice("V1", type: "heaven_vessel", tags: [Brain.salvageCarrierTag.string], location: "AINALRAM-1"),
             salvageDevice(
                 "AMI1", type: "ami_mining_controller", stowedIn: "V1", directives: ["gather_salvage"]
             ),
@@ -282,7 +282,7 @@ struct BrainSalvageReadinessTests {
     func theLowestCodedCarrierWins() {
         var devices = salvageStagedFleet(carrier: "V1")
         devices.append(
-            salvageDevice("A0", type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: "AINALRAM-2")
+            salvageDevice("A0", type: "heaven_vessel", tags: [Brain.salvageCarrierTag.string], location: "AINALRAM-2")
         )
         // `A0` sorts first but is unstaged, so the verdict names ITS blocker —
         // proving the carrier is chosen before staging is judged.
@@ -322,7 +322,7 @@ struct BrainSalvageReadinessTests {
     @Test("a location-less mistagged device is still named in a multi-theatre world")
     func locationlessMistaggedDeviceIsStillNamedAcrossTheatres() {
         let (view, ainalram, _) = twoTheatreSalvageView(
-            ainalramFleet: [salvageDevice("F1", type: "cargo_freighter", tags: [Brain.salvageCarrierTag])],
+            ainalramFleet: [salvageDevice("F1", type: "cargo_freighter", tags: [Brain.salvageCarrierTag.string])],
             denebedFleet: []
         )
 
@@ -419,7 +419,7 @@ struct BrainSalvageReadinessTests {
         )
         let live = directiveFixture(
             id: "LIVE", kind: .salvageRun, deviceCode: "VA",
-            fleetTag: SalvageRun.fleetTag(forTheatre: ainalram.depot), theatreDepot: ainalram.depot
+            fleetTag: SalvageRun.fleetTag(forTheatre: ainalram.depot).string, theatreDepot: ainalram.depot
         )
         let reserved = Brain.reservedDevices(directives: [live], devices: view.devices)
         #expect(!reserved.contains("VB"), "the literal tags differ by depot, so the sweep cannot reach VB")
@@ -439,7 +439,7 @@ struct BrainSalvageReadinessTests {
         )
         let live = directiveFixture(
             id: "LIVE", kind: .salvageRun, deviceCode: "VA",
-            fleetTag: SalvageRun.defaultFleetTag, theatreDepot: ainalram.depot
+            fleetTag: SalvageRun.defaultFleetTag.string, theatreDepot: ainalram.depot
         )
 
         guard case let .idle(reason) = Brain.salvageReadiness(view: view, directives: [live], theatre: denebed) else {
@@ -515,7 +515,7 @@ private func seedSalvageEnsureFleet(
     _ db: Database, carrier: String = salvageEnsureCarrier, location: String = growHubLocation
 ) throws {
     try seedSalvageEnsureDevice(
-        db, code: carrier, type: "heaven_vessel", tags: [Brain.salvageCarrierTag], location: location
+        db, code: carrier, type: "heaven_vessel", tags: [Brain.salvageCarrierTag.string], location: location
     )
     try seedSalvageEnsureDevice(
         db, code: "AMI1", type: "ami_mining_controller", stowedIn: carrier, directives: ["gather_salvage"]
@@ -574,7 +574,7 @@ struct BrainEnsureSalvageTests {
         #expect(directives.count == 1)
         #expect(salvage.kind == .salvageRun)
         #expect(salvage.deviceCode == salvageEnsureCarrier)
-        #expect(salvage.fleetTag == SalvageRun.fleetTag(forTheatre: growHubLocation))
+        #expect(salvage.fleetTag == SalvageRun.fleetTag(forTheatre: growHubLocation).string)
         #expect(salvage.roamCentre == salvageEnsureHubSystem)
         #expect(salvage.step == SalvageRun().firstStep)
         #expect(salvage.status == .running)
@@ -627,7 +627,7 @@ struct BrainEnsureSalvageTests {
             try seedSalvageEnsureReadyWorld(db)
             try seedDirective(
                 db, id: "OPERATOR", kind: .salvageRun, status: .running,
-                deviceCode: "OTHERVESSEL", fleetTag: SalvageRun.defaultFleetTag
+                deviceCode: "OTHERVESSEL", fleetTag: SalvageRun.defaultFleetTag.string
             )
         }
 
@@ -645,7 +645,7 @@ struct BrainEnsureSalvageTests {
             try seedSalvageEnsureReadyWorld(db)
             try seedDirective(
                 db, id: "HELD", kind: .salvageRun, status: status,
-                deviceCode: salvageEnsureCarrier, fleetTag: SalvageRun.defaultFleetTag
+                deviceCode: salvageEnsureCarrier, fleetTag: SalvageRun.defaultFleetTag.string
             )
         }
 
@@ -663,7 +663,7 @@ struct BrainEnsureSalvageTests {
             try seedSalvageEnsureReadyWorld(db)
             try seedDirective(
                 db, id: "DONE", kind: .salvageRun, status: status,
-                deviceCode: salvageEnsureCarrier, fleetTag: SalvageRun.defaultFleetTag
+                deviceCode: salvageEnsureCarrier, fleetTag: SalvageRun.defaultFleetTag.string
             )
         }
 
@@ -746,7 +746,7 @@ struct BrainEnsureSalvageTests {
             // One hull, both opt-in tags, staged for both automations.
             try seedSalvageEnsureDevice(
                 db, code: "BOTH", type: "heaven_vessel",
-                tags: [Brain.salvageCarrierTag, Brain.surveyCarrierTag], location: growHubLocation
+                tags: [Brain.salvageCarrierTag.string, Brain.surveyCarrierTag.string], location: growHubLocation
             )
             try seedSalvageEnsureDevice(
                 db, code: "AMI1", type: "ami_mining_controller", stowedIn: "BOTH",
@@ -787,11 +787,11 @@ struct BrainEnsureSalvageTests {
 // MARK: - Reservation disjointness
 
 /// One fleet: a tagged carrier with a controller and a drone stowed aboard.
-private func taggedFleet(carrier: String, controller: String, drone: String, tag: String) -> [Device] {
+private func taggedFleet(carrier: String, controller: String, drone: String, tag: FleetTag) -> [Device] {
     [
-        salvageDevice(carrier, type: "heaven_vessel", tags: [tag]),
-        salvageDevice(controller, type: "ami_mining_controller", tags: [tag], stowedIn: carrier),
-        salvageDevice(drone, type: "mining_drone", tags: [tag], stowedIn: carrier, controllerDeviceCode: controller),
+        salvageDevice(carrier, type: "heaven_vessel", tags: [tag.string]),
+        salvageDevice(controller, type: "ami_mining_controller", tags: [tag.string], stowedIn: carrier),
+        salvageDevice(drone, type: "mining_drone", tags: [tag.string], stowedIn: carrier, controllerDeviceCode: controller),
     ]
 }
 
@@ -813,7 +813,7 @@ struct BrainReservationDisjointnessTests {
         let directives = [
             directiveFixture(id: "R", kind: .relayRun, deviceCode: "MESH1"),
             directiveFixture(
-                id: "S", kind: .salvageRun, deviceCode: "SALV1", fleetTag: Brain.salvageCarrierTag
+                id: "S", kind: .salvageRun, deviceCode: "SALV1", fleetTag: Brain.salvageCarrierTag.string
             ),
             directiveFixture(id: "Q", kind: .surveyRun, deviceCode: "SURV1"),
         ]
@@ -963,8 +963,8 @@ struct BrainHaulReadinessTests {
     @Test("a tagged ferry controller with a hub launches on the lowest code")
     func theLowestCodedControllerLaunches() {
         let view = haulView(devices: [
-            haulController("T2", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
-            haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
+            haulController("T2", tags: [HaulRun.defaultFleetTag.string], location: "SOL-1"),
+            haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: "SOL-1"),
         ])
         #expect(Brain.haulReadiness(view: view, directives: [], theatre: solTheatre) == .launch(controller: "T1"))
     }
@@ -981,7 +981,7 @@ struct BrainHaulReadinessTests {
     @Test("a tagged device that does not offer ferry is not a haul controller")
     func aNonFerryDeviceIsIdle() {
         let view = haulView(devices: [
-            haulController("T1", tags: [HaulRun.defaultFleetTag], directives: [], location: "SOL-1"),
+            haulController("T1", tags: [HaulRun.defaultFleetTag.string], directives: [], location: "SOL-1"),
         ])
         #expect(
             Brain.haulReadiness(view: view, directives: [], theatre: solTheatre)
@@ -994,7 +994,7 @@ struct BrainHaulReadinessTests {
     @Test("a theatre with no controller of its own idles without consuming the other theatre's controller")
     func theatreWithNoOwnControllerIdlesWithoutConsumingTheOther() {
         let (view, sol, vega) = twoTheatreHaulView(
-            solControllers: [haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1")],
+            solControllers: [haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: "SOL-1")],
             vegaControllers: []
         )
         guard case let .idle(reason) = Brain.haulReadiness(view: view, directives: [], theatre: vega) else {
@@ -1011,8 +1011,8 @@ struct BrainHaulReadinessTests {
     @Test("two theatres each with their own controller each launch their own")
     func twoTheatresEachWithTheirOwnControllerEachLaunchTheirOwn() {
         let (view, sol, vega) = twoTheatreHaulView(
-            solControllers: [haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1")],
-            vegaControllers: [haulController("T2", tags: [HaulRun.defaultFleetTag], location: "VEGA-1")]
+            solControllers: [haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: "SOL-1")],
+            vegaControllers: [haulController("T2", tags: [HaulRun.defaultFleetTag.string], location: "VEGA-1")]
         )
         #expect(Brain.haulReadiness(view: view, directives: [], theatre: sol) == .launch(controller: "T1"))
         #expect(Brain.haulReadiness(view: view, directives: [], theatre: vega) == .launch(controller: "T2"))
@@ -1027,7 +1027,7 @@ struct BrainHaulReadinessTests {
             id: "PS", kind: .haulRun, deviceCode: "T9", fleetTag: "auto:mine:ALPAHARD"
         )
         let general = directiveFixture(
-            id: "G", kind: .haulRun, deviceCode: "T1", fleetTag: HaulRun.defaultFleetTag
+            id: "G", kind: .haulRun, deviceCode: "T1", fleetTag: HaulRun.defaultFleetTag.string
         )
         let perTheatre = directiveFixture(
             id: "PT", kind: .haulRun, deviceCode: "T2", fleetTag: "auto:haul:SOL-3"
@@ -1047,8 +1047,8 @@ struct BrainHaulReadinessTests {
     func anExplicitTagMovesAControllerBetweenTheatres() {
         let (view, sol, vega) = twoTheatreHaulView(
             solControllers: [
-                haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
-                haulController("T2", tags: [HaulRun.defaultFleetTag, "auto:haul:vega-3"], location: "SOL-1"),
+                haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: "SOL-1"),
+                haulController("T2", tags: [HaulRun.defaultFleetTag.string, "auto:haul:vega-3"], location: "SOL-1"),
             ],
             vegaControllers: []
         )
@@ -1068,8 +1068,8 @@ struct BrainHaulRehomeTests {
     func aRowNamingADepartedControllerIsRehomed() {
         let (view, sol, _) = twoTheatreHaulView(
             solControllers: [
-                haulController("T1", tags: [HaulRun.defaultFleetTag, "auto:haul:sol-3"], location: "SOL-1"),
-                haulController("T2", tags: [HaulRun.defaultFleetTag, "auto:haul:vega-3"], location: "SOL-1"),
+                haulController("T1", tags: [HaulRun.defaultFleetTag.string, "auto:haul:sol-3"], location: "SOL-1"),
+                haulController("T2", tags: [HaulRun.defaultFleetTag.string, "auto:haul:vega-3"], location: "SOL-1"),
             ],
             vegaControllers: []
         )
@@ -1090,8 +1090,8 @@ struct BrainHaulRehomeTests {
     func aDepartedPinnedControllerIsReleased() {
         let (view, sol, _) = twoTheatreHaulView(
             solControllers: [
-                haulController("T1", tags: [HaulRun.defaultFleetTag, "auto:haul:sol-3"], location: "SOL-1"),
-                haulController("T2", tags: [HaulRun.defaultFleetTag, "auto:haul:vega-3"], location: "SOL-1"),
+                haulController("T1", tags: [HaulRun.defaultFleetTag.string, "auto:haul:sol-3"], location: "SOL-1"),
+                haulController("T2", tags: [HaulRun.defaultFleetTag.string, "auto:haul:vega-3"], location: "SOL-1"),
             ],
             vegaControllers: []
         )
@@ -1108,7 +1108,7 @@ struct BrainHaulRehomeTests {
     @Test("a run whose two columns both name fleet members is left alone")
     func aSoundRowIsLeftAlone() {
         let view = haulView(devices: [
-            haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
+            haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: "SOL-1"),
         ])
         let row = directiveFixture(
             id: "H1", kind: .haulRun, deviceCode: "T1", controllerCode: "T1",
@@ -1121,7 +1121,7 @@ struct BrainHaulRehomeTests {
     @Test("a row whose controller is still in its fleet is left alone")
     func aRowStillNamingItsOwnControllerIsLeftAlone() {
         let view = haulView(devices: [
-            haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
+            haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: "SOL-1"),
         ])
         let row = directiveFixture(
             id: "H1", kind: .haulRun, deviceCode: "T1",
@@ -1136,7 +1136,7 @@ struct BrainHaulRehomeTests {
     @Test("an empty fleet leaves the row untouched rather than blanking it")
     func anEmptyFleetLeavesTheRowUntouched() {
         let view = haulView(devices: [
-            haulController("T2", tags: [HaulRun.defaultFleetTag, "auto:haul:vega-3"], location: "SOL-1"),
+            haulController("T2", tags: [HaulRun.defaultFleetTag.string, "auto:haul:vega-3"], location: "SOL-1"),
         ])
         let row = directiveFixture(
             id: "H1", kind: .haulRun, deviceCode: "T2",
@@ -1151,7 +1151,7 @@ struct BrainHaulRehomeTests {
     @Test("a per-site ferry row is never re-homed")
     func aPerSiteFerryRowIsNeverRehomed() {
         let view = haulView(devices: [
-            haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1"),
+            haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: "SOL-1"),
         ])
         let row = directiveFixture(
             id: "PS", kind: .haulRun, deviceCode: "T9",
@@ -1168,7 +1168,7 @@ struct BrainHaulRehomeTests {
 struct BrainHaulStatusTests {
     @Test("no operational theatre reports idle, naming that")
     func noOperationalTheatreReportsIdle() {
-        let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag])], depot: nil)
+        let view = haulView(devices: [haulController("T1", tags: [HaulRun.defaultFleetTag.string])], depot: nil)
         #expect(Brain.haulStatus(directives: [], view: view) == .idle(reason: "no operational theatre"))
     }
 
@@ -1177,12 +1177,12 @@ struct BrainHaulStatusTests {
     @Test("a live run in one theatre does not mask another theatre's idle state")
     func aLiveRunInOneTheatreDoesNotMaskAnother() {
         let (view, sol, vega) = twoTheatreHaulView(
-            solControllers: [haulController("T1", tags: [HaulRun.defaultFleetTag], location: "SOL-1")],
+            solControllers: [haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: "SOL-1")],
             vegaControllers: []
         )
         let live = directiveFixture(
             id: "LIVE", kind: .haulRun, deviceCode: "T1",
-            fleetTag: HaulRun.defaultFleetTag, theatreDepot: sol.depot
+            fleetTag: HaulRun.defaultFleetTag.string, theatreDepot: sol.depot
         )
 
         #expect(
@@ -1201,7 +1201,7 @@ struct BrainEnsureHaulTests {
     private func seedHaulReadyWorld(_ db: Database) throws {
         try seedGrowableWorld(db, carriers: [], salvage: [:])
         try Device.insert {
-            haulController("T1", tags: [HaulRun.defaultFleetTag], location: growHubLocation)
+            haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: growHubLocation)
         }.execute(db)
     }
 
@@ -1215,7 +1215,7 @@ struct BrainEnsureHaulTests {
         let haul = try #require(directives.first { $0.kind == .haulRun })
         #expect(directives.count == 1)
         #expect(haul.deviceCode == "T1")
-        #expect(haul.fleetTag == HaulRun.fleetTag(forTheatre: growHubLocation))
+        #expect(haul.fleetTag == HaulRun.fleetTag(forTheatre: growHubLocation).string)
         #expect(haul.step == HaulRun().firstStep)
         #expect(haul.originDesignation == "SOL")
     }
@@ -1247,7 +1247,7 @@ struct BrainEnsureHaulTests {
 
         let hauls = try await salvageEnsureDirectives(database).filter { $0.kind == .haulRun }
         #expect(hauls.count == 2)
-        #expect(hauls.filter { $0.fleetTag == HaulRun.fleetTag(forTheatre: growHubLocation) }.count == 1)
+        #expect(hauls.filter { $0.fleetTag == HaulRun.fleetTag(forTheatre: growHubLocation).string }.count == 1)
         #expect(hauls.contains { $0.id == "PERSITE" })
     }
 
@@ -1260,7 +1260,7 @@ struct BrainEnsureHaulTests {
             try seedGrowableWorld(db, carriers: [], salvage: [:])
             try seedSecondTheatre(db)
             try Device.insert {
-                haulController("T2", tags: [HaulRun.defaultFleetTag], location: secondTheatreHubLocation)
+                haulController("T2", tags: [HaulRun.defaultFleetTag.string], location: secondTheatreHubLocation)
             }.execute(db)
         }
 
@@ -1312,7 +1312,7 @@ struct BrainEnsureHaulTests {
                 fleetTag: "auto:haul:\(growHubLocation)", theatreDepot: growHubLocation
             )
             try Device.insert {
-                haulController("T1", tags: [HaulRun.defaultFleetTag], location: growHubLocation)
+                haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: growHubLocation)
             }.execute(db)
         }
 
@@ -1334,10 +1334,10 @@ struct BrainEnsureHaulTests {
             try seedGrowableWorld(db, carriers: [], salvage: [:])
             try seedSecondTheatre(db)
             try Device.insert {
-                haulController("T1", tags: [HaulRun.defaultFleetTag], location: growHubLocation)
+                haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: growHubLocation)
             }.execute(db)
             try Device.insert {
-                haulController("T2", tags: [HaulRun.defaultFleetTag], location: secondTheatreHubLocation)
+                haulController("T2", tags: [HaulRun.defaultFleetTag.string], location: secondTheatreHubLocation)
             }.execute(db)
         }
 
@@ -1345,8 +1345,8 @@ struct BrainEnsureHaulTests {
 
         let hauls = try await salvageEnsureDirectives(database).filter { $0.kind == .haulRun }
         #expect(hauls.count == 2, "neither theatre's literal bare tag may sweep the other's fresh row")
-        #expect(hauls.first { $0.deviceCode == "T1" }?.fleetTag == HaulRun.fleetTag(forTheatre: growHubLocation))
-        #expect(hauls.first { $0.deviceCode == "T2" }?.fleetTag == HaulRun.fleetTag(forTheatre: secondTheatreHubLocation))
+        #expect(hauls.first { $0.deviceCode == "T1" }?.fleetTag == HaulRun.fleetTag(forTheatre: growHubLocation).string)
+        #expect(hauls.first { $0.deviceCode == "T2" }?.fleetTag == HaulRun.fleetTag(forTheatre: secondTheatreHubLocation).string)
     }
 
     /// Driven through a real tick: an ALREADY-RUNNING directive still
@@ -1358,14 +1358,14 @@ struct BrainEnsureHaulTests {
             try seedGrowableWorld(db, carriers: [], salvage: [:])
             try seedSecondTheatre(db)
             try Device.insert {
-                haulController("T1", tags: [HaulRun.defaultFleetTag], location: growHubLocation)
+                haulController("T1", tags: [HaulRun.defaultFleetTag.string], location: growHubLocation)
             }.execute(db)
             try Device.insert {
-                haulController("T2", tags: [HaulRun.defaultFleetTag], location: secondTheatreHubLocation)
+                haulController("T2", tags: [HaulRun.defaultFleetTag.string], location: secondTheatreHubLocation)
             }.execute(db)
             try seedDirective(
                 db, id: "LIVE-SOL", kind: .haulRun, status: .running, deviceCode: "T1",
-                fleetTag: HaulRun.defaultFleetTag, theatreDepot: growHubLocation
+                fleetTag: HaulRun.defaultFleetTag.string, theatreDepot: growHubLocation
             )
         }
 

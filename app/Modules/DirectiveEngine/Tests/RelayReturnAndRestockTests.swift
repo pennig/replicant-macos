@@ -65,7 +65,7 @@ private func device(
 }
 
 private func carrier(_ code: String = "V1", location: String?) -> Device {
-    device(code, type: "heaven_vessel", location: location, tags: [Brain.carrierTag])
+    device(code, type: "heaven_vessel", location: location, tags: [Brain.carrierTag.string])
 }
 
 private func hub(_ code: String = "AF1", location: String = hubLocation) -> Device {

@@ -137,7 +137,7 @@ public struct MineFleetPrint: MissionStepMachine {
         )
         return .dispatch(
             kind: .print, deviceCode: hub.deviceCode,
-            params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag]),
+            params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag.string]),
             nextStep: Step.printing
         )
     }

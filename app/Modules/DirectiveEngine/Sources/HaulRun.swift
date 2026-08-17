@@ -44,7 +44,7 @@ public struct HaulRun: MissionStepMachine {
     }
 
     /// The fleet tag a row falls back to when it carries none of its own.
-    public static let defaultFleetTag = "auto:haul"
+    public static let defaultFleetTag = FleetTag(goal: .haul)
 
     /// The sink used when no hub is recognised. A fallback, not the answer:
     /// `deliverySink(in:)` is what a run with a world in hand must ask.
@@ -98,7 +98,7 @@ public struct HaulRun: MissionStepMachine {
     /// Every device in `devices` matching `tag` (see `isFleetTagged`) and
     /// offering `ferry`, sorted by code so a controller keeps its rank across
     /// evaluations. Resolved by TAG, never location — untagging is the opt-out.
-    public static func controllers(in devices: some Sequence<Device>, tag: String) -> [Device] {
+    public static func controllers(in devices: some Sequence<Device>, tag: FleetTag) -> [Device] {
         devices
             .filter { isFleetTagged($0, tag: tag) }
             .filter { $0.availableDirectives.contains(requiredDirective) }
@@ -107,7 +107,7 @@ public struct HaulRun: MissionStepMachine {
 
     /// `theatreDepot`, when given, scopes the result through `belongs` (see
     /// `haul-run-theatre-scoped-controllers.md`); nil preserves the old read.
-    public static func controllers(in world: WorldSnapshot, tag: String, theatreDepot: String? = nil) -> [Device] {
+    public static func controllers(in world: WorldSnapshot, tag: FleetTag, theatreDepot: String? = nil) -> [Device] {
         let matched = controllers(in: world.devices.values, tag: tag)
         guard let theatreDepot else { return matched }
         return matched.filter {
@@ -119,31 +119,27 @@ public struct HaulRun: MissionStepMachine {
     /// fallback claimed it and `owningDepot` places it there. An explicit tag is
     /// the operator's handover, so it outranks wherever the device stands.
     public static func belongs(
-        _ device: Device, tag: String, theatreDepot: String, owningDepot: (Device) -> String?
+        _ device: Device, tag: FleetTag, theatreDepot: String, owningDepot: (Device) -> String?
     ) -> Bool {
-        device.hasTag(tag) || owningDepot(device) == theatreDepot
+        device.carries(tag, policy: .exact) || owningDepot(device) == theatreDepot
     }
 
     /// The tag `Brain.ensureHaul` stamps for a theatre at `depot`.
-    public static func fleetTag(forTheatre depot: String) -> String { "\(defaultFleetTag):\(depot)" }
+    public static func fleetTag(forTheatre depot: String) -> FleetTag {
+        FleetTag(goal: .haul, scope: .theatre(depot: depot))
+    }
 
     /// Whether `device` matches `tag`, or — only when `tag` is a per-theatre
     /// derivation of the default and `device` names no theatre of its own —
     /// the bare default it falls back from.
-    static func isFleetTagged(_ device: Device, tag: String) -> Bool {
-        let normalized = Device.normalizedTag(tag)
-        if device.hasTag(normalized) { return true }
-        guard normalized.hasPrefix("\(defaultFleetTag):"), device.hasTag(defaultFleetTag) else { return false }
-        return !namesATheatre(device)
+    static func isFleetTagged(_ device: Device, tag: FleetTag) -> Bool {
+        if device.carries(tag, policy: .exact) { return true }
+        guard tag.goal == .haul, tag.isScoped, device.scopedTag(for: .haul) == nil else { return false }
+        return device.carries(defaultFleetTag, policy: .exact)
     }
 
-    /// A device naming its own theatre has migrated; the bare fallback retires.
-    private static func namesATheatre(_ device: Device) -> Bool {
-        device.tags.contains { Device.normalizedTag($0).hasPrefix("\(defaultFleetTag):") }
-    }
-
-    private static func fleetTag(of directive: Directive) -> String {
-        directive.fleetTag ?? defaultFleetTag
+    private static func fleetTag(of directive: Directive) -> FleetTag {
+        directive.fleetTag.flatMap(FleetTag.init(parsing:)) ?? defaultFleetTag
     }
 
     /// Where `directive` delivers: its own theatre's depot, or `deliveryLocation`
@@ -162,7 +158,7 @@ public struct HaulRun: MissionStepMachine {
     /// The stockpile `tag`ged controllers are draining, or nil for the "Nothing
     /// reachable" state. Names the LOWEST-CODED controller's pile when several
     /// differ, so the answer cannot flicker with dictionary order.
-    public static func currentHaulTarget(devices: [Device], tag: String, delivery: String) -> String? {
+    public static func currentHaulTarget(devices: [Device], tag: FleetTag, delivery: String) -> String? {
         devices
             .filter { isFleetTagged($0, tag: tag) }
             .sorted { $0.deviceCode < $1.deviceCode }
@@ -277,9 +273,7 @@ public struct HaulRun: MissionStepMachine {
             world.now.timeIntervalSince($0.updatedAt) > Self.stagingFreshness
         }
         if stale {
-            // The WIRE read, unlike local selection, must name a tag the
-            // server itself recognises — it has no notion of a per-theatre tag.
-            return .refreshFleet(tag: RepairFleet.root(of: tag), thenStall: .noHaulControllerTagged)
+            return .refreshFleet(tag: tag, thenStall: .noHaulControllerTagged)
         }
         return .advanceStep(nextStep: Step.surveying)
     }
@@ -312,8 +306,8 @@ public struct HaulRun: MissionStepMachine {
         let tag = Self.fleetTag(of: directive)
         guard !Self.controllers(in: world, tag: tag, theatreDepot: directive.theatreDepot).isEmpty else {
             // Local silence is not evidence — `noHaulControllerTagged` belongs to a
-            // fresh TAG READ finding nothing, sent under the tag the server knows.
-            return .refreshFleet(tag: RepairFleet.root(of: tag), thenStall: .noHaulControllerTagged)
+            // fresh TAG READ finding nothing.
+            return .refreshFleet(tag: tag, thenStall: .noHaulControllerTagged)
         }
         let assignments = Self.plans(directive, world)
         guard let pending = assignments.first(where: { !Self.isInForce($0, in: world, for: directive) }) else {

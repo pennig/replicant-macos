@@ -262,7 +262,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .vesselPositionUnconfirmed:
             "The vessel finished travelling but its position never refreshed. Retry to re-read it, or cancel the run."
         case .noHaulControllerTagged:
-            "No AMI transport controller carries the \"auto:haul\" tag. Tag one from the device inspector, then retry."
+            "No AMI transport controller carries the \"\(FleetTag(goal: .haul).string)\" tag. Tag one from the device inspector, then retry."
         case .printStockShort:
             "The hub doesn't have enough of a resource to print without dropping below reserve. It clears on its own as stock recovers — retry once supply catches up."
         case .repairUnfinished:
@@ -276,7 +276,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .miningControllerNotRecovered:
             "The mining controller is still travelling back to the vessel. Retry once it's stowed aboard; departing without it strands it in this system."
         case .mineFleetIncomplete:
-            "The auto:mine fleet at the hub is missing members. Re-run Mine Fleet Print to top it up, or re-tag the missing devices, then retry."
+            "The \(FleetTag(goal: .mine).string) fleet at the hub is missing members. Re-run Mine Fleet Print to top it up, or re-tag the missing devices, then retry."
         case .eventCriteriaUnmet:
             "Check the event's requirements against what the convoy delivered, then retry."
         case .eventCommitRejected:

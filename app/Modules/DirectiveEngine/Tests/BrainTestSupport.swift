@@ -51,7 +51,7 @@ func deviceFixture(
     // resolved features — the gate is capability, so the default is too.
     let resolvedFeatures = features ?? fixtureFeatures(for: type)
     let isCarrierShaped = resolvedFeatures.contains("cradle") && resolvedFeatures.contains("surge")
-    let resolved = (isCarrierShaped && tags.isEmpty) ? [Brain.carrierTag] : tags
+    let resolved = (isCarrierShaped && tags.isEmpty) ? [Brain.carrierTag.string] : tags
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
         location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,

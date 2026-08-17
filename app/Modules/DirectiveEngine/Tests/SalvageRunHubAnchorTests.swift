@@ -73,7 +73,7 @@ private func anchorWorld(hub: String?) -> WorldSnapshot {
 private func anchorDirective(theatreDepot: String? = nil) -> Directive {
     Directive(
         id: "S1", kind: .salvageRun, status: .running, deviceCode: "V1",
-        controllerCode: nil, roamCentre: nil, fleetTag: SalvageRun.defaultFleetTag,
+        controllerCode: nil, roamCentre: nil, fleetTag: SalvageRun.defaultFleetTag.string,
         sourceRelayCode: nil, targets: [], targetIndex: 0,
         step: SalvageRun.Step.preflight, stepStartedAt: anchorNow,
         returnToOrigin: false, originDesignation: nil, attentionReason: nil,

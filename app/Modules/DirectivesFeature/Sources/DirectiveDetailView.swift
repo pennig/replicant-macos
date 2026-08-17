@@ -178,7 +178,7 @@ public struct DirectiveDetailView: View {
         case let .fleetTag(tag):
             let place = owner.designation.map { Text(" at \(Text($0).font(.rcMonoSmall))") } ?? Text("")
             return Text(
-                "Part of the \(owner.title)\(place) — Reconfigure and Clear are disabled while its directive is in force. Remove the \(Text(tag).font(.rcMonoSmall)) tag from this device to take it back."
+                "Part of the \(owner.title)\(place) — Reconfigure and Clear are disabled while its directive is in force. Remove the \(Text(tag.string).font(.rcMonoSmall)) tag from this device to take it back."
             )
         }
     }

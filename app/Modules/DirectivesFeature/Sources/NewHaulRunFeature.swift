@@ -52,7 +52,7 @@ public struct NewHaulRunFeature {
         public var untaggedController: Device? {
             devices
                 .filter { $0.availableDirectives.contains(HaulTargetPlanner.ferry) }
-                .first { !$0.hasTag(HaulRun.defaultFleetTag) }
+                .first { !$0.carries(HaulRun.defaultFleetTag, policy: .exact) }
         }
 
         /// The row's required anchor device. Lowest code for determinism.
@@ -99,9 +99,9 @@ public struct NewHaulRunFeature {
                 return .run { send in
                     // `Brain.ensureHaul`'s own resolution — never the bare tag
                     // (see `launcher-tag-resolution-error-narrowing.md`).
-                    let tag: String
+                    let tag: FleetTag
                     do {
-                        tag = try await database.read { db -> String in
+                        tag = try await database.read { db -> FleetTag in
                             let view = try WorldView.read(from: db, now: now)
                             guard let device = view.devices[anchor], let theatre = view.owningTheatre(of: device)
                             else {
@@ -127,7 +127,7 @@ public struct NewHaulRunFeature {
                         // No roam centre: this run plans over locations, not
                         // systems, and never emits `.extendQueue`.
                         roamCentre: nil,
-                        fleetTag: tag,
+                        fleetTag: tag.string,
                         // Empty and stays empty — the planner re-derives every
                         // cycle from the footprint census, and records no history.
                         targets: [],

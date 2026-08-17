@@ -87,7 +87,7 @@ struct EventCourierLauncherTests {
         try Device.insert {
             Self.device(
                 "BOX-A", type: EventRun.courierDeviceType, location: depot,
-                tags: [EventRun.rootTag]
+                tags: [EventRun.rootTag.string]
             )
         }.execute(db)
         try Replicant.insert {

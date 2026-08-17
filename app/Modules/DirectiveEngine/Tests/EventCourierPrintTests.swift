@@ -57,7 +57,7 @@ struct EventCourierPrintTests {
     private func standing() -> [Device] {
         [
             EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
-            EventRunFixtures.device("BOX", type: "matrix_container", tags: [EventRun.rootTag], updatedAt: now),
+            EventRunFixtures.device("BOX", type: "matrix_container", tags: [EventRun.rootTag.string], updatedAt: now),
         ]
     }
 
@@ -81,7 +81,7 @@ struct EventCourierPrintTests {
         #expect(action == .dispatch(
             kind: .print, deviceCode: "PRINTER",
             params: CommandParams(
-                deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag]
+                deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag.string]
             ),
             nextStep: EventCourierPrint.Step.awaitingClone
         ))
@@ -173,7 +173,7 @@ struct EventCourierPrintTests {
         #expect(action == .dispatch(
             kind: .print, deviceCode: "PRINTER",
             params: CommandParams(
-                deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag]
+                deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag.string]
             ),
             nextStep: EventCourierPrint.Step.awaitingClone
         ))
@@ -206,7 +206,7 @@ struct EventCourierPrintTests {
         #expect(action == .dispatch(
             kind: .print, deviceCode: "PRINTER",
             params: CommandParams(
-                deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag]
+                deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag.string]
             ),
             nextStep: EventCourierPrint.Step.awaitingClone
         ))

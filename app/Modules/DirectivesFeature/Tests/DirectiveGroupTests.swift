@@ -213,10 +213,16 @@ struct DirectiveGroupTests {
 
 @Suite("Fleet tag parsing")
 struct AutomationKeyTests {
+    /// The list keys off the RAW tag string a row or device carries, so the
+    /// parse is the refusal: anything ungrammatical resolves to no key at all.
+    private func key(_ raw: String, site: String? = nil) -> DirectiveGroup.Key? {
+        FleetTag(parsing: raw).map { DirectiveGroup.automationKey($0, site: site) }
+    }
+
     @Test("a per-site tag names its own site")
     func perSiteTag() {
         #expect(
-            DirectiveGroup.automationKey("auto:mine:GRAZ-BELT-1")
+            key("auto:mine:GRAZ-BELT-1")
                 == .automation(name: "mine", site: "GRAZ-BELT-1")
         )
     }
@@ -224,10 +230,10 @@ struct AutomationKeyTests {
     @Test("a bare tag takes the site it was given")
     func bareTagTakesSite() {
         #expect(
-            DirectiveGroup.automationKey("auto:mine", site: "GRAZ-BELT-1")
+            key("auto:mine", site: "GRAZ-BELT-1")
                 == .automation(name: "mine", site: "GRAZ-BELT-1")
         )
-        #expect(DirectiveGroup.automationKey("auto:mine") == .automation(name: "mine", site: nil))
+        #expect(key("auto:mine") == .automation(name: "mine", site: nil))
     }
 
     /// A device's tag is stored lowercased while a directive's is not, and the
@@ -235,21 +241,21 @@ struct AutomationKeyTests {
     @Test("case drift on either side resolves to one key")
     func caseDriftResolves() {
         #expect(
-            DirectiveGroup.automationKey("auto:mine:graz-belt-1")
-                == DirectiveGroup.automationKey("AUTO:MINE:GRAZ-BELT-1")
+            key("auto:mine:graz-belt-1")
+                == key("AUTO:MINE:GRAZ-BELT-1")
         )
     }
 
     @Test("a per-site tag wins over the site it was given")
     func perSiteTagWinsOverSite() {
         #expect(
-            DirectiveGroup.automationKey("auto:mine:GRAZ-BELT-1", site: "ACHERNUR-BELT-1")
+            key("auto:mine:GRAZ-BELT-1", site: "ACHERNUR-BELT-1")
                 == .automation(name: "mine", site: "GRAZ-BELT-1")
         )
     }
 
     @Test("anything that is not a fleet tag is refused", arguments: ["mine", "auto:", "auto", ""])
     func nonFleetTagsRefused(_ tag: String) {
-        #expect(DirectiveGroup.automationKey(tag) == nil)
+        #expect(key(tag) == nil)
     }
 }

@@ -64,14 +64,14 @@ private func seedSeamWorld(_ db: Database, salvageAt: String?) throws {
 
     try seamDevice(
         db, code: "SALV1", type: "heaven_vessel", location: "SOL-3",
-        tags: [Brain.salvageCarrierTag]
+        tags: [Brain.salvageCarrierTag.string]
     )
     try seamDevice(
-        db, code: "AMI1", type: "ami_mining_controller", tags: [Brain.salvageCarrierTag],
+        db, code: "AMI1", type: "ami_mining_controller", tags: [Brain.salvageCarrierTag.string],
         stowedIn: "SALV1", directives: ["gather_salvage"]
     )
     try seamDevice(
-        db, code: "DRONE1", type: "mining_drone", tags: [Brain.salvageCarrierTag],
+        db, code: "DRONE1", type: "mining_drone", tags: [Brain.salvageCarrierTag.string],
         stowedIn: "SALV1", controllerDeviceCode: "AMI1"
     )
 

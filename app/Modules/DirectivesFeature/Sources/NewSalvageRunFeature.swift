@@ -119,7 +119,7 @@ public struct NewSalvageRunFeature {
             let drones = SalvageRun.adoptedDrones(of: controller, aboard: vessel, in: world)
             var fleet = [vessel, controller] + drones
             if let relay = SalvageRun.relay(aboard: vessel, in: world) { fleet.append(relay) }
-            return fleet.allSatisfy { $0.hasTag(SalvageRun.defaultFleetTag) }
+            return fleet.allSatisfy { $0.carries(SalvageRun.defaultFleetTag, policy: .exact) }
         }
 
         /// The chosen vessel's current system — a Salvage Run's roam centre,
@@ -178,9 +178,9 @@ public struct NewSalvageRunFeature {
                 return .run { send in
                     // `Brain.ensureSalvage`'s own resolution — never the bare
                     // tag (see `launcher-tag-resolution-error-narrowing.md`).
-                    let tag: String
+                    let tag: FleetTag
                     do {
-                        tag = try await database.read { db -> String in
+                        tag = try await database.read { db -> FleetTag in
                             let view = try WorldView.read(from: db, now: now)
                             guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device)
                             else {
@@ -206,7 +206,7 @@ public struct NewSalvageRunFeature {
                         roamCentre: centre,
                         // The run resolves its whole fleet by tag (spec §4.2) —
                         // `.refreshFleet` cannot see an untagged member.
-                        fleetTag: tag,
+                        fleetTag: tag.string,
                         // Empty: the engine plans the first target itself, via
                         // `SalvageTargetPlanner`, on its first evaluation.
                         targets: [],

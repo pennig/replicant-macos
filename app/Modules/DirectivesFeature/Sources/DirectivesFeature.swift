@@ -353,7 +353,7 @@ public struct DirectivesFeature {
                     let directive = Directive(
                         id: uuid().uuidString, kind: .mineFleetPrint, status: .running,
                         deviceCode: site.host, controllerCode: nil, roamCentre: nil,
-                        fleetTag: MineRecipe.fleetTag, sourceRelayCode: nil,
+                        fleetTag: MineRecipe.fleetTag.string, sourceRelayCode: nil,
                         targets: [], targetIndex: 0,
                         step: MineFleetPrint().firstStep, stepStartedAt: date.now,
                         returnToOrigin: false, originDesignation: nil,

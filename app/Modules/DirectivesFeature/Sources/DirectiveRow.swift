@@ -24,7 +24,7 @@ public struct DirectiveOwner: Equatable, Sendable {
         /// A live custom mission, via `Directive.controllerCode`.
         case mission(id: String)
         /// The device's own `auto:` fleet tag, when no mission row holds it.
-        case fleetTag(String)
+        case fleetTag(FleetTag)
     }
 
     public let holder: Holder
@@ -286,7 +286,7 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                 directive,
                 haulTarget: HaulRun.currentHaulTarget(
                     devices: devices,
-                    tag: directive.fleetTag ?? HaulRun.defaultFleetTag,
+                    tag: directive.fleetTag.flatMap(FleetTag.init(parsing:)) ?? HaulRun.defaultFleetTag,
                     // The fallback: this row has no `WorldSnapshot` to derive
                     // the live sink from.
                     delivery: HaulRun.deliveryLocation
@@ -319,25 +319,23 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
     /// the permanent mine's belt controllers, and every service bot an armed
     /// fleet left standing. Untagging the device is the take-back gesture.
     static func fleetOwner(of device: Device, belts: Set<String>) -> DirectiveOwner? {
-        guard let tag = device.tags
-            .map(Device.normalizedTag)
-            .filter({ $0.hasPrefix(RepairFleet.fleetTagPrefix) })
-            .min()
-        else { return nil }
+        guard let tag = DirectiveGroup.siteBearingTag(in: device.tags) else { return nil }
         // Only a device standing at an installed belt can claim that mine; the
         // ferry lives at the delivery sink, which is nobody's mine.
         let belt = device.location.flatMap { belts.contains($0) ? $0 : nil }
+        guard tag.goal == .mine else {
+            return DirectiveOwner(holder: .fleetTag(tag), title: automationTitle(tag))
+        }
         return DirectiveOwner(
             holder: .fleetTag(tag),
             title: automationTitle(tag),
-            designation: tag == MineRecipe.fleetTag ? belt : nil
+            designation: tag.scope?.designation.uppercased() ?? belt
         )
     }
 
     /// The automation a fleet tag enrols a device in, phrased for the row: the
-    /// suffix reads as the fleet, and a mine is a place rather than a fleet.
-    static func automationTitle(_ tag: String) -> String {
-        let name = tag.dropFirst(RepairFleet.fleetTagPrefix.count).prefix { $0 != ":" }
-        return name == "mine" ? "mine" : "\(name) fleet"
+    /// goal reads as the fleet, and a mine is a place rather than a fleet.
+    static func automationTitle(_ tag: FleetTag) -> String {
+        tag.goal == .mine ? "mine" : "\(tag.goal.rawValue) fleet"
     }
 }

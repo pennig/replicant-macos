@@ -213,9 +213,9 @@ public struct NewDirectiveFeature {
                 return .run { send in
                     // `Brain.ensureSurvey`'s own resolution — never nil (see
                     // `launcher-tag-resolution-error-narrowing.md`).
-                    let tag: String
+                    let tag: FleetTag
                     do {
-                        tag = try await database.read { db -> String in
+                        tag = try await database.read { db -> FleetTag in
                             let view = try WorldView.read(from: db, now: now)
                             guard let device = view.devices[vesselCode], let theatre = view.owningTheatre(of: device)
                             else {
@@ -239,7 +239,7 @@ public struct NewDirectiveFeature {
                         // Non-nil is what makes the engine extend the queue
                         // rather than finish when it empties.
                         roamCentre: roamCentre,
-                        fleetTag: tag,
+                        fleetTag: tag.string,
                         // Empty on purpose: the engine plans the first target
                         // from the census on its first evaluation.
                         targets: targets,

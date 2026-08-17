@@ -26,7 +26,7 @@ struct TagsEditor: View {
 
     /// Normalised the way the server will store it, so what the operator sees
     /// after the next sync is what this editor already showed them — and so
-    /// "AUTO:Haul" cannot be added alongside an existing "auto:haul".
+    /// `AUTO:Haul` cannot be added alongside an existing `auto:haul`.
     private var trimmedTag: String { Device.normalizedTag(newTag) }
 
     /// Enabled once the field holds a non-empty tag the device doesn't already carry.

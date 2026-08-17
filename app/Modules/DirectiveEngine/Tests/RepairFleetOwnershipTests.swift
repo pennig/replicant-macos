@@ -22,14 +22,14 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
     @Test func anUntaggedBotAnswersToEveryOwner() {
         let bot = taggedBot("BOT1", [])
         #expect(RepairFleet.answers(bot, to: nil))
-        #expect(RepairFleet.answers(bot, to: "auto:salvage"))
-        #expect(RepairFleet.answers(bot, to: "auto:survey"))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .salvage)))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .survey)))
     }
 
     @Test func aTaggedBotAnswersOnlyToItsOwnFleet() {
         let bot = taggedBot("BOT1", ["auto:salvage"])
-        #expect(RepairFleet.answers(bot, to: "auto:salvage"))
-        #expect(!RepairFleet.answers(bot, to: "auto:survey"))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .salvage)))
+        #expect(!RepairFleet.answers(bot, to: FleetTag(goal: .survey)))
     }
 
     /// A run that names no fleet claims unowned bots only — which is what leaves
@@ -43,24 +43,24 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
     @Test func aNonFleetTagLeavesTheBotUnowned() {
         let bot = taggedBot("BOT1", ["operator:keep", "colour:red"])
         #expect(RepairFleet.answers(bot, to: nil))
-        #expect(RepairFleet.answers(bot, to: "auto:salvage"))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .salvage)))
     }
 
     @Test func aBotWearingTwoFleetTagsAnswersToBoth() {
         let bot = taggedBot("BOT1", ["auto:salvage", "auto:survey"])
-        #expect(RepairFleet.answers(bot, to: "auto:salvage"))
-        #expect(RepairFleet.answers(bot, to: "auto:survey"))
-        #expect(!RepairFleet.answers(bot, to: "auto:haul"))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .salvage)))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .survey)))
+        #expect(!RepairFleet.answers(bot, to: FleetTag(goal: .haul)))
     }
 
-    /// Tags carry operator casing, so both sides must compare through
-    /// `Device.normalizedTag` or a hand-tagged bot escapes its fleet.
+    /// Tags carry operator casing and stray whitespace, so a hand-tagged bot
+    /// must still parse into its fleet.
     @Test func ownershipSurvivesCaseAndWhitespaceDrift() {
         let bot = taggedBot("BOT1", ["Auto:Survey"])
-        #expect(RepairFleet.answers(bot, to: "auto:survey"))
-        #expect(!RepairFleet.answers(bot, to: "auto:salvage"))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .survey)))
+        #expect(!RepairFleet.answers(bot, to: FleetTag(goal: .salvage)))
         #expect(!RepairFleet.answers(bot, to: nil))
-        #expect(RepairFleet.answers(taggedBot("BOT2", ["auto:survey"]), to: " Auto:Survey "))
+        #expect(RepairFleet.answers(taggedBot("BOT2", [" auto:survey "]), to: FleetTag(goal: .survey)))
     }
 
     /// Both ends of the round trip must filter identically — a bot deployed
@@ -76,7 +76,7 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
             directives: ["service"], tags: ["auto:survey"]
         )
         let aboard = repairWorld(devices: [vessel, mine, theirs])
-        #expect(RepairFleet.bots(aboard: vessel, in: aboard, owner: "auto:salvage")
+        #expect(RepairFleet.bots(aboard: vessel, in: aboard, owner: FleetTag(goal: .salvage))
             .map(\.deviceCode) == ["BOT1"])
 
         let out = repairWorld(devices: [
@@ -84,10 +84,10 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
             taggedBot("BOT1", ["auto:salvage"]),
             taggedBot("BOT2", ["auto:survey"]),
         ])
-        #expect(RepairFleet.bots(deployedNear: "SOL-3", in: out, owner: "auto:salvage")
+        #expect(RepairFleet.bots(deployedNear: "SOL-3", in: out, owner: FleetTag(goal: .salvage))
             .map(\.deviceCode) == ["BOT1"])
-        #expect(RepairFleet.anyBotDeployed(in: out, system: "SOL", owner: "auto:salvage"))
-        #expect(!RepairFleet.anyBotDeployed(in: out, system: "SOL", owner: "auto:haul"))
+        #expect(RepairFleet.anyBotDeployed(in: out, system: "SOL", owner: FleetTag(goal: .salvage)))
+        #expect(!RepairFleet.anyBotDeployed(in: out, system: "SOL", owner: FleetTag(goal: .haul)))
     }
 
     /// The gate's fleet is owner-scoped on the deployed half and vessel-scoped
@@ -99,7 +99,7 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
             "DRONE1", type: "mining_drone", location: nil, stowedIn: "VESSEL", capacity: 100
         )
         let w = repairWorld(devices: [vessel, theirs, drone])
-        #expect(RepairFleet.fleet(of: vessel, in: w, owner: "auto:salvage")
+        #expect(RepairFleet.fleet(of: vessel, in: w, owner: FleetTag(goal: .salvage))
             .map(\.deviceCode) == ["DRONE1"])
     }
 
@@ -109,15 +109,15 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
     /// owner a freshly-launched directive now stamps — the migration path.
     @Test func aBareTaggedBotAnswersToATheatreScopedOwner() {
         let bot = taggedBot("BOT1", ["auto:survey"])
-        #expect(RepairFleet.answers(bot, to: "auto:survey:AINALRAM-BELT-1"))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .survey, scope: .theatre(depot: "AINALRAM-BELT-1"))))
     }
 
     /// A bot migrated to ONE theatre must not answer for a different one —
     /// the root fallback must not blur theatres together.
     @Test func aTheatreTaggedBotDoesNotAnswerToAnotherTheatre() {
         let bot = taggedBot("BOT1", ["auto:survey:AINALRAM-BELT-1"])
-        #expect(RepairFleet.answers(bot, to: "auto:survey:AINALRAM-BELT-1"))
-        #expect(!RepairFleet.answers(bot, to: "auto:survey:DENEBED-BELT-1"))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .survey, scope: .theatre(depot: "AINALRAM-BELT-1"))))
+        #expect(!RepairFleet.answers(bot, to: FleetTag(goal: .survey, scope: .theatre(depot: "DENEBED-BELT-1"))))
     }
 
     /// The OTHER migration direction. A legacy `surveyRun`/`salvageRun`
@@ -125,6 +125,6 @@ private func taggedBot(_ code: String, _ tags: [String]) -> Device {
     /// service bots to the per-theatre form must not silently lose repair.
     @Test func aTheatreTaggedBotStillAnswersToABareOwner() {
         let bot = taggedBot("BOT1", ["auto:survey:AINALRAM-BELT-1"])
-        #expect(RepairFleet.answers(bot, to: "auto:survey"))
+        #expect(RepairFleet.answers(bot, to: FleetTag(goal: .survey)))
     }
 }

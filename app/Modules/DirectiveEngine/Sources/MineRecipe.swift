@@ -12,13 +12,17 @@ import GameModels
 /// The eleven-device mine fleet: what to print, what rides the carrier, and
 /// how to recognise the pieces in device rows.
 public enum MineRecipe {
-    public static let fleetTag = "auto:mine"
+    public static let fleetTag = FleetTag(goal: .mine)
 
     /// The tag `Brain.ensureMine` stamps on the mineRun DIRECTIVE row — never
     /// on recipe MEMBERS, which stay bare-tagged from print. Mirrors
     /// `SurveyRun.fleetTag(forTheatre:)`.
-    public static func fleetTag(forTheatre depot: String) -> String { "\(fleetTag):\(depot)" }
-    public static let carrierTag = "auto:carrier"
+    public static func fleetTag(forTheatre depot: String) -> FleetTag {
+        FleetTag(goal: .mine, scope: .theatre(depot: depot))
+    }
+
+    /// The carrier pool's tag — the one definition; `EventRun` reuses it.
+    public static let carrierTag = FleetTag(goal: .carrier)
     public static let carrierDeviceType = "surge_carrier"
 
     /// The nine that ride the carrier to the belt.
@@ -41,7 +45,7 @@ public enum MineRecipe {
     /// Whether `device` is a free recipe member standing at `hub`: tagged, idle,
     /// unadopted, unattached, unstowed, and running no AMI directive.
     public static func isUnassigned(_ device: Device, hub: String) -> Bool {
-        device.hasTag(fleetTag)
+        device.carries(fleetTag, policy: .exact)
             && device.location == hub
             && device.stowedInDeviceCode == nil
             && device.attachedToDeviceCode == nil
@@ -96,7 +100,7 @@ public enum MineRecipe {
     ) -> Set<String> {
         Set(
             devices
-                .filter { $0.deviceType == "ami_mining_controller" && $0.hasTag(fleetTag) }
+                .filter { $0.deviceType == "ami_mining_controller" && $0.carries(fleetTag, policy: .exact) }
                 .compactMap(\.location)
                 .filter { !hubs.contains($0) }
         )
@@ -108,7 +112,7 @@ public enum MineRecipe {
     ) -> Device? {
         devices
             .filter {
-                $0.deviceType == carrierDeviceType && $0.hasTag(carrierTag)
+                $0.deviceType == carrierDeviceType && $0.carries(carrierTag, policy: .exact)
                     && $0.location == hub && $0.status == "idle"
             }
             .min { $0.deviceCode < $1.deviceCode }

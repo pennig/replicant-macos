@@ -593,31 +593,23 @@ actor DirectiveEngineCore {
     }
 
     /// `resolveSystemRefresh`'s contract, scoped to `tag` instead of a location.
-    /// The containment counterpart `.refreshDevicesInSystem` cannot serve — a tag
-    /// filter never touches `location`, so stowing does not drop a device out of
-    /// scope. **Never prune after this read**: every untagged device is absent by
-    /// construction, and treating that absence as "device gone" deletes the fleet.
+    /// A scoped tag also reads its unscoped form, so a half-migrated fleet is
+    /// fully refreshed. **Never prune after this read** — see `.refreshFleet`.
     private func resolveFleetRefresh(
-        tag: String,
+        tag: FleetTag,
         thenStall reason: DirectiveAttentionReason?,
         directive: Directive,
         machine: any MissionStepMachine,
         paid: Set<RefreshKind>
     ) async -> MissionAction {
-        @Dependency(\.devicesClient) var devicesClient
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
 
-        do {
-            let devices = try await devicesClient.fetchByTag(tag)
-            let reconciler = Reconciler()
-            await reconciler.ingest(devices)
-            logger.info("directive \(directive.id, privacy: .public): reconciled \(devices.count) device(s) tagged \(tag, privacy: .public) in one request")
-        } catch {
-            // The run is no worse off than before the attempt; fall through and
-            // let the machine judge the rows it already has.
-            logger.error("directive \(directive.id, privacy: .public): fleet refresh of \(tag, privacy: .public) failed: \(error)")
-        }
+        let scoped = await fetchAndIngest(tag, for: directive)
+        let unscoped = tag.isScoped ? await fetchAndIngest(tag.unscoped, for: directive) : nil
+        let counts = "\(tag.string)=\(scoped)"
+            + (unscoped.map { ", \(tag.unscoped.string)=\($0)" } ?? "")
+        logger.info("directive \(directive.id, privacy: .public): fleet refresh reconciled \(counts, privacy: .public)")
 
         let fresh: WorldSnapshot
         do {
@@ -627,6 +619,20 @@ actor DirectiveEngineCore {
             return reason.map { .stall($0) } ?? .wait
         }
         return await reAsk(machine, directive, fresh, paid: paid)
+    }
+
+    /// Reads one tag and ingests what it answers, returning the count. A failure
+    /// leaves the run no worse off than before the attempt, so it never throws.
+    private func fetchAndIngest(_ tag: FleetTag, for directive: Directive) async -> Int {
+        @Dependency(\.devicesClient) var devicesClient
+        do {
+            let devices = try await devicesClient.fetchByTag(tag.string)
+            await Reconciler().ingest(devices)
+            return devices.count
+        } catch {
+            logger.error("directive \(directive.id, privacy: .public): fleet refresh of \(tag.string, privacy: .public) failed: \(error)")
+            return 0
+        }
     }
 
     /// The other resolvers' contract, paid for with one stockpile-census refresh,

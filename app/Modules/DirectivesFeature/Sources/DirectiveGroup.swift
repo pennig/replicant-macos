@@ -44,7 +44,7 @@ public struct DirectiveGroup: Equatable, Identifiable, Sendable {
     /// `builtin:`-prefixed, so expansion state can never key off a row.
     public var id: String {
         switch key {
-        case let .automation(name, site): "auto:\(name)" + (site.map { ":\($0)" } ?? "")
+        case let .automation(name, site): "\(FleetTag.prefix)\(name)" + (site.map { ":\($0)" } ?? "")
         case .mesh: "group:mesh"
         case .unassigned: "group:unassigned"
         case .finished: "group:finished"
@@ -121,9 +121,9 @@ extension DirectiveGroup {
         var keys: [String: Key] = [:]
         for case let .custom(directive, _) in rows {
             guard !DirectiveStatus.finishedCases.contains(directive.status),
-                  let tag = directive.fleetTag,
-                  let key = automationKey(tag)
+                  let tag = directive.fleetTag.flatMap(FleetTag.init(parsing:))
             else { continue }
+            let key = automationKey(tag)
             keys[directive.id] = key
             // First wins: `rows` is newest-first, and a device driven by two
             // rows belongs with the one that claimed it most recently.
@@ -139,38 +139,32 @@ extension DirectiveGroup {
         switch row {
         case let .custom(directive, _):
             if DirectiveStatus.finishedCases.contains(directive.status) { return .finished }
-            guard let tag = directive.fleetTag, let key = automationKey(tag) else { return .mesh }
-            return key
+            guard let tag = directive.fleetTag.flatMap(FleetTag.init(parsing:)) else { return .mesh }
+            return automationKey(tag)
         case let .builtIn(builtIn):
             if case let .mission(id) = builtIn.drivenBy?.holder, let key = missionKeys[id] {
                 return key
             }
             if let key = missionKeys[builtIn.deviceCode] { return key }
             guard let tag = siteBearingTag(in: builtIn.tags) else { return .unassigned }
-            return automationKey(tag, site: builtIn.drivenBy?.designation) ?? .unassigned
+            return automationKey(tag, site: builtIn.drivenBy?.designation)
         }
     }
 
     /// The device's most specific fleet tag. A migrated device wears both the
     /// bare and the per-theatre form, and only the latter names where it works.
-    static func siteBearingTag(in tags: [String]) -> String? {
-        tags
-            .map(Device.normalizedTag)
-            .filter { $0.hasPrefix(RepairFleet.fleetTagPrefix) }
-            .max { lhs, rhs in
-                let (l, r) = (lhs.split(separator: ":").count, rhs.split(separator: ":").count)
-                return l == r ? lhs > rhs : l < r
-            }
+    static func siteBearingTag(in tags: [String]) -> FleetTag? {
+        let parsed = tags.compactMap { FleetTag(parsing: Device.normalizedTag($0)) }
+        let scoped = parsed.filter(\.isScoped)
+        return (scoped.isEmpty ? parsed : scoped).min { $0.string < $1.string }
     }
 
-    /// `auto:mine:GRAZ-BELT-1` → (mine, GRAZ-BELT-1); a bare `auto:mine` takes
-    /// `site`. Nil for anything that is not a fleet tag.
-    static func automationKey(_ tag: String, site: String? = nil) -> Key? {
-        let normalized = Device.normalizedTag(tag)
-        guard normalized.hasPrefix(RepairFleet.fleetTagPrefix) else { return nil }
-        let parts = normalized.split(separator: ":", maxSplits: 2).map(String.init)
-        guard parts.count >= 2, !parts[1].isEmpty else { return nil }
-        let designation = parts.count > 2 ? parts[2] : site
-        return .automation(name: parts[1], site: designation?.uppercased())
+    /// `auto:mine:GRAZ-BELT-1` → (mine, GRAZ-BELT-1); an unscoped `auto:mine`
+    /// takes `site`.
+    static func automationKey(_ tag: FleetTag, site: String? = nil) -> Key {
+        .automation(
+            name: tag.goal.rawValue,
+            site: (tag.scope?.designation ?? site)?.uppercased()
+        )
     }
 }

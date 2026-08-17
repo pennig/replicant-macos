@@ -33,7 +33,7 @@ private func hull(
     return device
 }
 
-private func carrier(_ code: String, tags: [String] = [EventRun.carrierTag], location: String? = eventDepot, status: String = "idle") -> Device {
+private func carrier(_ code: String, tags: [String] = [MineRecipe.carrierTag.string], location: String? = eventDepot, status: String = "idle") -> Device {
     hull(code, type: EventRun.carrierDeviceType, tags: tags, location: location, status: status)
 }
 
@@ -43,7 +43,7 @@ private func freighter(_ code: String, location: String? = eventDepot, status: S
 
 /// A `matrix_container` at the depot wearing its print tag; `courierHosts` is
 /// the other half of what makes it a courier.
-private func courier(_ code: String, tags: [String] = [EventRun.rootTag]) -> Device {
+private func courier(_ code: String, tags: [String] = [EventRun.rootTag.string]) -> Device {
     hull(code, type: EventRun.courierDeviceType, tags: tags)
 }
 
@@ -120,7 +120,7 @@ private func liveEventRun(
     Directive(
         id: id, kind: .eventRun, status: status, deviceCode: carrier,
         controllerCode: nil, roamCentre: nil,
-        fleetTag: EventRun.fleetTag(forTheatre: eventDepot), sourceRelayCode: nil,
+        fleetTag: EventRun.fleetTag(forTheatre: eventDepot).string, sourceRelayCode: nil,
         targets: [target], targetIndex: 0, step: EventRun.Step.departing,
         stepStartedAt: .distantPast, returnToOrigin: true, originDesignation: "HUB",
         attentionReason: nil, createdAt: .distantPast, updatedAt: .distantPast,
@@ -534,14 +534,14 @@ private func seedEventWorld(_ db: Database) throws {
     try Device.insert {
         deviceFixture(
             code: "BOX", type: EventRun.courierDeviceType, location: growHubLocation,
-            features: [], tags: [EventRun.rootTag], updatedAt: eventNow
+            features: [], tags: [EventRun.rootTag.string], updatedAt: eventNow
         )
     }.execute(db)
     try seedReplicant(db, code: "R-COURIER", star: "SOL", hostedDeviceCode: "BOX")
     for code in ["CARRIER-A", "CARRIER-B"] {
         try seedDevice(
             db, code: code, type: EventRun.carrierDeviceType, location: growHubLocation,
-            features: carrierHullFeatures, tags: [EventRun.carrierTag], updatedAt: eventNow
+            features: carrierHullFeatures, tags: [MineRecipe.carrierTag.string], updatedAt: eventNow
         )
     }
     for code in ["FREIGHT-A", "FREIGHT-B"] {
@@ -584,7 +584,7 @@ struct BrainEnsureEventTests {
         #expect(run.deviceCode == "CARRIER-A")
         #expect(run.freighterCode == "FREIGHT-A")
         #expect(run.targets == [eventDesignation])
-        #expect(run.fleetTag == EventRun.fleetTag(forTheatre: growHubLocation))
+        #expect(run.fleetTag == EventRun.fleetTag(forTheatre: growHubLocation).string)
         #expect(run.step == EventRun().firstStep)
         #expect(run.status == .running)
         #expect(run.returnToOrigin)

@@ -33,9 +33,9 @@ struct Brain: Sendable {
     let now: Date
 
     /// Opt-in with NO fallback to "any free vessel": an untagged fleet means the
-    /// brain launches nothing and says so. Compare only through `Device.hasTag` —
-    /// a raw `tags.contains` refuses the vessel that was just opted in.
-    static let carrierTag = "auto:tendmesh"
+    /// brain launches nothing and says so. Compare only through `Device.carries`
+    /// — a raw `tags.contains` refuses the vessel that was just opted in.
+    static let carrierTag = FleetTag(goal: .tendMesh)
 
     /// The survey fleet's own opt-in tag, disjoint from `carrierTag` — the two
     /// automations never contend over the same vessel.
@@ -450,7 +450,7 @@ struct Brain: Sendable {
                     status: .running,
                     deviceCode: carrier,
                     controllerCode: nil, roamCentre: roamCentre,
-                    fleetTag: SurveyRun.fleetTag(forTheatre: theatre.depot), sourceRelayCode: nil,
+                    fleetTag: SurveyRun.fleetTag(forTheatre: theatre.depot).string, sourceRelayCode: nil,
                     targets: [], targetIndex: 0,
                     step: SurveyRun().firstStep,
                     stepStartedAt: now,
@@ -481,7 +481,7 @@ struct Brain: Sendable {
                     deviceCode: carrier,
                     controllerCode: nil,
                     roamCentre: roamCentre,
-                    fleetTag: SalvageRun.fleetTag(forTheatre: theatre.depot),
+                    fleetTag: SalvageRun.fleetTag(forTheatre: theatre.depot).string,
                     sourceRelayCode: nil,
                     targets: [], targetIndex: 0,
                     step: SalvageRun().firstStep,
@@ -516,7 +516,7 @@ struct Brain: Sendable {
                     deviceCode: controller,
                     controllerCode: nil,
                     roamCentre: nil,
-                    fleetTag: HaulRun.fleetTag(forTheatre: theatre.depot),
+                    fleetTag: HaulRun.fleetTag(forTheatre: theatre.depot).string,
                     sourceRelayCode: nil,
                     targets: [], targetIndex: 0,
                     step: HaulRun().firstStep,
@@ -548,7 +548,7 @@ struct Brain: Sendable {
                     deviceCode: carrier,
                     controllerCode: nil,
                     roamCentre: nil,
-                    fleetTag: MineRecipe.fleetTag(forTheatre: theatre.depot),
+                    fleetTag: MineRecipe.fleetTag(forTheatre: theatre.depot).string,
                     sourceRelayCode: nil,
                     targets: [belt], targetIndex: 0,
                     step: MineRun().firstStep,
@@ -595,7 +595,7 @@ struct Brain: Sendable {
                     // `mineRun` already armed short-circuits `assign` forever.
                     controllerCode: controller,
                     roamCentre: nil,
-                    fleetTag: Self.mineFerryTag(for: belt),
+                    fleetTag: Self.mineFerryTag(for: belt).string,
                     sourceRelayCode: nil,
                     targets: [belt], targetIndex: 0,
                     step: HaulRun().firstStep,
@@ -627,7 +627,7 @@ struct Brain: Sendable {
                     deviceCode: carrier,
                     controllerCode: nil,
                     roamCentre: nil,
-                    fleetTag: EventRun.fleetTag(forTheatre: theatre.depot),
+                    fleetTag: EventRun.fleetTag(forTheatre: theatre.depot).string,
                     sourceRelayCode: nil,
                     targets: [candidate.designation], targetIndex: 0,
                     step: EventRun().firstStep,
@@ -831,7 +831,7 @@ struct Brain: Sendable {
 
     /// `HaulRun.belongs`, resolved through this view's own theatre rule.
     private static func haulFleet(
-        _ device: Device, tag: String, depot: String, view: WorldView
+        _ device: Device, tag: FleetTag, depot: String, view: WorldView
     ) -> Bool {
         HaulRun.belongs(device, tag: tag, theatreDepot: depot) {
             owningTheatre(of: $0, view: view)?.depot
@@ -858,7 +858,7 @@ struct Brain: Sendable {
                   isGeneralHaul(row), HaulRun.pinnedSource(of: row) == nil,
                   let depot = row.theatreDepot
             else { return nil }
-            let tag = row.fleetTag ?? HaulRun.defaultFleetTag
+            let tag = row.fleetTag.flatMap(FleetTag.init(parsing:)) ?? HaulRun.defaultFleetTag
             let fleet = HaulRun.controllers(in: view.devices.values, tag: tag)
                 .filter { haulFleet($0, tag: tag, depot: depot, view: view) }
                 .map(\.deviceCode)
@@ -1296,7 +1296,7 @@ struct Brain: Sendable {
         // A tag on a non-carrier hull is a misapplied opt-in, not an untagged
         // fleet. Moving the tag is location-independent, so the scan is fleet-wide.
         let mistagged = devices.values
-            .filter { !$0.isCarrierHull && $0.hasTag(carrierTag) }
+            .filter { !$0.isCarrierHull && $0.carries(carrierTag, policy: .exact) }
             .sorted { $0.deviceCode < $1.deviceCode }
         guard !hulls.isEmpty else {
             guard let clause = mistaggedClause(mistagged, tag: carrierTag) else {
@@ -1309,7 +1309,7 @@ struct Brain: Sendable {
         // below: those explain why a vessel the brain MAY fly is unavailable,
         // where "the operator has not opted this fleet in" has a different
         // remedy and would otherwise read as "all busy".
-        let candidates = hulls.filter { $0.hasTag(carrierTag) }
+        let candidates = hulls.filter { $0.carries(carrierTag, policy: .exact) }
         guard !candidates.isEmpty else {
             let untagged = "no carrier hull at \(hub) is tagged \(carrierTag) — \(list(hulls.map(\.deviceCode))) \(hulls.count == 1 ? "is" : "are") untagged"
             guard let clause = mistaggedClause(mistagged, tag: carrierTag) else { return untagged }
@@ -1327,11 +1327,11 @@ struct Brain: Sendable {
     /// wearing `tag`) held by a SAME-KIND directive from a DIFFERENT theatre —
     /// nil unless that cross-theatre collision is what explains the hold.
     private static func unmigratedHold(
-        _ candidates: some Sequence<Device>, reserved: Set<String>, tag: String,
+        _ candidates: some Sequence<Device>, reserved: Set<String>, tag: FleetTag,
         kind: DirectiveKind, theatre: Theatre, directives: [Directive], devices: [String: Device]
     ) -> Device? {
         candidates
-            .filter { reserved.contains($0.deviceCode) && !$0.hasTag(tag) }
+            .filter { reserved.contains($0.deviceCode) && !$0.carries(tag, policy: .exact) }
             .filter {
                 guard let holder = holdingDirective(of: $0.deviceCode, directives: directives, devices: devices)
                 else { return false }
@@ -1342,13 +1342,13 @@ struct Brain: Sendable {
 
     /// Names `device` as un-migrated: bare-tagged and, for want of `tag`, held
     /// by another run without protecting its own off-vessel fleet members.
-    private static func unmigratedNote(_ device: Device, tag: String) -> String {
+    private static func unmigratedNote(_ device: Device, tag: FleetTag) -> String {
         "\(device.deviceCode) is bare-tagged — re-tag it \(tag) to protect its fleet from other theatres"
     }
 
     /// Devices wearing `tag` that are not carrier hulls, as one clause: two
     /// named in device-code order, the rest counted. Nil when there are none.
-    private static func mistaggedClause(_ mistagged: [Device], tag: String) -> String? {
+    private static func mistaggedClause(_ mistagged: [Device], tag: FleetTag) -> String? {
         guard !mistagged.isEmpty else { return nil }
         let predicate = mistagged.count == 1
             ? "is tagged \(tag) but is not a carrier hull"
@@ -1425,7 +1425,7 @@ struct Brain: Sendable {
     /// applies exactly the predicate the ranking applied rather than a cousin of it.
     static func isFreeCarrier(_ device: Device, at hub: String, reserved: Set<String>) -> Bool {
         device.isCarrierHull
-            && device.hasTag(carrierTag)
+            && device.carries(carrierTag, policy: .exact)
             && device.location == hub
             && !device.isBusy
             && !reserved.contains(device.deviceCode)
@@ -1561,8 +1561,8 @@ struct Brain: Sendable {
     /// per-site row (`auto:mine:<belt>`) — the bare tag, or any theatre-scoped
     /// tag it derives from. A nil tag counts, falling back to the default.
     static func isGeneralHaul(_ directive: Directive) -> Bool {
-        let tag = Device.normalizedTag(directive.fleetTag ?? HaulRun.defaultFleetTag)
-        return tag == HaulRun.defaultFleetTag || tag.hasPrefix("\(HaulRun.defaultFleetTag):")
+        guard let tag = directive.fleetTag else { return true }
+        return FleetTag(parsing: tag)?.goal == .haul
     }
 
     /// The haul verdict for `theatre`. `HaulRun.controllers` already sorts by
@@ -1746,7 +1746,9 @@ struct Brain: Sendable {
     /// The fleet tag a per-mine ferry row wears. Per BELT, never the bare
     /// `MineRecipe.fleetTag`: `reservedDevices` closes over a row's tag, so a
     /// fleet-wide one would reserve every other mine's controller forever.
-    static func mineFerryTag(for belt: String) -> String { "\(MineRecipe.fleetTag):\(belt)" }
+    static func mineFerryTag(for belt: String) -> FleetTag {
+        FleetTag(goal: .mine, scope: .belt(designation: belt))
+    }
 
     /// The transport controller at `hub` to drain `belt` through: the one
     /// already ferrying it, else the lowest-coded free one. Both arms skip a
@@ -1757,7 +1759,7 @@ struct Brain: Sendable {
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         let candidates = view.devices.values
             .filter {
-                $0.deviceType == mineTransportType && $0.hasTag(MineRecipe.fleetTag)
+                $0.deviceType == mineTransportType && $0.carries(MineRecipe.fleetTag, policy: .exact)
                     && $0.location == hub && !reserved.contains($0.deviceCode)
             }
             .sorted { $0.deviceCode < $1.deviceCode }
@@ -1889,7 +1891,7 @@ struct Brain: Sendable {
                     surveyActive: survey?.currentDirective == MineRun.surveyDirective
                         && survey?.currentDirectiveStatus == "active",
                     ferryInForce: view.devices.values.contains {
-                        $0.deviceType == mineTransportType && $0.hasTag(MineRecipe.fleetTag)
+                        $0.deviceType == mineTransportType && $0.carries(MineRecipe.fleetTag, policy: .exact)
                             && $0.currentDirectiveConfig?["collect"]?.stringValue == belt
                     }
                 )
@@ -1900,7 +1902,7 @@ struct Brain: Sendable {
     /// mine by construction.
     private static func mineBeltController(at belt: String, type: String, in view: WorldView) -> Device? {
         view.devices.values.first {
-            $0.deviceType == type && $0.hasTag(MineRecipe.fleetTag) && $0.location == belt
+            $0.deviceType == type && $0.carries(MineRecipe.fleetTag, policy: .exact) && $0.location == belt
         }
     }
 
@@ -2021,14 +2023,14 @@ struct Brain: Sendable {
     /// other row's hold, wearing `tag` when one is named, and carrying nothing
     /// when `emptyHold`. Sorted, so a stateless brain picks the same hull twice.
     private static func freeHull(
-        type: String, tag: String?, emptyHold: Bool = false,
+        type: String, tag: FleetTag?, emptyHold: Bool = false,
         theatre: Theatre, view: WorldView, reserved: Set<String>
     ) -> Device? {
         view.devices.values
             .filter { device in
                 device.deviceType == type && device.location == theatre.depot && !device.isBusy
                     && !reserved.contains(device.deviceCode)
-                    && (tag.map(device.hasTag) ?? true)
+                    && (tag.map { device.carries($0, policy: .exact) } ?? true)
                     && (!emptyHold || device.cargoUsed == 0)
             }
             .min { $0.deviceCode < $1.deviceCode }
@@ -2065,10 +2067,10 @@ struct Brain: Sendable {
 
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         guard let carrier = freeHull(
-            type: EventRun.carrierDeviceType, tag: EventRun.carrierTag,
+            type: EventRun.carrierDeviceType, tag: MineRecipe.carrierTag,
             theatre: theatre, view: view, reserved: reserved
         ) else {
-            return .idle(reason: "no free \(EventRun.carrierTag) surge carrier at \(theatre.depot)")
+            return .idle(reason: "no free \(MineRecipe.carrierTag) surge carrier at \(theatre.depot)")
         }
         // An empty hold is what makes `EventRun`'s own `cargoUsed > 0` read as
         // "this run loaded it" rather than "someone's haul is still aboard".

@@ -457,10 +457,14 @@ struct DirectiveRowSubtitleTests {
     @Test func aHaulRunHonoursItsOwnFleetTag() {
         let rows = DirectiveRow.merge(
             devices: [
-                haulController(code: "HAUL1", collecting: "ATIANFU-BELT-1", tags: ["auto:haul"]),
-                haulController(code: "HAUL2", collecting: "AINALRAM-2", tags: ["auto:haul-b"]),
+                haulController(
+                    code: "HAUL1", collecting: "ATIANFU-BELT-1", tags: ["auto:haul:ATIANFU-3"]
+                ),
+                haulController(
+                    code: "HAUL2", collecting: "AINALRAM-2", tags: ["auto:haul:AINALRAM-9"]
+                ),
             ],
-            directives: [haulRun(fleetTag: "auto:haul-b")]
+            directives: [haulRun(fleetTag: "auto:haul:AINALRAM-9")]
         )
         #expect(rows.first?.headlineDesignation == "AINALRAM-2")
     }
@@ -567,7 +571,7 @@ private func miningController(
 ) -> Device {
     device(
         code: code, type: "ami_mining_controller", directive: directive,
-        tags: [MineRecipe.fleetTag], location: location
+        tags: [MineRecipe.fleetTag.string], location: location
     )
 }
 
@@ -602,7 +606,7 @@ struct DirectiveRowFleetTagOwnershipTests {
                 miningController(),
                 device(
                     code: "SURV1", directive: "belt_search",
-                    tags: [MineRecipe.fleetTag], location: mineBelt
+                    tags: [MineRecipe.fleetTag.string], location: mineBelt
                 ),
             ],
             directives: []
@@ -620,7 +624,7 @@ struct DirectiveRowFleetTagOwnershipTests {
             devices: [
                 miningController(),
                 haulController(
-                    code: "FERRY1", collecting: mineBelt, tags: [MineRecipe.fleetTag]
+                    code: "FERRY1", collecting: mineBelt, tags: [MineRecipe.fleetTag.string]
                 ),
             ],
             directives: []
@@ -637,7 +641,7 @@ struct DirectiveRowFleetTagOwnershipTests {
         let rows = DirectiveRow.merge(
             devices: [device(
                 code: "BOT1", type: "service_bot", directive: "service",
-                tags: [SurveyRun.defaultFleetTag], location: "MOTHALELAH-5-13"
+                tags: [SurveyRun.defaultFleetTag.string], location: "MOTHALELAH-5-13"
             )],
             directives: []
         )
@@ -667,7 +671,7 @@ struct DirectiveRowFleetTagOwnershipTests {
         let rows = DirectiveRow.merge(
             devices: [device(
                 code: "AMI1", directive: "survey_system",
-                tags: [SurveyRun.defaultFleetTag]
+                tags: [SurveyRun.defaultFleetTag.string]
             )],
             directives: [driving]
         )
@@ -680,7 +684,7 @@ struct DirectiveRowFleetTagOwnershipTests {
     /// nothing has no row to lock, so the tag alone locks nothing.
     @Test func aTaggedDeviceRunningNoDirectiveIsNoRowAtAll() {
         let rows = DirectiveRow.merge(
-            devices: [device(code: "IDLE1", tags: [MineRecipe.fleetTag], location: mineBelt)],
+            devices: [device(code: "IDLE1", tags: [MineRecipe.fleetTag.string], location: mineBelt)],
             directives: []
         )
         #expect(rows.isEmpty)
@@ -695,11 +699,11 @@ struct DirectiveRowFleetTagOwnershipTests {
             devices: [
                 device(
                     code: "MINE2", type: "ami_mining_controller",
-                    tags: [MineRecipe.fleetTag], location: hub
+                    tags: [MineRecipe.fleetTag.string], location: hub
                 ),
                 haulController(
                     code: "FERRY1", collecting: mineBelt,
-                    tags: [MineRecipe.fleetTag], location: hub
+                    tags: [MineRecipe.fleetTag.string], location: hub
                 ),
             ],
             directives: []
