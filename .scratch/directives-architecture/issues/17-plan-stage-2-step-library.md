@@ -1,7 +1,7 @@
 # 17 — Write the Stage 2 (step library) plan
 
 Type: task
-Status: open
+Status: claimed
 Blocked by: 07, 14, 15
 Labels: directives-architecture, stage-2, planning
 
