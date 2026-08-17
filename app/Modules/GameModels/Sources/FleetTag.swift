@@ -1,13 +1,8 @@
 //
 //  FleetTag.swift
-//  Replicould — GameModels
 //
-//  The `auto:<goal>[:<depot|belt>]` fleet-tag grammar, replacing six
-//  formatters and seven parsers with one type. The third segment is a
-//  theatre depot for every goal except `.mine`, which ferries belong to a
-//  belt instead — `MineRecipe.fleetTag(forTheatre:)`'s INSTALL tag and a
-//  mine-ferry tag are the same string; only the caller's context tells them
-//  apart (S1.1).
+//  Third segment is a theatre depot for every goal except `.mine`'s belt
+//  ferries — an INSTALL tag and a ferry tag can render identically (S1.1).
 //
 
 /// One canonical fleet-tag grammar. `string` is always lowercase — the

@@ -57,7 +57,7 @@ struct FleetTagTests {
         #expect(Device.normalizedTag(tag.string) == tag.string)
     }
 
-    // R2 — see task-09-report.md for why scope-case-blind equality is required.
+    // R2 — spec §S1.1 / decision D2: equality/hashing ignore the Scope case.
     @Test func scopeCaseDoesNotAffectEquality() {
         #expect(FleetTag(goal: .mine, scope: .theatre(depot: "sol-1")) == FleetTag(goal: .mine, scope: .belt(designation: "sol-1")))
     }
