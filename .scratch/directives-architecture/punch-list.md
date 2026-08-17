@@ -26,6 +26,19 @@ Small things deliberately not fixed when they were found, kept here so they are 
 - [ ] **`EventRun.printing`'s progress witness falls back to `stepStartedAt` when the run holds no open print op.** Reachable when another directive occupies every printer at the depot. The fallback measures genuinely blocked time rather than working time, so it is defensible, but it is the old wide-window behaviour in a narrower case. `EventRun.swift`.
 - [ ] **`MineFleetPrint.fleetEvidenceIsStale` became a weaker gate.** It compares `newest < stepStartedAt`, and with same-step dispatches no longer re-stamping that clock it forces fewer fleet sweeps. The risk is a duplicate order, never a false stall. `MineFleetPrint.swift`.
 
+- [ ] **A scoped `.refreshFleet` now costs two API reads.** Stage 1 ticket 10 made a scoped fleet refresh
+  fetch both the scoped and the unscoped tag so a half-migrated fleet is fully refreshed. `SalvageRun`
+  issues it inside throttled loops (`SalvageRun.swift` `awaitCompletion`, `verify`), so a theatre-scoped
+  salvage row doubles its reads-budget spend. Per `theatre-aware-readiness-build.md` the scoped form
+  currently answers with an empty device list on the live account, so until the fleet is re-tagged
+  server-side one of the two reads is pure cost. Sanctioned by ticket 10's stated exception; revisit
+  once the fleet carries scoped tags.
+- [ ] **`Brain.unmigratedNote` shows the operator a lowercase tag.** It says re-tag it
+  `auto:haul:ainalram-belt-1` where designations render uppercase everywhere else in the UI.
+  `Brain.swift` (`unmigratedNote`). The canonical tag form is lowercase per D2 and the string is what
+  the operator must literally type, so this may be correct as-is — it is a UI consistency question, and
+  no test asserts either form.
+
 ## Constants and coupling
 
 - [ ] **`unresolvedReadBand` is tied to the engine tick by comment only.** The band (15 s) must exceed the worst observed tick period; the tick literal lives separately in `DirectiveEngine.swift`. Changing the tick silently breaks the pairing. Give them one shared constant, or a test that fails when they diverge.
