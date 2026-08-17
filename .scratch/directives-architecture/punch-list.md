@@ -13,6 +13,19 @@ Small things deliberately not fixed when they were found, kept here so they are 
 - [ ] **`MineFleetPrint.stocking` has no deadline above its open-op guard.** Stage 0 owner-scoped the guard to match its three siblings but deliberately did not invent a deadline, because adding one changes mission behaviour outside the ticket's scope. Without it, a co-tenant on a shared bench can park the run for the length of its own print. `MineFleetPrint.swift` — decide whether `stocking` should carry a deadline like `printing` does.
 - [ ] **automation-brain ticket 14 (RestockRun over-print race) is still open.** Stage 0 declined to close it: the ownership and ordering fixes did not touch the clone-row-lag race it describes. It now carries a cross-reference. Decide whether it belongs in a later stage of this effort or stays where it is.
 
+- [ ] **A sticky theatre depot that runs dry parks its runs silently and cannot self-heal.** Stage 1
+  ticket 16 made recognition sticky per system, and the proviso deliberately tests print-capability and
+  not stock (spec §S1.7). So a depot at zero stock keeps the theatre and reads
+  `.claimed(missing: [.noStock])` where the old rule would have handed the theatre to a stocked sibling in
+  the same system. `readiness` is honest; the run is not — with a second theatre operational,
+  `theatreWentClaimed` sends seven mission guards to `.wait` (`HaulRun` ×2, `RelayRun`, `EventRun` ×2,
+  `MineRun`, `SalvageRun`) with no stall, no `attentionReason` and no operator surface, and nothing can
+  restock it because the brain allocates only over operational theatres and the haul run that would refill
+  the depot is itself a waiter. Net still better than the old rule, which fired the same silent wait on
+  any stock *shuffle* rather than only on a depot going fully dry. Sits beside the parked
+  `theatre-readiness-starves-richer-depots` note. **The cheapest middle path is not changing the sticky
+  rule but giving `.claimed(missing: [.noStock])` on a sticky depot a visible surface.**
+
 ## Measurements owed
 
 - [ ] **Ticket 08's live-stream lag numbers.** The ≥500-event replay proves the route body makes zero network calls; the before/after `EventPipeline` lag under a real stream was never measured, because it needs a logged-in app. Collect during Checkpoint A from the OSLog `catch-up …` lines.
@@ -120,6 +133,11 @@ Small things deliberately not fixed when they were found, kept here so they are 
   unknown-step policy (`.wait` plus a log line) and added tests for seven of them. These two were already
   `.wait` before the ticket, so their behaviour did not change and the gap predates the effort — but the
   rule is unenforced on them. One test each, matching the seven that exist.
+
+- [ ] **`TheatreRegistry`'s `.derived` tier resolves two persisted systems in one mesh component by
+  `.min()` on designation, and that tie-break is untested.** The loop is per mesh component while the
+  sticky rule is per system, so the code had to invent a rule the spec does not define. Reachable only via
+  a removed pin or a vanished hub. `TheatreRegistry.swift`.
 
 ## Cosmetic
 
