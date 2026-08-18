@@ -2,7 +2,7 @@
 //  MissionLogBudget.swift
 //  Replicould — DirectiveEngine
 //
-//  Loop bounds read off a directive's own log, plus the confirm ladder every mission's confirming step ends with.
+//  Loop bounds read off a directive's own log.
 //
 
 import Foundation
@@ -89,31 +89,5 @@ public enum MissionLogBudget {
             return .dispatched(kind: String(words[1]), deviceCode: String(words[3]))
         }
         return .nothingSent
-    }
-}
-
-/// The ladder a confirming step ends with, shared by every mission that judges
-/// a command against the rows it moved.
-public enum MissionConfirm {
-    /// Floor between confirm-reads of one row while a mission polls it.
-    public static let readInterval: TimeInterval = 30
-
-    /// Buy evidence for `rows`, or stall once `deadline` has passed. The deadline
-    /// is read FIRST: a failing read never advances `updatedAt`, so the other
-    /// order loops forever at one high-priority read per tick.
-    public static func ladder(
-        _ rows: [Device], _ directive: Directive, _ world: WorldSnapshot,
-        deadline: TimeInterval, thenStall: DirectiveAttentionReason
-    ) -> MissionAction {
-        let codes = rows.map(\.deviceCode)
-        if world.now.timeIntervalSince(directive.stepStartedAt) > deadline {
-            return .refreshDevices(deviceCodes: codes, thenStall: thenStall)
-        }
-        guard rows.contains(where: { !world.isFresh($0, since: directive.stepStartedAt) }) else { return .wait }
-        let lastLook = rows.map(\.updatedAt).min() ?? .distantPast
-        if world.now.timeIntervalSince(lastLook) > readInterval {
-            return .refreshDevices(deviceCodes: codes, thenStall: nil)
-        }
-        return .wait
     }
 }

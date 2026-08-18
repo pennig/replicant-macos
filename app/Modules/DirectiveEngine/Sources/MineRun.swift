@@ -337,10 +337,12 @@ public struct MineRun: MissionStepMachine {
             world, dispatch: Step.attaching.rawValue, confirm: Step.confirmingAttach.rawValue
         )
         if roster.count - loose.count >= rounds { return .advanceStep(nextStep: Step.attaching.rawValue) }
-        return MissionConfirm.ladder(
-            [next], directive, world,
-            deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.attachConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict([next], ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Fly the loaded carrier to the belt.
@@ -370,10 +372,14 @@ public struct MineRun: MissionStepMachine {
             return .advanceStep(nextStep: Step.detaching.rawValue)
         }
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        return MissionConfirm.ladder(
-            [carrier], directive, world,
-            deadline: Self.arrivalConfirmDeadline, thenStall: .vesselPositionUnconfirmed
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(
+            deadline: Self.arrivalConfirmDeadline, onExpiry: .readThenStall(.vesselPositionUnconfirmed)
         )
+        return switch ladder.verdict([carrier], ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Set the whole fleet down in one command: `detach` takes every code at once.
@@ -404,10 +410,12 @@ public struct MineRun: MissionStepMachine {
                 && $0.attachedToDeviceCode == nil && $0.location == belt
         }
         if landed { return .advanceStep(nextStep: Step.adopting.rawValue) }
-        return MissionConfirm.ladder(
-            roster, directive, world,
-            deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.attachConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict(roster, ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Hand the next controller its members. One command per round: `adopt`
@@ -441,10 +449,12 @@ public struct MineRun: MissionStepMachine {
             world, dispatch: Step.adopting.rawValue, confirm: Step.confirmingAdopt.rawValue
         )
         if done >= rounds { return .advanceStep(nextStep: Step.adopting.rawValue) }
-        return MissionConfirm.ladder(
-            adoptions[done].pending, directive, world,
-            deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.attachConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict(adoptions[done].pending, ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Put the next target to work: name the directive when it is not in force,
@@ -530,9 +540,13 @@ public struct MineRun: MissionStepMachine {
     private static func armLadder(
         _ device: Device, _ directive: Directive, _ world: WorldSnapshot
     ) -> MissionAction {
-        MissionConfirm.ladder(
-            [device], directive, world, deadline: attachConfirmDeadline,
-            thenStall: device.deviceType == "service_bot" ? .serviceBotNotArmed : .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let reason: DirectiveAttentionReason = device.deviceType == "service_bot"
+            ? .serviceBotNotArmed : .commandRejected
+        let ladder = ConfirmRow(deadline: attachConfirmDeadline, onExpiry: .readThenStall(reason))
+        return switch ladder.verdict([device], ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 }

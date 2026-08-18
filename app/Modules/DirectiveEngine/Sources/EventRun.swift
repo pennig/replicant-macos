@@ -474,10 +474,12 @@ public struct EventRun: MissionStepMachine {
         guard let next = loose.first ?? convoy.freighter else {
             return .advanceStep(nextStep: Step.loading.rawValue)
         }
-        return MissionConfirm.ladder(
-            [next], directive, world,
-            deadline: Self.loadConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.loadConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict([next], ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     // MARK: - Delivery
@@ -525,10 +527,14 @@ public struct EventRun: MissionStepMachine {
         }
         if placed { return .advanceStep(nextStep: Step.staging.rawValue) }
         if rows.contains(where: { world.openOperation(for: $0.deviceCode) != nil }) { return .wait }
-        return MissionConfirm.ladder(
-            rows, directive, world,
-            deadline: Self.arrivalConfirmDeadline, thenStall: .vesselPositionUnconfirmed
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(
+            deadline: Self.arrivalConfirmDeadline, onExpiry: .readThenStall(.vesselPositionUnconfirmed)
         )
+        return switch ladder.verdict(rows, ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Everything on the carrier's grid bar the courier, which stays aboard as
@@ -592,10 +598,12 @@ public struct EventRun: MissionStepMachine {
         }
         let aboard = Self.staged(convoy, in: world)
         if aboard.isEmpty { return .advanceStep(nextStep: Step.staging.rawValue) }
-        return MissionConfirm.ladder(
-            aboard, directive, world,
-            deadline: Self.stageConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.stageConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict(aboard, ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     // MARK: - Commit
@@ -733,10 +741,12 @@ public struct EventRun: MissionStepMachine {
         if courier.attachedToDeviceCode == convoy.carrier.deviceCode {
             return .advanceStep(nextStep: Step.recovering.rawValue)
         }
-        return MissionConfirm.ladder(
-            [courier], directive, world,
-            deadline: Self.recoveryConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.recoveryConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict([courier], ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Both hulls to the depot, resolved through the row's own theatre — never
@@ -793,10 +803,12 @@ public struct EventRun: MissionStepMachine {
         if world.isFresh(freighter, since: directive.stepStartedAt), freighter.cargoUsed == 0 {
             return .advanceStep(nextStep: Step.depositing.rawValue)
         }
-        return MissionConfirm.ladder(
-            [freighter], directive, world,
-            deadline: Self.depositConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.depositConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict([freighter], ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// The run never roams.
