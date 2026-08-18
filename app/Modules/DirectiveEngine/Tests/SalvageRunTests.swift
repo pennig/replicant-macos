@@ -1427,7 +1427,7 @@ struct SalvageRunArrivalFreshnessTests {
     @Test func dispatchesImmediatelyOnAColdRunWithNoCompletedTravel() {
         let snapshot = world(devices: [laggingVessel(at: "TOSLIT-3"), controller, drone],
                              systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays)
-        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
+        #expect(TravelTo.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
         #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VESSEL",
                              params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
@@ -1494,7 +1494,7 @@ struct SalvageRunArrivalFreshnessTests {
             dispatchedOperations: afterArrival(status: .superseded),
             systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
         )
-        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
+        #expect(TravelTo.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
         #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VESSEL",
                              params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
@@ -1509,7 +1509,7 @@ struct SalvageRunArrivalFreshnessTests {
             dispatchedOperations: afterArrival(status: .unknown),
             systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
         )
-        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
+        #expect(TravelTo.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
         #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VESSEL",
                              params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
@@ -1524,7 +1524,7 @@ struct SalvageRunArrivalFreshnessTests {
             dispatchedOperations: afterArrival(kind: .mine),
             systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays
         )
-        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
+        #expect(TravelTo.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == nil)
         #expect(SalvageRun().nextAction(directive: running(step: "positioning"), world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VESSEL",
                              params: CommandParams(destination: "TOSLIT-6-5"), nextStep: "positioning"))
@@ -1547,6 +1547,6 @@ struct SalvageRunArrivalFreshnessTests {
                 someoneElse.id: someoneElse, mining.id: mining,
             ]
         )
-        #expect(SalvageRun.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == arrivalClosedAt)
+        #expect(TravelTo.lastTravelCompletion(for: laggingVessel(at: "TOSLIT-3"), snapshot) == arrivalClosedAt)
     }
 }

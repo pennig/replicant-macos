@@ -68,16 +68,9 @@ public struct SalvageRun: MissionStepMachine {
 
     public static let activationDeadline: TimeInterval = 10 * 60
 
-    /// How long a vessel row may lag the arrival it reflects, measured from the
-    /// ARRIVAL and never `stepStartedAt`. Does NOT cover every route to the stall
-    /// it guards — the reconciler drops an arrival's location write when a
-    /// confirm-read stamps `updatedAt` later in the same wall-clock second, leaving
-    /// a row fresh-but-wrong that passes every watermark computable here.
-    public static let arrivalConfirmDeadline: TimeInterval = 5 * 60
+    public static let arrivalConfirmDeadline = TravelTo.arrivalConfirmDeadline
 
-    /// Floor between confirm-reads of the vessel row while waiting for its position
-    /// to catch up. Without it the read fires on every 5s tick.
-    public static let arrivalReadInterval: TimeInterval = 30
+    public static let arrivalReadInterval = TravelTo.arrivalReadInterval
 
     /// The cap on the controller's own flight back to the vessel before the run
     /// surfaces `miningControllerNotRecovered`. Its leg is a cross-system cruise
@@ -326,48 +319,14 @@ public struct SalvageRun: MissionStepMachine {
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling.rawValue)
     }
 
-    // MARK: - Arrival freshness
-
-    /// When the last travel this directive dispatched for `vessel` finished, or nil.
-    /// Filters on `.completed` EXACTLY, never `isTerminal`: `.superseded` and
-    /// `.unknown` also stamp `lastConfirmedAt` on travels that never arrived, and
-    /// either would gate a real dispatch behind an arrival that never happened.
+    /// Forwards to `TravelTo.lastTravelCompletion(for:_:)`.
     static func lastTravelCompletion(for vessel: Device, _ world: WorldSnapshot) -> Date? {
-        world.dispatchedOperations.values
-            .lazy
-            .filter {
-                $0.entityCode == vessel.deviceCode
-                    && $0.kind == OperationKind.travel.rawValue
-                    && $0.status == .completed
-            }
-            .map(\.lastConfirmedAt)
-            .max()
+        TravelTo.lastTravelCompletion(for: vessel, world)
     }
 
-    /// What a travel dispatch site should do when `vessel`'s row cannot yet be
-    /// trusted to say where it is; nil means dispatch may proceed. One
-    /// `travel.arrived` settles in two transactions — the op closes first, the
-    /// location is written second — so a tick in that gap re-commands travel at an
-    /// already-parked vessel. The watermark is the ARRIVAL, never `stepStartedAt`.
-    ///
-    /// **The order of the three answers is mandated:** deadline, throttled read,
-    /// `.wait`. The throttle measures `updatedAt`, which only advances on a
-    /// SUCCESSFUL read, so a staleness-first ordering never stalls and issues a
-    /// `.high` read every tick under the rate-limit exhaustion that caused it.
-    ///
-    /// **Gates the dispatch path only** — place it after the `openOperation` guard
-    /// and never above the location-equality check, which delays every advance.
+    /// Forwards to `TravelTo.positionUnconfirmed(_:_:)`.
     static func travelPositionUnconfirmed(_ vessel: Device, _ world: WorldSnapshot) -> MissionAction? {
-        // Nothing to post-date, so cold runs and first entries dispatch at once.
-        guard let completion = Self.lastTravelCompletion(for: vessel, world) else { return nil }
-        guard vessel.updatedAt < completion else { return nil }
-        if world.now.timeIntervalSince(completion) >= Self.arrivalConfirmDeadline {
-            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: .vesselPositionUnconfirmed)
-        }
-        if world.now.timeIntervalSince(vessel.updatedAt) > Self.arrivalReadInterval {
-            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
-        }
-        return .wait
+        TravelTo.positionUnconfirmed(vessel, world)
     }
 
     /// Fly `vessel` to `directive`'s current target system, then put the service

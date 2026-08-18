@@ -1365,7 +1365,7 @@ struct SurveyRunArrivalFreshnessTests {
         let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let fleet = stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival)
         let snapshot = world(fleet)
-        #expect(SalvageRun.lastTravelCompletion(for: fleet[0], snapshot) == nil)
+        #expect(TravelTo.lastTravelCompletion(for: fleet[0], snapshot) == nil)
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VES1",
                              params: CommandParams(destination: "TAU"),

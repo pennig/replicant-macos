@@ -47,7 +47,7 @@ public struct MineRun: MissionStepMachine {
 
     /// Shared with the Salvage Run so the two cannot disagree about how long a
     /// carrier row may lag the arrival it reflects.
-    public static let arrivalConfirmDeadline = SalvageRun.arrivalConfirmDeadline
+    public static let arrivalConfirmDeadline = TravelTo.arrivalConfirmDeadline
 
     /// How many rows ride the carrier.
     public static let carriedTotal = MineRecipe.carried.reduce(0) { $0 + $1.quantity }
