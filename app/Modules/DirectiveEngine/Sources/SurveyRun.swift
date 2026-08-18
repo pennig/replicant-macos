@@ -404,9 +404,9 @@ public struct SurveyRun: MissionStepMachine {
         // out, so no completion is coming and the backstop would poll an empty
         // system every ten minutes until someone noticed. Surface it now.
         if Self.emptyLaunchSeen(directive, world) { return .stall(.launchDeployedNothing) }
-        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-        if elapsed <= Self.backstopInterval { return .wait }
-        guard let controller = claimedController(directive, vessel, world) else { return .wait }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        guard ctx.elapsed > Self.backstopInterval, let controller = claimedController(directive, vessel, world)
+        else { return .wait }
         // Re-stowed after the launch means the survey is over; the counts
         // cross-check happens in `confirming`.
         if controller.stowedInDeviceCode == vessel.deviceCode,
@@ -414,11 +414,17 @@ public struct SurveyRun: MissionStepMachine {
                .addingTimeInterval(-Self.eventTimeSkewTolerance) {
             return .refreshSystem(designation: target, nextStep: Step.confirming.rawValue)
         }
-        // One controller read per backstop interval — a survey runs for hours.
-        if world.now.timeIntervalSince(controller.updatedAt) < Self.backstopInterval {
-            return .wait
+        // No deadline, and no staleness gate distinct from the poll itself:
+        // `.age(backstopInterval)` makes the ladder's freshness check the same
+        // test as its own throttle — one controller read per backstop interval,
+        // for as long as the survey runs.
+        var ladder = ConfirmRow(deadline: .infinity, onExpiry: .judge)
+        ladder.watermark = .age(Self.backstopInterval)
+        ladder.readInterval = Self.backstopInterval
+        return switch ladder.verdict([controller], ctx) {
+        case let .act(action): action
+        case .judge: .wait
         }
-        return .refreshDevices(deviceCodes: [controller.deviceCode], thenStall: nil)
     }
 
     /// Judge `directive`'s current target against `world`'s freshly-read scan
