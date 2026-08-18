@@ -745,21 +745,20 @@ public struct EventRun: MissionStepMachine {
     private func returning(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let depot = world.theatreDepot(for: directive) else {
-            if world.theatreWentClaimed(for: directive) { return .wait }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let hulls = [convoy.carrier, convoy.freighter].compactMap { $0?.deviceCode }
+        let home = ReturnHome(deviceCodes: hulls, destination: .theatreDepot)
+        // A statement switch, not an expression one: the `.noSubject` arm logs
+        // before it answers, and an expression arm has nowhere to put that.
+        switch home.next(ctx) {
+        case let .action(action):
+            return action
+        case .finished, .more:
+            return .advanceStep(nextStep: Step.depositing.rawValue)
+        case .noSubject:
             logger.notice("event run \(directive.id, privacy: .public): no depot to return to — leaving the convoy where it stands")
             return .done
         }
-        for hull in [convoy.carrier, convoy.freighter].compactMap({ $0 })
-        where hull.location != depot {
-            if world.openOperation(for: hull.deviceCode) != nil { return .wait }
-            if let unconfirmed = SalvageRun.travelPositionUnconfirmed(hull, world) { return unconfirmed }
-            return .dispatch(
-                kind: .travel, deviceCode: hull.deviceCode,
-                params: CommandParams(destination: depot), nextStep: Step.returning.rawValue
-            )
-        }
-        return .advanceStep(nextStep: Step.depositing.rawValue)
     }
 
     // MARK: - Unloading

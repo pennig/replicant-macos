@@ -903,21 +903,19 @@ public struct RelayRun: MissionStepMachine {
     /// an exact match. No hub to fly to is `.done`, not a stall — the relay is
     /// planted and the deliverable is met.
     private func returnHome(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let hub = Self.theatreDepot(in: world, for: directive) else {
-            // Another theatre is up but this row's own went `.claimed` — wait
-            // for it rather than abandoning the carrier or flying elsewhere.
-            if world.theatreWentClaimed(for: directive) { return .wait }
-            logger.notice("relay run \(directive.id, privacy: .public): no hub to return to — leaving the carrier where it stands")
-            return .done
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let home = ReturnHome(deviceCodes: [carrier.deviceCode], destination: .theatreDepot)
+        return switch home.next(ctx) {
+        case let .action(action): action
+        case .finished, .more: .done
+        case .noSubject: noHub(directive)
         }
-        if carrier.location == hub { return .done }
-        // The outbound leg's shape — see `fetch`.
-        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: hub), nextStep: Step.returning.rawValue
-        )
+    }
+
+    /// Nothing to fly home to. Says so once, then finishes.
+    private func noHub(_ directive: Directive) -> MissionAction {
+        logger.notice("relay run \(directive.id, privacy: .public): no hub to return to — leaving the carrier where it stands")
+        return .done
     }
 
     /// The depot of the theatre `directive` serves, resolved off its own row

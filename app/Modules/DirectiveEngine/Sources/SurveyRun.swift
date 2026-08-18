@@ -525,15 +525,12 @@ public struct SurveyRun: MissionStepMachine {
     /// Fly `vessel` back to `directive`'s origin, finishing once `world` puts it
     /// in that system.
     private func returnHome(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let origin = directive.originDesignation else { return .done }
-        if Self.system(of: vessel) == origin { return .done }
-        if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
-        // The equality check above misreads a row still lagging the arrival.
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: vessel.deviceCode,
-            params: CommandParams(destination: origin), nextStep: Step.returning.rawValue
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let home = ReturnHome(deviceCodes: [vessel.deviceCode], destination: .origin)
+        return switch home.next(ctx) {
+        case let .action(action): action
+        case .finished, .more, .noSubject: .done
+        }
     }
 
     /// The controller `directive` claimed, re-resolved from `world` on every

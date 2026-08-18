@@ -319,16 +319,6 @@ public struct SalvageRun: MissionStepMachine {
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling.rawValue)
     }
 
-    /// Forwards to `TravelTo.lastTravelCompletion(for:_:)`.
-    static func lastTravelCompletion(for vessel: Device, _ world: WorldSnapshot) -> Date? {
-        TravelTo.lastTravelCompletion(for: vessel, world)
-    }
-
-    /// Forwards to `TravelTo.positionUnconfirmed(_:_:)`.
-    static func travelPositionUnconfirmed(_ vessel: Device, _ world: WorldSnapshot) -> MissionAction? {
-        TravelTo.positionUnconfirmed(vessel, world)
-    }
-
     /// Fly `vessel` to `directive`'s current target system, then put the service
     /// bots out. The target is already meshed — the planner offers no other kind.
     private func travel(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
