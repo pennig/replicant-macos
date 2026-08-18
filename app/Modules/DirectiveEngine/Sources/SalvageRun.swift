@@ -606,9 +606,19 @@ public struct SalvageRun: MissionStepMachine {
         // Never believe a row read BEFORE this step began: a pre-launch drone row
         // still shows it stowed aboard and reads as "recovered" the instant the
         // step starts. Force a post-launch read of EVERY drone first, throttled so
-        // a failing one cannot loop every tick.
-        guard lastLook >= directive.stepStartedAt else {
+        // a failing one cannot loop every tick. No deadline: the cycle may run for
+        // however long it needs to. An empty roster bypasses the ladder — its
+        // vacuous freshness would otherwise read as "proceed".
+        guard !drones.isEmpty else {
             return canRead ? .refreshFleet(tag: wireTag, thenStall: nil) : .wait
+        }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(deadline: .infinity, onExpiry: .judge)
+        ladder.refresh = .fleet(wireTag)
+        ladder.readInterval = Self.reconcileInterval
+        switch ladder.verdict(drones, ctx) {
+        case let .act(action): return action
+        case .judge: break
         }
 
         let stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
