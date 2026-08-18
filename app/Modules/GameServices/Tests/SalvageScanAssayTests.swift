@@ -10,6 +10,7 @@
 
 import API
 import Dependencies
+import DependenciesTestSupport
 import Foundation
 import GameDatabase
 import SQLiteData
@@ -18,7 +19,15 @@ import UniverseModels
 import Utils
 @testable import GameServices
 
-@Suite struct SalvageScanAssayTests {
+@Suite(
+    .dependencies {
+        $0.defaultDatabase = try GameDatabase.bootstrap()
+        $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+    }
+)
+struct SalvageScanAssayTests {
+    @Dependency(\.defaultDatabase) var database
+    
     private func payload(_ json: String) throws -> [String: JSONValue] {
         let value = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
         guard case .object(let object) = value else {
@@ -43,15 +52,8 @@ import Utils
 
     /// With no percentage known, the absolute remaining is a floor on capacity.
     @Test func scanSeedsAnAssayFromAbsoluteRemaining() async throws {
-        let database = try GameDatabase.bootstrap()
         let p = try payload(scanPayload)
-
-        try await withDependencies {
-            $0.defaultDatabase = database
-            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
-        } operation: {
-            _ = try await LocationsClient.liveValue.ingestScanResult(payload: p)
-        }
+        _ = try await LocationsClient.liveValue.ingestScanResult(payload: p)
 
         let assay = try await database.read { db in
             try SiteAssay.where { $0.id.eq("SHERATANON-6-26-SAL-1") }.fetchOne(db)
@@ -65,7 +67,6 @@ import Utils
     /// With a percentage known, remaining ÷ pct implies the original capacity —
     /// 339 units at 30% means the site started with 1130.
     @Test func scanImpliesTheOriginalTotalFromAKnownPercentage() async throws {
-        let database = try GameDatabase.bootstrap()
         let p = try payload(scanPayload)
 
         let moon = Moon(
@@ -83,16 +84,11 @@ import Utils
             planets: [Planet(designation: "SHERATANON-6", moons: [moon])]
         )
 
-        try await withDependencies {
-            $0.defaultDatabase = database
-            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
-        } operation: {
-            try await database.write { db in
-                let row = try SystemDetail(system: system, hydratedAt: Date(timeIntervalSince1970: 0))
-                try SystemDetail.upsert { row }.execute(db)
-            }
-            _ = try await LocationsClient.liveValue.ingestScanResult(payload: p)
+        try await database.write { db in
+            let row = try SystemDetail(system: system, hydratedAt: Date(timeIntervalSince1970: 0))
+            try SystemDetail.upsert { row }.execute(db)
         }
+        _ = try await LocationsClient.liveValue.ingestScanResult(payload: p)
 
         let assay = try await database.read { db in
             try SiteAssay.where { $0.id.eq("SHERATANON-6-26-SAL-1") }.fetchOne(db)
@@ -109,7 +105,6 @@ import Utils
     /// scan finds no percentage and degrades to a raw floor — the self-correction
     /// decaying with every scan.
     @Test func scanKeepsTheCachedPercentagesItMergedOver() async throws {
-        let database = try GameDatabase.bootstrap()
         let p = try payload(scanPayload)
 
         let moon = Moon(
@@ -127,16 +122,11 @@ import Utils
             planets: [Planet(designation: "SHERATANON-6", moons: [moon])]
         )
 
-        try await withDependencies {
-            $0.defaultDatabase = database
-            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
-        } operation: {
-            try await database.write { db in
-                let row = try SystemDetail(system: system, hydratedAt: Date(timeIntervalSince1970: 0))
-                try SystemDetail.upsert { row }.execute(db)
-            }
-            _ = try await LocationsClient.liveValue.ingestScanResult(payload: p)
+        try await database.write { db in
+            let row = try SystemDetail(system: system, hydratedAt: Date(timeIntervalSince1970: 0))
+            try SystemDetail.upsert { row }.execute(db)
         }
+        _ = try await LocationsClient.liveValue.ingestScanResult(payload: p)
 
         let merged = try await database.read { db in
             try SystemDetail.where { $0.designation.eq("SHERATANON") }.fetchOne(db)
@@ -154,17 +144,11 @@ import Utils
 
     /// A scan of a site with no salvage must not create empty assay rows.
     @Test func aScanWithoutSalvageWritesNoAssay() async throws {
-        let database = try GameDatabase.bootstrap()
         let p = try payload("""
         { "result": { "moon": { "designation": "SHERATANON-6-27", "type": "Rocky" } } }
         """)
 
-        try await withDependencies {
-            $0.defaultDatabase = database
-            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
-        } operation: {
-            _ = try await LocationsClient.liveValue.ingestScanResult(payload: p)
-        }
+        _ = try await LocationsClient.liveValue.ingestScanResult(payload: p)
 
         let count = try await database.read { db in try SiteAssay.all.fetchCount(db) }
         #expect(count == 0)

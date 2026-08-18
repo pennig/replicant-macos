@@ -413,6 +413,7 @@ let package = Package(
                 "GameSession",
                 "UniverseModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "DependenciesTestSupport", package: "swift-dependencies"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
