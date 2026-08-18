@@ -1,7 +1,7 @@
 # 20 — The step frame: `StepContext` and `StepResult`
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: —
 Labels: directives-architecture, stage-2
 
@@ -22,3 +22,13 @@ The frame every sub-machine reads and answers with. No mission changes: this exi
 - [ ] **Step 5:** `check-comments.sh`, commit.
 
 **Done when:** three tests green, `check-comments.sh` exit 0, and `Package.swift` is untouched (`DirectiveEngine` is a path-based target, so `Sources/Steps/` needs no edit).
+
+---
+
+## Comments
+
+**Resolved by `8d3beaf`.** `StepContext`/`StepResult` written `internal` per the plan Global Constraint, not `public` as the code blocks show. Two plan defects corrected on the controller's pre-flight ruling: `Operation.kind` is a `String`, so the fixture writes `OperationKind.travel.rawValue`, not `.travel`.
+
+`StepContextTests` 3/3 green via the JSON event stream; the whole `DirectiveEngineTests` product 1502/1502 with no regressions. `check-comments.sh` exit 0, `Package.swift` untouched. Task review: spec ✅, quality Approved — the reviewer traced `theTwoGuardsDiffer` against `WorldSnapshot.openOperation(for:owner:)` (`:186-191`) and confirmed it fails under both plausible conflations of the two guards.
+
+One deferred minor: `StepResult.swift` imports `Foundation` without using it.
