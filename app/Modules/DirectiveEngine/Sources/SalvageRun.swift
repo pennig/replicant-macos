@@ -335,18 +335,16 @@ public struct SalvageRun: MissionStepMachine {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight.rawValue)
         }
-        if Self.system(of: vessel) == target {
-            return .advanceStep(nextStep: Step.deployingBots.rawValue)
-        }
-        // An open op means the trip is under way; waiting stops a second travel
-        // landing on top of the first.
-        if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
-        // The equality check above misreads a row still lagging the arrival.
-        if let unconfirmed = Self.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: vessel.deviceCode,
-            params: CommandParams(destination: target), nextStep: Step.travelling.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let leg = TravelTo(
+            deviceCode: vessel.deviceCode, destination: target,
+            arrivalTest: .system, confirmStep: nil
         )
+        return switch leg.next(ctx) {
+        case let .action(action): action
+        case .finished: .advanceStep(nextStep: Step.deployingBots.rawValue)
+        case .more, .noSubject: .stall(.unreachableDevice)
+        }
     }
 
     /// Floor between confirm-reads of a relay row while a mission polls one.
@@ -477,17 +475,16 @@ public struct SalvageRun: MissionStepMachine {
             }
             return unresolvedSystem(directive, world, target: target)
         case let .body(body):
-            if vessel.location == body { return .advanceStep(nextStep: Step.configuring.rawValue) }
-            // `.travel` is tracked, so this guard actually fires and the same-step
-            // re-dispatch is safe.
-            if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
-            // The hop to the first body is short, so a tick right after the arrival
-            // op closes lands inside the window where `location` still lags.
-            if let unconfirmed = Self.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
-            return .dispatch(
-                kind: .travel, deviceCode: vessel.deviceCode,
-                params: CommandParams(destination: body), nextStep: Step.positioning.rawValue
+            let ctx = StepContext(directive: directive, world: world, step: directive.step)
+            let leg = TravelTo(
+                deviceCode: vessel.deviceCode, destination: body,
+                arrivalTest: .exactLocation, confirmStep: nil
             )
+            return switch leg.next(ctx) {
+            case let .action(action): action
+            case .finished: .advanceStep(nextStep: Step.configuring.rawValue)
+            case .more, .noSubject: .stall(.unreachableDevice)
+            }
         }
     }
 

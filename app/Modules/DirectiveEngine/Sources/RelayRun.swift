@@ -560,17 +560,16 @@ public struct RelayRun: MissionStepMachine {
             logger.notice("relay run \(directive.id, privacy: .public): cannot fetch — \(Self.reclaimDiagnosis(code, world), privacy: .public)")
             return .stall(.unreachableDevice)
         }
-        if carrier.location == point { return .advanceStep(nextStep: Step.deactivating.rawValue) }
-        // An open op means the trip is under way — travel is TRACKED, which is
-        // what makes re-dispatching into this same step safe.
-        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        // …and this covers the gap between that op closing and the arrival's
-        // location write landing, where the check above lies about a parked carrier.
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: point), nextStep: Step.fetching.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let leg = TravelTo(
+            deviceCode: carrier.deviceCode, destination: point,
+            arrivalTest: .exactLocation, confirmStep: nil
         )
+        return switch leg.next(ctx) {
+        case let .action(action): action
+        case .finished: .advanceStep(nextStep: Step.deactivating.rawValue)
+        case .more, .noSubject: .stall(.unreachableDevice)
+        }
     }
 
     /// Issue `deactivate` once at `directive`'s source relay, `carrier` standing
@@ -728,35 +727,31 @@ public struct RelayRun: MissionStepMachine {
     /// Fly `carrier` to `directive`'s target system, per `world`.
     private func travel(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else { return .done }
-        if SalvageRun.system(of: carrier) == target {
-            // Somebody meshed this system while we were in flight. Planting a
-            // second relay would spend one for nothing, so skip straight to the
-            // confirmation and keep the relay aboard for the next errand.
-            //
-            // Read off DEVICE rows, never `ftlLinks`: a just-activated relay
-            // produces no link rows at all.
-            let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
-            // …but the paragraph above is only true of a PRINTED relay. A
-            // reclaim reached this branch having already torn its source's
-            // system off the mesh, so finishing here is a net loss dressed as a
-            // success. It still finishes; it does not do so quietly.
-            if meshed, let loss = Self.meshRaceLoss(directive, target: target) {
-                logger.warning("relay run \(directive.id, privacy: .public): \(loss, privacy: .public)")
-            }
-            return .advanceStep(nextStep: meshed ? Step.settling.rawValue : Step.emplacing.rawValue)
-        }
-        // An open op means the trip is under way — the guard that stops a second
-        // travel landing on top of the first, which is exactly what a `.simple`
-        // verb cannot have.
-        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        // …and the guard for the gap between that op closing and the arrival's
-        // location write landing, in which the check above says "not there yet"
-        // about a carrier that already is.
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: target), nextStep: Step.travelling.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let leg = TravelTo(
+            deviceCode: carrier.deviceCode, destination: target,
+            arrivalTest: .system, confirmStep: nil
         )
+        switch leg.next(ctx) {
+        case let .action(action): return action
+        case .more, .noSubject: return .stall(.unreachableDevice)
+        case .finished: break   // arrived — the fork below decides where to
+        }
+        // Somebody meshed this system while we were in flight. Planting a
+        // second relay would spend one for nothing, so skip straight to the
+        // confirmation and keep the relay aboard for the next errand.
+        //
+        // Read off DEVICE rows, never `ftlLinks`: a just-activated relay
+        // produces no link rows at all.
+        let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
+        // …but the paragraph above is only true of a PRINTED relay. A
+        // reclaim reached this branch having already torn its source's
+        // system off the mesh, so finishing here is a net loss dressed as a
+        // success. It still finishes; it does not do so quietly.
+        if meshed, let loss = Self.meshRaceLoss(directive, target: target) {
+            logger.warning("relay run \(directive.id, privacy: .public): \(loss, privacy: .public)")
+        }
+        return .advanceStep(nextStep: meshed ? Step.settling.rawValue : Step.emplacing.rawValue)
     }
 
     /// Wait out `SalvageRun.systemResolutionDeadline`, spend `.refreshSystem`
@@ -801,14 +796,16 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.noRelayCoLocated)
         }
         if carrier.location != point {
-            if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-            // The `!=` above is the check that misreads a row still lagging the
-            // previous arrival; prove the row post-dates that arrival first.
-            if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-            return .dispatch(
-                kind: .travel, deviceCode: carrier.deviceCode,
-                params: CommandParams(destination: point), nextStep: Step.emplacing.rawValue
+            let ctx = StepContext(directive: directive, world: world, step: directive.step)
+            let leg = TravelTo(
+                deviceCode: carrier.deviceCode, destination: point,
+                arrivalTest: .exactLocation, confirmStep: nil
             )
+            switch leg.next(ctx) {
+            case let .action(action): return action
+            case .more, .noSubject: return .stall(.unreachableDevice)
+            case .finished: break   // standing at the point — deploy below
+            }
         }
         // Re-entry after a `deploy` whose step move was lost: re-issuing `deploy`
         // at a deployed relay is rejected, so hand off to activation instead.

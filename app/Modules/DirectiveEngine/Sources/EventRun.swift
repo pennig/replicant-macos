@@ -488,31 +488,30 @@ public struct EventRun: MissionStepMachine {
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
         let destination = event.location
-        if convoy.carrier.location != destination {
-            if world.openOperation(for: convoy.carrier.deviceCode) != nil { return .wait }
-            // The equality check above misreads a row still lagging an arrival.
-            if let unconfirmed = SalvageRun.travelPositionUnconfirmed(convoy.carrier, world) {
-                return unconfirmed
-            }
-            return .dispatch(
-                kind: .travel, deviceCode: convoy.carrier.deviceCode,
-                params: CommandParams(destination: destination), nextStep: Step.departing.rawValue
-            )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+
+        let carrierLeg = TravelTo(
+            deviceCode: convoy.carrier.deviceCode, destination: destination,
+            arrivalTest: .exactLocation, confirmStep: nil
+        )
+        switch carrierLeg.next(ctx) {
+        case let .action(action): return action
+        case .more, .noSubject: return .stall(.unreachableDevice)
+        case .finished: break   // carrier placed — the freighter leg follows
         }
+
         guard let freighter = convoy.freighter else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
-        if freighter.location != destination {
-            if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-            if let unconfirmed = SalvageRun.travelPositionUnconfirmed(freighter, world) {
-                return unconfirmed
-            }
-            return .dispatch(
-                kind: .travel, deviceCode: freighter.deviceCode,
-                params: CommandParams(destination: destination), nextStep: Step.confirmingArrival.rawValue
-            )
+        let freighterLeg = TravelTo(
+            deviceCode: freighter.deviceCode, destination: destination,
+            arrivalTest: .exactLocation, confirmStep: Step.confirmingArrival.rawValue
+        )
+        return switch freighterLeg.next(ctx) {
+        case let .action(action): action
+        case .finished: .advanceStep(nextStep: Step.confirmingArrival.rawValue)
+        case .more, .noSubject: .stall(.unreachableDevice)
         }
-        return .advanceStep(nextStep: Step.confirmingArrival.rawValue)
     }
 
     /// Both hulls placed at the event, on rows read since the step began.

@@ -593,14 +593,16 @@ public struct SurveyRun: MissionStepMachine {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight.rawValue)
         }
-        if Self.system(of: vessel) == target { return .advanceStep(nextStep: Step.deployingBots.rawValue) }
-        if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
-        // The equality check above misreads a row still lagging the arrival.
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: vessel.deviceCode,
-            params: CommandParams(destination: target), nextStep: Step.travelling.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let leg = TravelTo(
+            deviceCode: vessel.deviceCode, destination: target,
+            arrivalTest: .system, confirmStep: nil
         )
+        return switch leg.next(ctx) {
+        case let .action(action): action
+        case .finished: .advanceStep(nextStep: Step.deployingBots.rawValue)
+        case .more, .noSubject: .stall(.unreachableDevice)
+        }
     }
 
     /// The fleet tag `directive` resolves against, falling back to

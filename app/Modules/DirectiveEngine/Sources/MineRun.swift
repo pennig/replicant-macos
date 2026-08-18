@@ -348,14 +348,16 @@ public struct MineRun: MissionStepMachine {
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
         guard let belt = Self.targetBelt(of: directive) else { return .stall(.unreachableDevice) }
-        if carrier.location == belt { return .advanceStep(nextStep: Step.detaching.rawValue) }
-        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        // The equality check above misreads a row still lagging an arrival.
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: belt), nextStep: Step.confirmingArrival.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let leg = TravelTo(
+            deviceCode: carrier.deviceCode, destination: belt,
+            arrivalTest: .exactLocation, confirmStep: Step.confirmingArrival.rawValue
         )
+        return switch leg.next(ctx) {
+        case let .action(action): action
+        case .finished: .advanceStep(nextStep: Step.detaching.rawValue)
+        case .more, .noSubject: .stall(.unreachableDevice)
+        }
     }
 
     /// Judge the flight: the carrier's own row, read since the travel was
