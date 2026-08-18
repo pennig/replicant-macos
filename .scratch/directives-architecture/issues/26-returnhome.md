@@ -1,7 +1,7 @@
 # 26 — `ReturnHome` and the four return legs
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 25
 Labels: directives-architecture, stage-2
 

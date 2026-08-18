@@ -1,7 +1,7 @@
 # 25 — The nine outbound travel sites adopt `TravelTo`
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 24
 Labels: directives-architecture, stage-2
 

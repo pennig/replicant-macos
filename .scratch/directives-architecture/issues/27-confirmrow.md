@@ -1,7 +1,7 @@
 # 27 — `ConfirmRow`, and the ten shared-ladder sites
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 20
 Labels: directives-architecture, stage-2
 

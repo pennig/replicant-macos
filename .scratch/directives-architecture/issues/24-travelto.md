@@ -1,7 +1,7 @@
 # 24 — `TravelTo`: the travel frame and the arrival watermark
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 20
 Labels: directives-architecture, stage-2
 
