@@ -719,12 +719,17 @@ public struct SalvageRun: MissionStepMachine {
         _ controller: Device, _ vessel: Device, _ directive: Directive, _ world: WorldSnapshot
     ) -> MissionAction? {
         guard controller.stowedInDeviceCode != vessel.deviceCode else { return nil }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.controllerRecallDeadline {
-            return .stall(.miningControllerNotRecovered)
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(
+            deadline: Self.controllerRecallDeadline, onExpiry: .stallNow(.miningControllerNotRecovered)
+        )
+        ladder.watermark = .age(Self.arrivalReadInterval)
+        ladder.readInterval = Self.arrivalReadInterval
+        ladder.waitsOutArrival = true
+        return switch ladder.verdict([controller], ctx) {
+        case let .act(action): action
+        case .judge: .wait
         }
-        if let arrival = controller.activityDeadline, arrival > world.now { return .wait }
-        if world.now.timeIntervalSince(controller.updatedAt) < Self.arrivalReadInterval { return .wait }
-        return .refreshDevices(deviceCodes: [controller.deviceCode], thenStall: nil)
     }
 
     /// The body `controller`'s in-force `gather_salvage` config names, or nil when

@@ -486,40 +486,19 @@ public struct SurveyRun: MissionStepMachine {
         let stranded = adopted.filter { $0.stowedInDeviceCode != vessel.deviceCode }
         if stranded.isEmpty { return .advanceStep(nextStep: Step.repairing.rawValue) }
 
-        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-        // The recall was ordered moments ago; nothing can have changed yet.
-        if elapsed < Self.recallProbeDelay { return .wait }
-        // The backstop, measured from the step's start — which neither `.wait`
-        // nor a probe re-stamps, so it really is a cap on the whole recall.
-        if elapsed > Self.recallDeadline { return .stall(.dronesNotRecovered) }
-        // Wait out the FARTHEST traveller's own arrival time rather than a
-        // hardcoded guess: a recall crosses whatever distances the survey
-        // scattered the drones over, and those differ by an order of magnitude
-        // between systems. Free — the ETA is already in rows we hold.
-        if let arrival = BotPhase.recallArrival(stranded), arrival > world.now { return .wait }
-        // No usable ETA, or it has passed. Look again — but not more often than
-        // `recallProbeInterval`, using the rows' own `updatedAt` as the "when
-        // did we last look" clock, since a drone that arrived without stowing
-        // reports no travel block and would otherwise be re-probed every tick.
-        let lastLook = stranded.map(\.updatedAt).min() ?? .distantPast
-        if world.now.timeIntervalSince(lastLook) < Self.recallProbeInterval { return .wait }
-        // Name the drones whose own rows decide this gate, never a location
-        // scope: stowing a device CLEARS its location, so a location-scoped list
-        // cannot report the very state this step waits for — the success
-        // condition erases the evidence, `lastLook` never advances off rows the
-        // probe never writes, and the probe re-fires every tick until the
-        // deadline surfaces `dronesNotRecovered` over a recovered fleet.
-        //
-        // `resolveRefresh` reads each named code directly, which reports a stowed
-        // drone wherever it is and an in-transit one with its travel block; the
-        // carrier expansion is an addition to that, not the mechanism, so naming
-        // the DRONES also sidesteps the vessel's `stowed_devices` blob (see
-        // `preflight`). Costs one read per drone still out, shrinking as they
-        // come home.
-        //
-        // `thenStall: nil`: drones still flying is the expected answer, not a
-        // fault, so an unresolved probe waits rather than demanding a human.
-        return .refreshDevices(deviceCodes: stranded.map(\.deviceCode), thenStall: nil)
+        // No staleness gate: `.age(recallProbeInterval)` makes the ladder's
+        // freshness check and its own throttle the same test, so this is a
+        // plain periodic poll, never a wait-for-one-fresh-read.
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(deadline: Self.recallDeadline, onExpiry: .stallNow(.dronesNotRecovered))
+        ladder.watermark = .age(Self.recallProbeInterval)
+        ladder.probeDelay = Self.recallProbeDelay
+        ladder.readInterval = Self.recallProbeInterval
+        ladder.waitsOutArrival = true
+        return switch ladder.verdict(stranded, ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Fly `vessel` back to `directive`'s origin, finishing once `world` puts it
