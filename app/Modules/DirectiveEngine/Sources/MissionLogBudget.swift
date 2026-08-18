@@ -42,14 +42,7 @@ public enum MissionLogBudget {
                 continue
             }
             guard entry.kind == .commandDispatched, entry.step == confirm else { continue }
-            if let commandKind = entry.commandKind {
-                guard commandKind == kind.rawValue else { continue }
-            } else {
-                // Legacy row written before the columns existed; Stage 2 deletes this.
-                let words = entry.summary.split(separator: " ")
-                guard words.count >= 2, words[0] == "Dispatched", words[1] == kind.rawValue
-                else { continue }
-            }
+            guard entry.commandKind == kind.rawValue else { continue }
             count += 1
         }
         return count
@@ -78,15 +71,10 @@ public enum MissionLogBudget {
                 continue
             }
             guard entry.kind == .commandDispatched, entry.step == confirm else { continue }
-            if let kind = entry.commandKind, let deviceCode = entry.targetDeviceCode {
-                return .dispatched(kind: kind, deviceCode: deviceCode)
-            }
-            // Legacy row written before the columns existed; Stage 2 deletes this.
-            let words = entry.summary.split(separator: " ")
-            guard words.count >= 4, words[0] == "Dispatched", words[2] == "to" else {
+            guard let kind = entry.commandKind, let deviceCode = entry.targetDeviceCode else {
                 return .nothingSent
             }
-            return .dispatched(kind: String(words[1]), deviceCode: String(words[3]))
+            return .dispatched(kind: kind, deviceCode: deviceCode)
         }
         return .nothingSent
     }

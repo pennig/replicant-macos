@@ -22,9 +22,7 @@ public enum DirectiveStallDetail {
         guard let newest else { return nil }
         let prefix = "\(reason.rawValue): "
         guard newest.summary.hasPrefix(prefix) else { return nil }
-        if let detail = newest.detail { return detail.isEmpty ? nil : detail }
-        // Legacy row written before the columns existed; Stage 2 deletes this.
-        let detail = String(newest.summary.dropFirst(prefix.count))
-        return detail.isEmpty ? nil : detail
+        guard let detail = newest.detail, !detail.isEmpty else { return nil }
+        return detail
     }
 }

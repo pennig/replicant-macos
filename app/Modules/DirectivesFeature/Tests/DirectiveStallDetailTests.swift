@@ -33,13 +33,13 @@ struct DirectiveStallDetailTests {
         #expect(DirectiveStallDetail.detail(for: reason, in: entries) == "MEREDIANA-3")
     }
 
-    /// A row written before the column existed carries the detail only in the
-    /// summary, so the fallback is the only thing that can answer. Delete it
-    /// and this reads nil. Stage 2 deletes both.
-    @Test func fallsBackToTheSummaryForALegacyRow() {
+    /// The column is the record. A row written before it existed carries no
+    /// detail, whatever its summary says.
+    @Test("a legacy row with no detail column names nothing")
+    func aLegacyRowNamesNothing() {
         let reason = DirectiveAttentionReason.salvageBodyNotDepleted
         let entries = [entry("L1", summary: "\(reason.rawValue): MEREDIANA-3", at: 10)]
-        #expect(DirectiveStallDetail.detail(for: reason, in: entries) == "MEREDIANA-3")
+        #expect(DirectiveStallDetail.detail(for: reason, in: entries) == nil)
     }
 
     /// A summary whose prefix names a DIFFERENT reason is some earlier stall's
