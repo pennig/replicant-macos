@@ -52,7 +52,7 @@ private func boundBot(
         let w = repairWorld(devices: [vessel, stale])
         let d = boundDirective(
             step: SalvageRun.Step.confirmingBotDeploy.rawValue,
-            stepStartedAt: repairFixtureNow.addingTimeInterval(-(SalvageRun.botConfirmDeadline + 60))
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-(BotPhase.confirmDeadline + 60))
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
             == .advanceStep(nextStep: SalvageRun.Step.armingBots.rawValue))
@@ -69,7 +69,7 @@ private func boundBot(
         let w = repairWorld(devices: [vessel, stale])
         let d = boundDirective(
             step: SalvageRun.Step.confirmingBotArm.rawValue,
-            stepStartedAt: repairFixtureNow.addingTimeInterval(-(SalvageRun.botConfirmDeadline + 60))
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-(BotPhase.confirmDeadline + 60))
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .stall(.serviceBotNotArmed))
     }
@@ -81,7 +81,7 @@ private func boundBot(
         let w = repairWorld(devices: [vessel, stale])
         let d = boundDirective(
             step: SalvageRun.Step.confirmingBotArm.rawValue,
-            stepStartedAt: repairFixtureNow.addingTimeInterval(-(SalvageRun.botConfirmDeadline + 60))
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-(BotPhase.confirmDeadline + 60))
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
             != .refreshDevices(deviceCodes: ["BOT1"], thenStall: nil))
@@ -159,7 +159,7 @@ private func boundBot(
         let w = repairWorld(devices: [adrift, boundBot("BOT1")])
         let d = boundDirective(
             step: SalvageRun.Step.stowingBots.rawValue,
-            stepStartedAt: repairFixtureNow.addingTimeInterval(-(SalvageRun.botRecallDeadline + 60))
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-(BotPhase.recallDeadline + 60))
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
             == .stall(.serviceBotNotRecovered))
@@ -170,7 +170,7 @@ private func boundBot(
         let w = repairWorld(devices: [adrift, boundBot("BOT1")])
         let d = boundDirective(
             step: SalvageRun.Step.repairing.rawValue,
-            stepStartedAt: repairFixtureNow.addingTimeInterval(-(SalvageRun.repairDeadline + 60))
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-(BotPhase.repairDeadline + 60))
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .stall(.repairUnfinished))
     }
