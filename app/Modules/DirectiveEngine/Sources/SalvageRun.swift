@@ -603,12 +603,8 @@ public struct SalvageRun: MissionStepMachine {
         let canRead = world.now.timeIntervalSince(lastLook) >= Self.reconcileInterval
         let wireTag = Self.fleetTag(directive)
 
-        // Never believe a row read BEFORE this step began: a pre-launch drone row
-        // still shows it stowed aboard and reads as "recovered" the instant the
-        // step starts. Force a post-launch read of EVERY drone first, throttled so
-        // a failing one cannot loop every tick. No deadline: the cycle may run for
-        // however long it needs to. An empty roster bypasses the ladder — its
-        // vacuous freshness would otherwise read as "proceed".
+        // A row read before the step began reads as "recovered" instantly, so this
+        // forces one throttled post-launch read; an empty roster bypasses it.
         guard !drones.isEmpty else {
             return canRead ? .refreshFleet(tag: wireTag, thenStall: nil) : .wait
         }

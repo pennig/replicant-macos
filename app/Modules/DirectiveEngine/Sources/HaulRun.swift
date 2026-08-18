@@ -369,9 +369,8 @@ public struct HaulRun: MissionStepMachine {
         guard let controller = world.device(controllerCode) else {
             return .stall(.unreachableDevice)
         }
-        // Row read BEFORE the command went out cannot say whether the controller
-        // took it — the pre-dispatch config is exactly what `hasTakenSomeHaulConfig`
-        // would mistake for evidence — so success is judged only on a fresh row.
+        // A stale row's pre-dispatch config is exactly what `hasTakenSomeHaulConfig`
+        // would mistake for evidence, so success is judged only on a fresh row.
         if world.isFresh(controller, since: directive.stepStartedAt),
            Self.hasTakenSomeHaulConfig(controller, delivery: Self.deliverySink(in: world, for: directive)) {
             return .advanceStep(nextStep: Step.assigning.rawValue)

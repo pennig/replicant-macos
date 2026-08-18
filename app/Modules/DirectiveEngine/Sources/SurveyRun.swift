@@ -414,10 +414,8 @@ public struct SurveyRun: MissionStepMachine {
                .addingTimeInterval(-Self.eventTimeSkewTolerance) {
             return .refreshSystem(designation: target, nextStep: Step.confirming.rawValue)
         }
-        // No deadline, and no staleness gate distinct from the poll itself:
-        // `.age(backstopInterval)` makes the ladder's freshness check the same
-        // test as its own throttle — one controller read per backstop interval,
-        // for as long as the survey runs.
+        // No deadline; `.age(backstopInterval)` makes the freshness check the same
+        // test as the throttle — one controller read per backstop interval.
         var ladder = ConfirmRow(deadline: .infinity, onExpiry: .judge)
         ladder.watermark = .age(Self.backstopInterval)
         ladder.readInterval = Self.backstopInterval
@@ -492,9 +490,8 @@ public struct SurveyRun: MissionStepMachine {
         let stranded = adopted.filter { $0.stowedInDeviceCode != vessel.deviceCode }
         if stranded.isEmpty { return .advanceStep(nextStep: Step.repairing.rawValue) }
 
-        // No staleness gate: `.age(recallProbeInterval)` makes the ladder's
-        // freshness check and its own throttle the same test, so this is a
-        // plain periodic poll, never a wait-for-one-fresh-read.
+        // No staleness gate: `.age(recallProbeInterval)` makes the freshness check
+        // and the throttle the same test — a plain periodic poll, not one fresh read.
         let ctx = StepContext(directive: directive, world: world, step: directive.step)
         var ladder = ConfirmRow(deadline: Self.recallDeadline, onExpiry: .stallNow(.dronesNotRecovered))
         ladder.watermark = .age(Self.recallProbeInterval)
