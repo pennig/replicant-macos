@@ -198,7 +198,7 @@ public struct SurveyRun: MissionStepMachine {
             vesselCode: directive.deviceCode, owner: Self.fleetTag(directive),
             system: directive.currentTarget, phase: phase,
             dispatchStep: dispatch.rawValue, confirmStep: confirm.rawValue,
-            runNoun: "survey run"
+            runNoun: "survey run", unrepairedStep: Step.armingBots.rawValue
         )
     }
 

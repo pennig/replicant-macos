@@ -16,10 +16,11 @@ private let now = repairFixtureNow
 private let vesselCode = "V1"
 private let system = "SOL"
 
-private func phase(_ phase: BotPhase.Phase) -> BotPhase {
+private func phase(_ phase: BotPhase.Phase, unrepairedStep: String = "armingBots") -> BotPhase {
     BotPhase(
         vesselCode: vesselCode, owner: nil, system: system, phase: phase,
-        dispatchStep: "deployingBots", confirmStep: "confirmingBotDeploy", runNoun: "survey run"
+        dispatchStep: "deployingBots", confirmStep: "confirmingBotDeploy", runNoun: "survey run",
+        unrepairedStep: unrepairedStep
     )
 }
 
@@ -58,7 +59,7 @@ struct BotPhaseTests {
 
     /// The bound `stepStartedAt` cannot give: the confirm step re-stamps it,
     /// so a dispatch/confirm pair would reset its own deadline every round.
-    @Test("deploy stops at the round budget and finishes unrepaired")
+    @Test("deploy stops at the round budget and hands off to arming")
     func deployStopsAtTheRoundBudget() {
         let bot = repairDevice("B1", type: "service_bot", location: nil,
                                stowedIn: vesselCode, directives: ["service"])
@@ -76,7 +77,32 @@ struct BotPhaseTests {
             ),
             world: repairWorld(devices: [vessel, bot], log: log), step: "deployingBots"
         )
-        #expect(phase(.deploy).next(ctx) == .finished)
+        #expect(phase(.deploy).next(ctx) == .action(.advanceStep(nextStep: "armingBots")))
+    }
+
+    /// A one-bot fixture cannot see this: `.finished` here must route to arming
+    /// so a bot already deployed still gets armed, not just an empty hold.
+    @Test("deploy gives up with a bot already deployed and routes to arming")
+    func deployGivesUpWithABotAlreadyDeployed() {
+        let deployed = repairDevice("B0", type: "service_bot", location: "SOL-3",
+                                    directives: ["service"], capacity: 10)
+        let bot = repairDevice("B1", type: "service_bot", location: nil,
+                               stowedIn: vesselCode, directives: ["service"])
+        var log: [DirectiveLogEntry] = []
+        for round in 0...BotPhase.dispatchRounds {
+            log.append(DirectiveLogEntry(
+                id: "S\(round)", directiveID: "D1", deviceCode: nil, kind: .stepStarted,
+                summary: "Step: deployingBots", step: "deployingBots", operationID: nil,
+                eventID: nil, occurredAt: now.addingTimeInterval(TimeInterval(round))
+            ))
+        }
+        let ctx = StepContext(
+            directive: repairDirective(
+                step: "deployingBots", deviceCode: vesselCode, targets: [system], stepStartedAt: now
+            ),
+            world: repairWorld(devices: [vessel, deployed, bot], log: log), step: "deployingBots"
+        )
+        #expect(phase(.deploy).next(ctx) == .action(.advanceStep(nextStep: "armingBots")))
     }
 
     /// Deadline BEFORE the read. A failing read never advances `updatedAt`, so

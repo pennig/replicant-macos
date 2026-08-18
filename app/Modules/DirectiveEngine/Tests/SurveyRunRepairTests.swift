@@ -373,6 +373,21 @@ import Utils
         #expect(action == .advanceStep(nextStep: SurveyRun.Step.configuring.rawValue))
     }
 
+    /// A one-bot give-up cannot see this: with a bot already deployed, giving up
+    /// on the rest must still route through arming — not skip straight past it.
+    @Test func theDeployLoopGivesUpWithABotAlreadyDeployedRoutesToArming() {
+        let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
+        let deployed = repairDevice("BOT0", type: "service_bot", location: "SOL-3", directives: ["service"])
+        let bot = repairDevice("BOT1", type: "service_bot", location: nil, stowedIn: "VESSEL", directives: ["service"])
+        let steps = Array(repeating: SurveyRun.Step.deployingBots.rawValue, count: BotPhase.dispatchRounds + 1)
+        let w = repairWorld(devices: [vessel, deployed, bot], log: repairStepLog(steps))
+        let d = repairDirective(
+            step: SurveyRun.Step.deployingBots.rawValue, deviceCode: "VESSEL",
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-60)
+        )
+        #expect(SurveyRun().nextAction(directive: d, world: w) == .advanceStep(nextStep: SurveyRun.Step.armingBots.rawValue))
+    }
+
     @Test func theRecallLoopGivesUpAndEscalates() {
         let vessel = repairDevice("VESSEL", type: "heaven_vessel", location: "SOL-3")
         let bot = repairDevice("BOT1", type: "service_bot", location: "SOL-3", directives: ["service"])

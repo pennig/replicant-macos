@@ -51,10 +51,12 @@ struct BotPhase: Equatable, Sendable {
     let confirmStep: String
     /// Names the run in the operator log: "survey run", "salvage run".
     let runNoun: String
+    /// Where the mission goes when the deploy loop gives up with bots already out.
+    let unrepairedStep: String
 
     init(
         vesselCode: String, owner: FleetTag?, system: String?, phase: Phase,
-        dispatchStep: String, confirmStep: String, runNoun: String
+        dispatchStep: String, confirmStep: String, runNoun: String, unrepairedStep: String
     ) {
         self.vesselCode = vesselCode
         self.owner = owner
@@ -63,6 +65,7 @@ struct BotPhase: Equatable, Sendable {
         self.dispatchStep = dispatchStep
         self.confirmStep = confirmStep
         self.runNoun = runNoun
+        self.unrepairedStep = unrepairedStep
     }
 
     func next(_ ctx: StepContext) -> StepResult {
@@ -108,7 +111,7 @@ struct BotPhase: Equatable, Sendable {
         guard let next = aboard.first else { return .finished }
         if rounds(ctx) > Self.dispatchRounds {
             logger.notice("\(runNoun, privacy: .public) \(ctx.directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not deploy — proceeding unrepaired")
-            return .finished
+            return .action(.advanceStep(nextStep: unrepairedStep))
         }
         return .action(.dispatch(
             kind: .simple("deploy"), deviceCode: next.deviceCode,
