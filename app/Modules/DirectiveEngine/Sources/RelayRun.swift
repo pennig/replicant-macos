@@ -625,21 +625,20 @@ public struct RelayRun: MissionStepMachine {
         // taken means this system is now OFF the mesh, so the very next command
         // must clear the authority gate first — `carrierRetainsAuthority`.
         if source.statusBase != "relaying" { return carrierRetainsAuthority(directive, carrier, world) }
-        // Deadline BEFORE the read (`confirm-steps-need-fresh-evidence`): the
-        // read below only advances on success, so a staleness-first ordering
-        // would never reach the backstop while reads keep failing.
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.reclaimDeadline {
+        // No staleness gate: `.age(pollInterval)` makes the ladder's freshness
+        // check the same test as its own throttle, matching the old plain poll.
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(deadline: Self.reclaimDeadline, onExpiry: .stallNow(.unreachableDevice))
+        ladder.watermark = .age(Self.pollInterval)
+        ladder.readInterval = Self.pollInterval
+        let verdict = ladder.verdict([source], ctx)
+        if case .act(.stall) = verdict {
             logger.notice("relay run \(directive.id, privacy: .public): \(code, privacy: .public) never stopped relaying after deactivate")
-            return .stall(.unreachableDevice)
         }
-        // Nothing else moves this row: `deactivate` emits no operation, and the
-        // `relay.*` SSE route only invalidates FTL-mesh freshness. A bare wait
-        // would sit on a stale row for the whole deadline and then stall on a
-        // relay that is actually down.
-        if world.now.timeIntervalSince(source.updatedAt) > Self.pollInterval {
-            return .refreshDevices(deviceCodes: [code], thenStall: nil)
+        return switch verdict {
+        case let .act(action): action
+        case .judge: .wait
         }
-        return .wait
     }
 
     /// Can `carrier` still command anything at this system? **The check the
@@ -709,17 +708,16 @@ public struct RelayRun: MissionStepMachine {
         if relay.stowedInDeviceCode == carrier.deviceCode {
             return .claimRelay(deviceCode: relay.deviceCode, nextStep: Step.travelling.rawValue)
         }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.stowDeadline {
-            return .stall(.noRelayCoLocated)
+        // No staleness gate: `.age(pollInterval)` makes the ladder's freshness
+        // check the same test as its own throttle, matching the old plain poll.
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(deadline: Self.stowDeadline, onExpiry: .stallNow(.noRelayCoLocated))
+        ladder.watermark = .age(Self.pollInterval)
+        ladder.readInterval = Self.pollInterval
+        return switch ladder.verdict([relay], ctx) {
+        case let .act(action): action
+        case .judge: .wait
         }
-        // Nothing else moves this row: `stow` emits no operation and the stow
-        // event's field application lands only if the event arrives at all. A
-        // bare wait would sit on a stale row for the whole deadline and then
-        // stall on a relay that is actually aboard.
-        if world.now.timeIntervalSince(relay.updatedAt) > Self.pollInterval {
-            return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
-        }
-        return .wait
     }
 
     // MARK: - Travel
@@ -868,16 +866,18 @@ public struct RelayRun: MissionStepMachine {
         }
         // `statusBase`, not `status` — a raw comparison reads a live relay as dead.
         if relay.statusBase == Self.relayingStatus { return .advanceStep(nextStep: Step.settling.rawValue) }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > SalvageRun.activationDeadline {
-            return .stall(.relayActivationFailed)
+        // No staleness gate: `.age(pollInterval)` makes the ladder's freshness
+        // check the same test as its own throttle, matching the old plain poll.
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(
+            deadline: SalvageRun.activationDeadline, onExpiry: .stallNow(.relayActivationFailed)
+        )
+        ladder.watermark = .age(Self.pollInterval)
+        ladder.readInterval = Self.pollInterval
+        return switch ladder.verdict([relay], ctx) {
+        case let .act(action): action
+        case .judge: .wait
         }
-        // Nothing else moves this row — the `relay.*` SSE route only invalidates
-        // FTL-mesh freshness — so a bare wait can sit on a stale row for the
-        // whole deadline and then stall on a relay that came up fine.
-        if world.now.timeIntervalSince(relay.updatedAt) > Self.pollInterval {
-            return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
-        }
-        return .wait
     }
 
     /// Confirm `directive`'s actual deliverable: the TARGET SYSTEM is meshed. A
