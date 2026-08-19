@@ -186,6 +186,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// Two or more options are buildable and none is picked, so the run has no
     /// payload to work toward. Only the operator can settle it.
     case eventOptionNotChosen
+    /// The option's outstanding resources do not fit the convoy's freighter, and
+    /// the run carries exactly one. Detail names the units against the hold.
+    case eventLoadExceedsHold
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -220,6 +223,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .printBlockedOnComponents: "Print blocked on components"
         case .eventOptionBlueprintMissing: "Blueprint not unlocked"
         case .eventOptionNotChosen: "Event option not chosen"
+        case .eventLoadExceedsHold: "Load exceeds the freighter's hold"
         }
     }
 
@@ -293,6 +297,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The option's build tree needs the blueprints named above and the account holds none of them, so no amount of printing reaches it. Unlock those blueprints, or pick an option that avoids them under Location Events, then retry."
         case .eventOptionNotChosen:
             "The event offers more than one buildable option and none is picked, so the run has no payload to work toward. Pick one under Missions, then retry. Unlocking a blueprint mid-run can reopen a choice the run started with only one answer to."
+        case .eventLoadExceedsHold:
+            "The option still needs more resource units than the convoy's one cargo freighter can hold, so no single collection reaches it. A run carries one freighter and makes one trip, so this option is out of reach until it does otherwise — pick an option the hold can take under Missions, or cancel the run."
         }
     }
 }
@@ -325,7 +331,8 @@ public extension DirectiveAttentionReason {
              .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
              .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered,
              .miningDirectivePaused, .miningControllerNotRecovered, .mineFleetIncomplete,
-             .eventCriteriaUnmet, .awaitingCourierReplication, .eventOptionBlueprintMissing:
+             .eventCriteriaUnmet, .awaitingCourierReplication, .eventOptionBlueprintMissing,
+             .eventLoadExceedsHold:
             return .escalate
         case .eventOptionNotChosen:
             return .decisionRequest

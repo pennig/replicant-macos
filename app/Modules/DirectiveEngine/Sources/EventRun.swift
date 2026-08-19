@@ -476,12 +476,22 @@ public struct EventRun: MissionStepMachine {
         case .finished, .more: break
         }
 
-        if option.resources.isEmpty { return .advanceStep(nextStep: Step.departing.rawValue) }
+        let bill = EventPlan.outstandingResources(option, in: event)
+        if bill.isEmpty { return .advanceStep(nextStep: Step.departing.rawValue) }
         if freighter.cargoUsed > 0 { return .advanceStep(nextStep: Step.departing.rawValue) }
+        // A row carrying no `cargo_capacity` reports no hold, which is not a
+        // hold of size zero — an unknown one orders and lets the server judge.
+        let wanted = bill.values.reduce(0, +)
+        if freighter.cargoCapacity > 0, wanted > freighter.cargoRemaining {
+            return .stall(
+                .eventLoadExceedsHold,
+                detail: "\(wanted) units for a hold of \(freighter.cargoRemaining)"
+            )
+        }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
         return .dispatch(
             kind: .collectResources, deviceCode: freighter.deviceCode,
-            params: CommandParams(resources: option.resources),
+            params: CommandParams(resources: bill),
             nextStep: Step.confirmingLoad.rawValue
         )
     }
