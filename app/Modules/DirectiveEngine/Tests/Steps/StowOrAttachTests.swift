@@ -143,6 +143,21 @@ struct StowOrAttachTests {
         #expect(attachJob(["D9", "D1"]).next(ctx([device("D9")])) == .noSubject)
     }
 
+    /// `.loose` is the one field that is NOT carrier-scoped: it asks only whether
+    /// the column is empty, so a device on someone else's grid still reads as
+    /// pending. Both shipped sites pre-filter to their own carrier.
+    @Test("detach counts a device on a foreign carrier as pending")
+    func detachCountsAForeignCarrierAsPending() {
+        let job = StowOrAttach(
+            carrierCode: "C1", deviceCodes: ["D1"], verb: .detach,
+            confirmField: .loose, confirmStep: "confirmingDetach", sendsWholeList: true
+        )
+        #expect(job.next(ctx([device("D1", attachedTo: "C2")])) == .action(.dispatch(
+            kind: .detach, deviceCode: "C1",
+            params: CommandParams(devices: ["D1"]), nextStep: "confirmingDetach"
+        )))
+    }
+
     /// Detach's proof is the empty column, so an already-loose device is placed
     /// and only the attached ones ride the command.
     @Test("detach counts a loose device as placed")

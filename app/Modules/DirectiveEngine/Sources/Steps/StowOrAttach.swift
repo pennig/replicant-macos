@@ -40,9 +40,9 @@ struct StowOrAttach: Equatable, Sendable {
     let verb: Verb
     let confirmField: ConfirmField
     let confirmStep: String
-    /// Whether one command carries the whole pending list. A site property, not
-    /// a verb one: `detach` and `adopt` take every code at once, `attach` goes
-    /// one at a time so a partial failure shows in the timeline.
+    /// Whether one command carries the whole pending list, or one device rides
+    /// each round so a partial failure shows in the timeline. A site property:
+    /// the verb alone does not say which.
     let sendsWholeList: Bool
 
     init(
