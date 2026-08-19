@@ -1,5 +1,5 @@
 The 2026-08-19 live triage: "frequent stalls in Event Run and Relay Run, and
-one Event Run retries won't resolve." Three independent defects, all diagnosed
+one Event Run retries won't resolve." Four independent defects, all diagnosed
 against the live SQLite rows and all fixed. None is a Stage 0–2 regression —
 `git log -S` puts every one of them before `655748a`.
 
@@ -68,7 +68,31 @@ print that never happens, not for a slow one") does not hold on a shared bench;
 guard beside the existing two: a result naming a type the open op did not ask
 for is another job. The poll path passes no result and stays the backstop.
 
+**4. One freighter, one trip, and a payload that does not fit.** With the option
+picked, `loading` ordered `collect_resources` for the option's whole requirement
+in one command and the server refused it: "requesting 800.0, capacity 500". Two
+defects under that. The bill was the option's REQUIREMENT rather than what the
+ledger still needs, so a part-delivered event over-collects and never converges
+(`EventPlan.outstandingResources` now bills the remainder). And the convoy
+carried exactly one 500-unit freighter, which no retry widens.
+
+`SKUT-3-EVT-003` exceeds one hold on BOTH options — 800 units on
+`tether_fabrication`, 1800 on `material_delivery` — so this was not a bad pick.
+Matt chose a wider convoy over more trips: the lease is now
+`Directive.freighterCodes`, `EventRun.loadPlan` divides the bill across the
+holds by TOTAL capacity (not free space, or a mid-load recompute re-cuts the
+shares), and every leg — load, depart, stage, return, deposit — covers all of
+them. The brain leases one hull per hold-full and idles naming the shortfall
+rather than launching a convoy that cannot finish.
+
+`leasedFreighters` is the single accessor over `freighterCodes` and the
+`freighterCode` mirror. Read the column directly and a row written through the
+other field leases a hull that nothing reserves.
+
 **Still open.** `PrintJob.deadline` is measured from `stepStartedAt` and
 ignores the op's own `completesAt`, so a queue deeper than 30 minutes still
 trips it even with the misattribution gone. See
 [[printer-selection-ignores-status]] for the rest of the shared-bench story.
+A run launched BEFORE the lease became a list holds one freighter for its whole
+life — nothing widens a convoy mid-flight, so such a row stalls
+`.eventLoadExceedsHold` and wants cancelling rather than retrying.
