@@ -270,20 +270,6 @@ public struct EventRun: MissionStepMachine {
         return Outstanding(jobs: jobs, unprintable: expansion.unprintable)
     }
 
-    /// This directive's own prints still open, per device type, read off the ops
-    /// it dispatched. A type the op detail does not name contributes nothing.
-    static func printsInFlight(in world: WorldSnapshot) -> [String: Int] {
-        var counts: [String: Int] = [:]
-        for operation in world.dispatchedOperations.values
-        where operation.kind == OperationKind.print.rawValue && operation.status.isOpen {
-            guard let params = operation.detail["params"],
-                  let type = params["device_type"]?.stringValue
-            else { continue }
-            counts[type, default: 0] += Int(params["quantity"]?.numberValue ?? 1)
-        }
-        return counts
-    }
-
     /// The printing step's bound: the longest single job it still has queued,
     /// plus `printSlack`. A print time the catalogue has no row for adds nothing.
     static func printDeadline(for wanted: [String: Int], in world: WorldSnapshot) -> TimeInterval {
@@ -389,18 +375,15 @@ public struct EventRun: MissionStepMachine {
             return .refreshDevicesInSystem(designation: depot, thenStall: .unreachableDevice)
         }
 
-        // `missingTree` counts only what STANDS at the depot, so a job already on
-        // order still reads as wanted and a second free printer would re-order it.
-        for (type, onOrder) in Self.printsInFlight(in: world) {
+        // `missingTree` counts only what STANDS at the depot, so a job already
+        // on order still reads as wanted.
+        for (type, onOrder) in PrintScheduler.onOrder(for: directive.id, at: depot, in: world) {
             guard let count = wanted[type] else { continue }
             wanted[type] = count > onOrder ? count - onOrder : nil
         }
 
-        // Sorted before `first`: two printers at one depot must not alternate.
-        let printers = world.devices.values
-            .filter { $0.location == depot && $0.deviceType == "autofactory" && !$0.refusesPrintJobs }
-            .sorted { $0.deviceCode < $1.deviceCode }
-        guard !printers.isEmpty else { return .stall(.unreachableDevice) }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        guard PrintJob(depot: depot).hasBench(ctx) else { return .stall(.unreachableDevice) }
 
         // Every path that orders nothing consults the deadline: a free printer
         // with the bill in flight waits on the print an all-busy depot does.
@@ -408,15 +391,18 @@ public struct EventRun: MissionStepMachine {
             world.now.timeIntervalSince(Self.lastOrderedAt(directive, in: world)) > deadline
             ? .stall(.printBlockedOnComponents, detail: depot) : .wait
 
-        guard let free = printers.first(where: { world.openOperation(for: $0.deviceCode) == nil })
-        else { return noProgress }
-
         guard let type = order.first(where: { wanted[$0] != nil }),
               let quantity = wanted[type]
         else { return noProgress }
 
+        let job = PrintOrder(
+            deviceType: type, quantity: quantity, tags: [tag],
+            owner: directive.id, onRailShort: .wait
+        )
+        guard let chosen = PrintScheduler.choose(job, at: depot, in: world) else { return noProgress }
+
         return .dispatch(
-            kind: .print, deviceCode: free.deviceCode,
+            kind: .print, deviceCode: chosen.device.deviceCode,
             params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag.string]),
             nextStep: Step.printing.rawValue
         )

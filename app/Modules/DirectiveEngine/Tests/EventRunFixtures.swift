@@ -138,7 +138,8 @@ enum EventRunFixtures {
     }
 
     static func openPrint(
-        on code: String, now: Date, deviceType: String? = nil, quantity: Int = 1
+        on code: String, now: Date, deviceType: String? = nil, quantity: Int = 1,
+        directiveID: String? = nil
     ) -> [String: GameModels.Operation] {
         var params: [String: JSONValue] = [:]
         if let deviceType {
@@ -148,7 +149,8 @@ enum EventRunFixtures {
         return [code: GameModels.Operation(
             id: "OP-\(code)", entityCode: code, kind: OperationKind.print.rawValue, status: .active,
             source: .poll, startedAt: now, completesAt: nil, lastConfirmedAt: now,
-            detail: params.isEmpty ? .object([:]) : .object(["params": .object(params)])
+            detail: params.isEmpty ? .object([:]) : .object(["params": .object(params)]),
+            directiveID: directiveID
         )]
     }
 

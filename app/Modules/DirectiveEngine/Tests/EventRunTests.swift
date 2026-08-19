@@ -408,7 +408,8 @@ struct EventRunComponentPrintTests {
         for code in busy {
             let job = ordering[code]
             let ours = EventRunFixtures.openPrint(
-                on: code, now: stepStartedAt, deviceType: job?.0, quantity: job?.1 ?? 1
+                on: code, now: stepStartedAt, deviceType: job?.0, quantity: job?.1 ?? 1,
+                directiveID: "d1"
             )
             openOperations.merge(ours) { _, latest in latest }
             for operation in ours.values { dispatched[operation.id] = operation }
