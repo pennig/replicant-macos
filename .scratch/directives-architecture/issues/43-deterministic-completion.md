@@ -31,3 +31,24 @@ So the rule here is **oldest live print first**, which needs no field that may b
 - [ ] **Step 7:** Eight targets green; `check-comments.sh`; commit.
 
 **Done when:** a bench with one active and two enqueued prints closes the active one on a `print.completed`, with a test.
+
+## Landed ahead of this ticket (merge 34e6a61)
+
+`completeOpenOperation` grew a THIRD guard: a completion whose
+`result.device_type` contradicts the open op's `params.device_type` is refused
+and logged. It was the fix for a live Relay Run stall — a `defence_grid`
+completion closed a relay run's `ftl_relay` print op and stamped the wrong
+`new_device_code` in, so `printInFlight` went false and the run waited out
+`PrintJob.deadline` for a relay that arrived 1h49m later. 23 of the ledger's
+235 resolved print ops carry a contradicting result.
+
+**Refusal is only correct while the index allows one open op per device.** Once
+ticket 42 relaxes it, this guard must become a SELECTION rather than a refusal:
+pick the op whose `params.device_type` matches the completion, falling back to
+the oldest by `startedAt` then `id`. Fold it into Step 3's ordered fetch rather
+than leaving both — a refusal against N open ops drops completions on the floor
+and leans on the poll path to clear them.
+
+Tests: `GameServices/Tests/ReconcilerSharedBenchTests.swift`. The poll path
+(`result: nil`) is deliberately unguarded and is what currently clears a job
+whose event this refused.

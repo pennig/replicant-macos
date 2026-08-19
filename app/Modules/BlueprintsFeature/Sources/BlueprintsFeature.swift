@@ -74,8 +74,8 @@ public struct BlueprintsFeature {
                         Blueprint
                             .where {
                                 if !search.isEmpty {
-                                    $0.deviceType.contains(search)
-                                        || $0.shortDescription.contains(search)
+                                    $0.deviceType.like("%\(search)%") ||
+                                    $0.shortDescription.like("%\(search)%")
                                 }
                             }
                             .order { $0.deviceType },
