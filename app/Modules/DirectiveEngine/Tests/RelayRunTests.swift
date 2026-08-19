@@ -106,6 +106,7 @@ private func printOp(
     on hubCode: String = "AF1",
     status: OperationStatus = .completed,
     newDeviceCode: String? = "RLY1",
+    completesAt: Date? = nil,
     lastConfirmedAt: Date = fixtureNow
 ) -> GameModels.Operation {
     var detail: [String: JSONValue] = ["device_type": .string("ftl_relay")]
@@ -115,7 +116,7 @@ private func printOp(
     return GameModels.Operation(
         id: id, entityCode: hubCode, kind: OperationKind.print.rawValue,
         status: status, source: .event, startedAt: Date(timeIntervalSince1970: 0),
-        completesAt: nil, lastConfirmedAt: lastConfirmedAt, detail: .object(detail)
+        completesAt: completesAt, lastConfirmedAt: lastConfirmedAt, detail: .object(detail)
     )
 }
 
@@ -1029,6 +1030,68 @@ struct RelayRunPrintingTests {
     @Test func waitsInsideThePrintDeadline() {
         let snapshot = world(devices: [carrier(), hub()])
         #expect(RelayRun().nextAction(directive: running(step: RelayRun.Step.printing.rawValue), world: snapshot) == .wait)
+    }
+
+    /// **The queue runs deeper than the deadline.** `acquire` queues behind
+    /// whatever is on the shared bench, so our own job routinely finishes well
+    /// past 30 minutes. While the bench is still working a job, keep waiting.
+    @Test func waitsPastTheDeadlineWhileTheBenchIsStillWorking() {
+        let open = printOp(
+            status: .active, newDeviceCode: nil,
+            completesAt: fixtureNow.addingTimeInterval(600)
+        )
+        let snapshot = world(
+            devices: [carrier(), hub()],
+            dispatchedOperations: [open.id: open], now: fixtureNow
+        )
+        let overdue = running(
+            step: RelayRun.Step.printing.rawValue,
+            stepStartedAt: fixtureNow.addingTimeInterval(-PrintJob.deadline - 1)
+        )
+        #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .wait)
+    }
+
+    /// An open job whose own deadline has passed is no evidence the bench is
+    /// working — the flat deadline is right about that world.
+    @Test func stallsPastTheDeadlineWhenTheOpenJobIsItselfOverdue() {
+        let open = printOp(
+            status: .active, newDeviceCode: nil,
+            completesAt: fixtureNow.addingTimeInterval(-1)
+        )
+        let snapshot = world(
+            devices: [carrier(), hub()],
+            dispatchedOperations: [open.id: open], now: fixtureNow
+        )
+        let overdue = running(
+            step: RelayRun.Step.printing.rawValue,
+            stepStartedAt: fixtureNow.addingTimeInterval(-PrintJob.deadline - 1)
+        )
+        #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.noRelayCoLocated))
+    }
+
+    /// A bench that never goes idle would hold the carrier for ever, so the
+    /// extension has a ceiling and the run halts visibly at it.
+    @Test func stallsAtTheQueuedCeilingEvenWhileTheBenchIsWorking() {
+        let open = printOp(
+            status: .active, newDeviceCode: nil,
+            completesAt: fixtureNow.addingTimeInterval(600)
+        )
+        let snapshot = world(
+            devices: [carrier(), hub()],
+            dispatchedOperations: [open.id: open], now: fixtureNow
+        )
+        let overdue = running(
+            step: RelayRun.Step.printing.rawValue,
+            stepStartedAt: fixtureNow.addingTimeInterval(-PrintJob.queuedCeiling - 1)
+        )
+        #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.noRelayCoLocated))
+    }
+
+    /// The ceiling is a backstop for a queue, not a second print deadline: it
+    /// must sit well clear of the flat one.
+    @Test func theQueuedCeilingIsPinned() {
+        #expect(PrintJob.queuedCeiling == 4 * 60 * 60)
+        #expect(PrintJob.queuedCeiling > PrintJob.deadline)
     }
 
     /// A superseded print op is fail-safe — no loop, no spend — but it is

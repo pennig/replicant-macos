@@ -17,6 +17,11 @@ struct PrintJob: Equatable, Sendable {
     /// slow one.
     static let deadline: TimeInterval = 30 * 60
 
+    /// The ceiling on `deadline`'s extension while the bench is demonstrably
+    /// still working. A liveness backstop for a bench that never goes idle, not
+    /// an estimate of how long a queue takes.
+    static let queuedCeiling: TimeInterval = 4 * 60 * 60
+
     /// The depot the bench must stand at. Never a device location — a hub that
     /// unfurls elsewhere must not drag the run with it.
     let depot: String
