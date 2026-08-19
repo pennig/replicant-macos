@@ -9,11 +9,11 @@ The first of the two hand-rolled sites. `EventRun`'s own printer filter and its 
 
 **Plan:** `.scratch/directives-architecture/plan-stage-3.md` — Task 4. **Carries C3 and C4.**
 
-**C3 — the capability predicate.** `EventRun.swift:363` filters on `deviceType == "autofactory"`, the only such string match in production. `Device.swift:173-177` documents `isPrintHub` as existing precisely to avoid it. After this ticket `EventRun` gains any print-capable vessel and loses any `autofactory` without `enqueue_print` in `availableCommands`. Both halves are behaviour changes; the first gets the test.
+**C3 — the capability predicate.** `EventRun.swift:401` filters on `deviceType == "autofactory"`, the only such string match in production. `Device.swift:173-177` documents `isPrintHub` as existing precisely to avoid it. After this ticket `EventRun` gains any print-capable vessel and loses any `autofactory` without `enqueue_print` in `availableCommands`. Both halves are behaviour changes; the first gets the test.
 
-**C4 — the busy guard.** `EventRun.swift:373` uses the owner-unscoped `openOperation(for:)`, so a co-tenant's print hides the bench entirely and the run orders nothing. The three migrated sites are already owner-scoped.
+**C4 — the busy guard.** `EventRun.swift:411` uses the owner-unscoped `openOperation(for:)`, so a co-tenant's print hides the bench entirely and the run orders nothing. The three migrated sites are already owner-scoped.
 
-**`printsInFlight` is deleted, not moved.** `EventRun.swift:240-250` counts device types from open ops' `detail.params` — that is `PrintScheduler.onOrder` with a different name and a narrower scope.
+**`printsInFlight` is deleted, not moved.** `EventRun.swift:275-285` counts device types from open ops' `detail.params` — that is `PrintScheduler.onOrder` with a different name and a narrower scope.
 
 **Reorder while you are in there.** Today the bench is picked at `:373` and the type at `:376`. Ask "is there anything to print?" before "is there anywhere to print it?", or a depot with a free bench and nothing wanted takes the `noProgress` branch for the wrong reason.
 

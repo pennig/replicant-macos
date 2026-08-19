@@ -15,7 +15,7 @@ Labels: directives-architecture, stage-3
 
 **A new index NAME, not the old one reused.** `DROP` plus `CREATE` under the same name leaves two databases with the same index name and different predicates depending on migration path, and nothing tells them apart. The new one is `operation_one_active_per_device`.
 
-**Append only.** The old index is migration #20 of 46 (`GameDatabase.swift:68`); this one is #47, after `TheatreRecord.createTheatres`. Never edit or reorder a shipped entry.
+**Append only.** The old index is migration #20 (`GameDatabase.swift:68`). The manifest was 46 entries when this ticket was written and is **47** as of `97585e1` — the stall triage appended `Directive.addFreighterCodes` — so this one is **#48, after `Directive.addFreighterCodes`**. Count the array before you append rather than trusting either number; more may have landed. Never edit or reorder a shipped entry.
 
 **Leave `CommandClientTests.swift:212-217` alone.** It asserts `openCount == 1` for travel, which does not change. Add beside it, do not edit it.
 

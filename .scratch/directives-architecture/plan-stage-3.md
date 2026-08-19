@@ -15,7 +15,14 @@
 
 **Parent plan:** `.scratch/directives-architecture/plan.md`. **Punch list:** `.scratch/directives-architecture/punch-list.md`.
 
-**Measured against:** local `main` at `3ae52be` (Stages 0–2 landed and merged), 2026-08-19.
+**Measured against:** local `main` at `3ae52be` (Stages 0–2 landed and merged), 2026-08-19. **Line numbers re-pinned to `97585e1`** the same day, after the Event/Relay stall triage merged at `34e6a61` moved `EventRun.swift` by roughly +38 lines and `Reconciler.swift` by +5. They will drift again — treat every `file:line` here as "at or near", and re-pin before deleting anything.
+
+**What the stall triage changed under this plan, checked function by function:**
+
+- **`RelayRun.swift` is untouched.** Ticket 37's target is exactly as measured.
+- **`EventRun.printing`'s head changed** — option resolution now goes through `Self.optionInForce(event, in: world)` and can stall with a reason. **Ticket 36's actual targets are byte-identical**: the printer filter, the busy guard, the dispatch block (old `:355-386`, now `:393-424`) and `printsInFlight` all diff clean. Only the line numbers moved.
+- **`Reconciler.completeOpenOperation` grew a third guard** (`be261bc`). That one is not cosmetic and it changes Task 11 — see departure 4.
+- **The manifest gained a migration**, so Task 10's index relax is #48 rather than #47.
 
 ## Global Constraints
 
@@ -51,10 +58,10 @@ Measured against `main` at `3ae52be`. Every row was read; none is inferred from 
 | 1 | `RestockRun` | `RestockRun.swift:125` | `stocking` | `ftl_relay`, no quantity, no tags | `PrintJob.bench` | `PrintJob.deadline` | `.wait` (`:116`) |
 | 2 | `MineFleetPrint` | `MineFleetPrint.swift:114` | `stocking` | one recipe type, `quantity: missing[type]`, fleet/carrier tag | `PrintJob.bench` | `PrintJob.deadline` | `.wait` (`:94`) |
 | 3 | `EventCourierPrint` | `EventCourierPrint.swift:98` | `printing` | `matrix_container` x1, root tag | `PrintJob.bench` | `PrintJob.deadline` | `.wait` (`:88`) |
-| 4 | `EventRun` | `EventRun.swift:380` | `printing` | one blueprint-closure type, theatre tag | **hand-rolled**, `EventRun.swift:362-364` | variable, `printSlack` + longest print, from `lastOrderedAt` | `.wait` (`:349`) |
+| 4 | `EventRun` | `EventRun.swift:419` | `printing` | one blueprint-closure type, theatre tag | **hand-rolled**, `EventRun.swift:400-402` | variable, `printSlack` + longest print, from `lastOrderedAt` | `.wait` (`:387`) |
 | 5 | `RelayRun` | `RelayRun.swift:348` | **`acquire`** | `ftl_relay`, no quantity, no tags | **hand-rolled** `RelayRun.hub(near:in:)`, `:149-157` | `PrintJob.deadline`, checked in `printing` (`:375`) | **`.stall(.printStockShort)`** (`:344`) |
 
-**Correction to Stage 2's hand-off note.** It said `EventRun.swift:297` and `RelayRun.swift:359` were the two remaining print sites. `EventRun.swift:297` is the head of the `printing` function whose dispatch is at `:380` — right function, and Stage 3 targets it. **`RelayRun.swift:359` is wrong.** `RelayRun.printing` is a pure poll step that dispatches nothing; the `enqueue_print` is issued from `acquire` (`RelayRun.swift:305-353`). A task that migrated `RelayRun.printing` would change nothing and report success.
+**Correction to Stage 2's hand-off note.** It said `EventRun.swift:297` and `RelayRun.swift:359` were the two remaining print sites. The first named the head of the `printing` function — right function, and Stage 3 targets it. **The second is wrong.** `RelayRun.printing` is a pure poll step that dispatches nothing; the `enqueue_print` is issued from `acquire` (`RelayRun.swift:305-353`). A task that migrated `RelayRun.printing` would change nothing and report success.
 
 ### The five sites disagree on five separate policies
 
@@ -65,7 +72,7 @@ This is the actual content of Stage 3. Every row is a measured divergence, not a
 | **Rail short** | `.wait` at four sites; `.stall(.printStockShort)` at `RelayRun.swift:344`. Not an oversight on either side: `RestockRun.swift:82-85` documents "**Every branch that declines is a `.wait`, never a `.stall`** … dressing idle calm up as a halt spends an operator's attention on nothing", and `RelayRun` is acquiring the one relay its whole run depends on. The two intents genuinely differ. |
 | **Depot anchor** | `PrintJob.depot` is `directive.theatreDepot ?? pinned device location` (`PrintJob.swift:30-32`). `EventRun` uses `world.theatreDepot(for:)` with **no fallback** (`:298`). `RelayRun.hub` uses **`carrier.location`** (`:150`) — a device location, which `PrintJob.swift:20-21` explicitly warns against: "Never a device location — a hub that unfurls elsewhere must not drag the run with it". |
 | **Bench capability** | `PrintJob.bench` uses `acceptsPrintJobs && !isCarrierHull`. `EventRun` uses **`deviceType == "autofactory"`** (`:363`) — the only such string match in production, and blind to any print-capable vessel not typed `autofactory`. `RelayRun.hub` uses `acceptsPrintJobs`, carrier hulls **allowed**. `PrintQueueFeature` uses a fourth predicate, `Device.canPrint` = `features.contains("print")` (`Printing.swift:132`). |
-| **Bench busy** | Owner-scoped `openOperation(for:owner:)` at sites 1-3. Owner-**un**scoped `openOperation(for:)` at `EventRun.swift:373`. **No busy guard at all** in `RelayRun.acquire`. |
+| **Bench busy** | Owner-scoped `openOperation(for:owner:)` at sites 1-3. Owner-**un**scoped `openOperation(for:)` at `EventRun.swift:411`. **No busy guard at all** in `RelayRun.acquire`. |
 | **Fleet freshness before spending** | Depot-wide `PrintJob.fleetEvidenceIsStale` at sites 2, 3 and 4. Per-device `hub.updatedAt > hubFreshness` at `RelayRun.swift:328`. **None at `RestockRun`** — the only `PrintJob` adopter that spends without a pre-spend sweep. |
 
 ### Why goal A is blocked today, and by what
@@ -139,7 +146,7 @@ The alternative is a multi-dispatch action, which breaks the spec's own invarian
 
 ### 2. `EventRun.printing` is not "one job per free bench per tick", and no site is
 
-Ticket 18 describes the demand shape as "one job per free bench per tick (the `EventRun.printing` shape)". `EventRun.printing` has a single `first(where:)` at `EventRun.swift:373` and a single `.dispatch` at `:380`, with **no loop over printers**. What it actually does is re-enter its own step, so it fans out across *successive* ticks, one bench each. Its own comment at `:318-319` says so: "Not executed before: several free printers enqueue several levels at once."
+Ticket 18 describes the demand shape as "one job per free bench per tick (the `EventRun.printing` shape)". `EventRun.printing` has a single `first(where:)` at `EventRun.swift:411` and a single `.dispatch` at `:419`, with **no loop over printers**. What it actually does is re-enter its own step, so it fans out across *successive* ticks, one bench each. Its own comment at `:355-356` says so: "Not executed before: several free printers enqueue several levels at once."
 
 Fan-out-over-ticks is the correct shape and this plan adopts it. The phrase "per tick" is the part that does not survive.
 
@@ -147,14 +154,19 @@ Fan-out-over-ticks is the correct shape and this plan adopts it. The phrase "per
 
 Spec's `Bench = (device, activeJob, queueDepth, owners: [directiveID])`. Owners can only come from `operations.directiveID` — a queue entry carries no id. Until the index relaxes, a device holds at most one live op, so `owners` holds at most one element. The type is `[String]` from Task 1 so that Phase B fills it without a signature change, and `PrintSchedulerTests` pins both the 0/1 behaviour in Phase A and the N behaviour in Phase B.
 
-### 4. `completeOpenOperation` cannot select by `detail.params.device_type`, and must not be written as if it can
+### 4. `completeOpenOperation` selects by device type AND by age — corrected 2026-08-19
 
-Ticket 18 specifies: "`completeOpenOperation` for `print.completed` selects the live print op by `detail.params.device_type` == the event's device type, oldest first". Two halves of that are not currently true.
+**This section originally said the device type was unreachable and unproven. Both halves were wrong, and the stall triage merged at `34e6a61` proved it with live data.** The correction is kept visible rather than silently rewritten, because the reasoning that produced the error is the reasoning this plan asks its executors to apply.
 
-- **The op side is partial.** `detail.params.device_type` exists only on locally-dispatched ops (`CommandClient.swift:214`, `CommandParams.swift:76`). Ops adopted from a device snapshot insert `detail: .object([:])` (`Reconciler.swift:135,190`), so the field is absent exactly when the app did not issue the job.
-- **The event side is unproven.** `GameEventEnvelope.deviceType` exists (`GameEventEnvelope.swift:41`) but is discarded before `completeOpenOperation`, which takes only `(deviceCode, source, eventTime, result, allowedKinds)` (`Reconciler.swift:439-445`). **Whether the server populates `device_type` on `print.completed` with the printer's type or the printed device's type is not evidenced anywhere in this repository.** The only documented payload key for that event is `new_device_code` (`GameSync.swift:320`).
+What held: **the op side is partial.** `detail.params.device_type` exists only on locally-dispatched ops (`CommandClient.swift:214`, `CommandParams.swift:76`). Ops adopted from a device snapshot insert `detail: .object([:])` (`Reconciler.swift:135,190`), so the field is absent exactly when the app did not issue the job.
 
-**This plan selects the oldest live print op on the bench** — deterministic, needs no field that may be absent, and matches a FIFO queue, which is what a print queue is. Device-type matching is written as a **refinement in Task 11 Step 5, gated on a live probe** that Open Question 3 asks the operator to run. If the probe says the event carries the printed device's type, the refinement lands; if it says the printer's type, the refinement is worthless and is dropped.
+What did not: **the event side is neither unreachable nor unproven.** `GameEventEnvelope.deviceType` is discarded, which was true as far as it went — but the event's *payload* reaches `completeOpenOperation` as `result`, and `result["device_type"]` is right there. The live ledger settles what it names: **23 of 235 resolved print ops carry a `result.device_type` contradicting their `params.device_type`** (`be261bc`), including a `defence_grid` completion that closed a Relay Run's `ftl_relay` print op. A printer does not print a `defence_grid` and then report itself as one. **The field names the printed device.**
+
+**So the refinement ticket 18 asked for is justified, and half of it has already shipped.** `Reconciler.swift:466-473` now refuses a completion whose `result.device_type` contradicts the open op's `params.device_type` — the third of three guards in the same shape, and correct *while the index allows one open op per device*.
+
+**It stops being correct the moment Task 10 lands.** With three prints live on a bench and a `mining_drone` completion arriving, an unordered fetch surfaces an arbitrary op, the guard sees a mismatch, and the completion is **refused** — so the op that actually matches never closes, and the poll path has to clean up behind it. Task 11 turns the refusal into a **selection**: among the live print ops on the bench, take the one whose `params.device_type` matches the result; failing that, the oldest by `(startedAt, id)`. Fold it into the ordered fetch rather than leaving both.
+
+Open Question 3 asked the operator for a probe to settle this. **It is answered and closed.**
 
 ### 5. The rail-short policy stays per-site, as a parameter
 
@@ -884,7 +896,7 @@ Commit with the message `refactor(directives): PrintJob selects through PrintSch
 ## Task 4: `EventRun.printing` adopts the scheduler
 
 **Files:**
-- Modify: `app/Modules/DirectiveEngine/Sources/EventRun.swift:240-250` (`printsInFlight`), `:297-385` (`printing`)
+- Modify: `app/Modules/DirectiveEngine/Sources/EventRun.swift:275-285` (`printsInFlight`), `:332-423` (`printing`)
 - Test: `app/Modules/DirectiveEngine/Tests/EventRunPrintTests.swift` (or wherever the event print cases live — find it with `rg -l "printing" app/Modules/DirectiveEngine/Tests`)
 
 **Interfaces:**
@@ -896,7 +908,7 @@ Commit with the message `refactor(directives): PrintJob selects through PrintSch
 - [ ] **Step 1: Write the two failing tests**
 
 ```swift
-    /// C3. `EventRun.swift:363` filtered on `deviceType == "autofactory"`, the
+    /// C3. `EventRun.swift:401` filtered on `deviceType == "autofactory"`, the
     /// only such string match in production. Capability is the predicate.
     @Test("a print vessel that is not an autofactory is a bench")
     func printVesselIsABench() {
@@ -1806,7 +1818,7 @@ In `Operation.swift`, after `addOwnerColumns`:
     }
 ```
 
-Append `GameModels.Operation.relaxOpenIndex,` to `GameDatabase.manifest` (`GameDatabase.swift:94`) as entry #47, **after** `TheatreRecord.createTheatres`. Never edit or reorder a shipped entry.
+Append `GameModels.Operation.relaxOpenIndex,` to `GameDatabase.manifest` (`GameDatabase.swift:95`) as the **last** entry — #48 as of `97585e1`, after `Directive.addFreighterCodes`, which the stall triage appended after this plan was written. Count the array rather than trusting that number; more may have landed since. Never edit or reorder a shipped entry.
 
 A new index name rather than the old one reused: `DROP INDEX` plus `CREATE INDEX` under the same name would leave two databases with the same name and different predicates depending on migration path, and nothing would tell them apart.
 
@@ -1925,7 +1937,11 @@ Run: `cd app/Modules && swift test --filter "Reconciler|PollAndDeadline" --event
 
 Read the StructuredQueries API before writing this — if `.order` cannot take a tuple, order by `startedAt` and break the tie in Swift. Do not leave the tie unbroken; two ops dispatched in one transaction share a `startedAt`.
 
-**Departure 4 applies here.** Ticket 18 asks for selection by `detail.params.device_type` matched against the event's device type. That field is absent on adopted ops (`Reconciler.swift:135,190`) and the event's device type is discarded before this function is reached (`:439-445`). **Oldest-first is the rule this task implements.** Open Question 3 asks the operator to run the probe that would justify the refinement; if the answer arrives during this task, add the type match as an additional `first(where:)` predicate **above** the oldest rule, never in place of it.
+**Departure 4 applies here, and it changed on 2026-08-19.** A third guard shipped ahead of this task with the stall triage (`be261bc`, `Reconciler.swift:466-473`): a completion whose `result.device_type` contradicts the open op's `params.device_type` is refused and logged. That is correct only while one op can be open per device. **Once Task 10 lands, a refusal against N live ops drops completions on the floor** — the guard reads whichever op the unordered fetch surfaced, sees a mismatch, and declines to close the one that actually matches, leaving the poll path to clean up.
+
+So the rule this task implements is **match first, then age**: among the live print ops on the bench, take the one whose `params.device_type` equals `result["device_type"]`; if none matches or either side is absent, take the oldest by `(startedAt, id)`. Delete the refusal — do not leave both, or the selection will pick correctly and the refusal will veto it.
+
+`detail.params.device_type` is still absent on ops adopted from a device snapshot (`Reconciler.swift:135,190`), which is exactly why age remains the fallback rather than the match becoming a requirement. The existing tests are `GameServices/Tests/ReconcilerSharedBenchTests.swift`; extend that file rather than starting a third.
 
 - [ ] **Step 4: `DeadlineScheduler` passes the id it already holds**
 
@@ -2011,7 +2027,7 @@ These call `world.openOperation(for:)` or `openOperation(for:owner:)` and each m
 |---|---|
 | `Steps/PrintJob.swift:56-58` (`stillPrinting`) | Must widen to `queuedOperations` — a run's queued print is still its print |
 | `Steps/TravelTo.swift:56` | Travel is `.active` or nothing; narrowing is correct and changes nothing |
-| `EventRun.swift:443,533,703,738,801` | Same: all non-print activities |
+| `EventRun.swift:532,632,819,854,918` | Same: all non-print activities |
 | `MineRun.swift:378`, `RepairFleet.swift:85,104`, `RelayRun.swift:242` | Same |
 | `MineFleetPrint.swift:86`, `RestockRun.swift:95,159`, `EventCourierPrint.swift:83` | Task 6 deleted or replaced most of these; confirm what remains reads `queuedOperations` |
 | `PrintScheduler.benches` | Task 14 |
@@ -2339,13 +2355,13 @@ Commit with the message `chore(directives): Stage 3 tidy-up — doc comments, or
 
 ## Open questions for the operator
 
-Four decisions, not tasks. Two of them block nothing; the third wants an answer before Task 11 and the fourth before Task 14.
+Four decisions, not tasks — **three still open, since the stall triage answered the third on 2026-08-19.** Two of the three block nothing; the fourth wants an answer before Task 14.
 
 1. **The rail-short policy stays split 4-1, and this plan does not unify it.** `RelayRun.acquire` stalls with `.printStockShort` when the reserve rail is short; the other four wait. Both are documented as deliberate — `RestockRun.swift:82-85` says a decline is never a stall because "dressing idle calm up as a halt spends an operator's attention on nothing", and `RelayRun` is acquiring the single relay its run exists to place. Departure 5 keeps both by making it a `PrintOrder` parameter. **Is that the end state, or should every print site eventually behave one way?** Nothing breaks either way; it is a question about how much of your attention a short rail deserves.
 
 2. **`onOrder` attributes by operation, never by fleet tag.** A queue entry carries `tags` (`Printing.swift:147-152`), so a job could in principle be attributed to a theatre — but `RestockRun` prints relays untagged (`RestockRun.swift:127`), so tag matching would cover three sites and not the other two. This plan uses ops alone and records the gap. **Worth closing by tagging every print, including relays?** That is one line at each dispatch and would make the printer's own queue a second witness for demand, which would in turn close the "op row was lost" blind spot Task 14 Step 4 has to reason about instead.
 
-3. **Blocks Task 11 Step 3.** Ticket 18 specifies that a `print.completed` should select its operation by matching `detail.params.device_type` to the event's device type. **Nothing in this repository evidences what the server puts in that field** — whether `device_type` on a `print.completed` names the printer or the thing printed. The only documented payload key for that event is `new_device_code` (`GameSync.swift:320`). This plan implements oldest-first, which needs no such field. **Would you run one live probe** — trigger a print, capture the `print.completed` frame, and paste the payload into the ticket? If it names the printed device's type, the refinement is worth adding above the oldest rule. If it names the printer's, the refinement is worthless and the question closes for good.
+3. ~~**Blocks Task 11 Step 3.**~~ **ANSWERED and closed, 2026-08-19, without needing the probe.** The question was whether `device_type` on a `print.completed` names the printer or the thing printed. The stall triage merged at `34e6a61` answered it from the live ledger: 23 of 235 resolved print ops carry a `result.device_type` contradicting their `params.device_type`, and the case that prompted the fix was a `defence_grid` completion closing a Relay Run's `ftl_relay` print op. **It names the printed device.** Departure 4 carries the consequence: the guard that shipped is a refusal, and Task 11 must turn it into a selection before Task 10's index relax makes refusal wrong.
 
 4. **Blocks Task 14 Step 3.** `Device.queueSize` is the bench's capacity, and the scheduler uses it as the ceiling on depth. **What is not evidenced is whether a `quantity: 3` job takes one queue slot or three.** `MineFleetPrint` routinely orders multi-unit jobs (`MineFleetPrint.swift:114-118`). This plan assumes one slot per job, which under-counts and risks a rejected enqueue rather than a lost one — the safer of the two failure modes, but still a guess. One live observation of a multi-unit print's `print_queue` settles it.
 
