@@ -33,10 +33,13 @@ private func bench(
     )
 }
 
-private func printOp(on entity: String, owner: String?) -> GameModels.Operation {
+private func op(
+    on entity: String, owner: String?, status: OperationStatus = .active,
+    kind: String = OperationKind.print.rawValue
+) -> GameModels.Operation {
     GameModels.Operation(
-        id: "OP-\(entity)", entityCode: entity, kind: OperationKind.print.rawValue,
-        status: .active, source: .poll, startedAt: now, completesAt: nil,
+        id: "OP-\(entity)", entityCode: entity, kind: kind,
+        status: status, source: .poll, startedAt: now, completesAt: nil,
         lastConfirmedAt: now, detail: .object([:]), directiveID: owner
     )
 }
@@ -88,7 +91,7 @@ struct PrintJobTests {
         let pin = bench("B1", status: "compacted")
         let holding = bench("B2")
         let free = bench("B3")
-        let mine = printOp(on: "B2", owner: "P1")
+        let mine = op(on: "B2", owner: "P1")
         let frame = ctx(
             [pin, holding, free], open: ["B2": mine], dispatched: ["OP-B2": mine]
         )
@@ -107,19 +110,51 @@ struct PrintJobTests {
     /// the poll it replaced inherited that. It has to keep inheriting it.
     @Test("an unowned op on the pinned bench still reads as printing")
     func anUnownedOpOnThePinIsStillPrinting() {
-        let frame = ctx([bench("B1")], open: ["B1": printOp(on: "B1", owner: nil)])
+        let frame = ctx([bench("B1")], open: ["B1": op(on: "B1", owner: nil)])
 
         #expect(job.stillPrinting(frame))
     }
 
-    @Test("a co-tenant's print on another bench is not ours")
-    func aCoTenantsPrintIsNotOurs() {
-        let other = printOp(on: "B2", owner: "OTHER")
+    /// `dispatchedOperations` is directive-scoped by construction, and the
+    /// legacy half of it carries no owner column at all — those rows are ours.
+    @Test("a legacy print with no owner on a substituted bench is still ours")
+    func aLegacyUnownedPrintOnASubstituteIsOurs() {
+        let legacy = op(on: "B2", owner: nil)
         let frame = ctx(
-            [bench("B1"), bench("B2")], open: ["B2": other], dispatched: ["OP-B2": other]
+            [bench("B1", status: "compacted"), bench("B2"), bench("B3")],
+            open: ["B2": legacy], dispatched: ["OP-B2": legacy]
         )
 
+        #expect(job.stillPrinting(frame))
+    }
+
+    /// `dispatchedOperations` retains closed ops on purpose, so without the
+    /// liveness filter the poll would hold the step for a whole deadline.
+    @Test("our own print that has completed is no longer printing")
+    func aCompletedPrintIsNotStillPrinting() {
+        let done = op(on: "B2", owner: "P1", status: .completed)
+        let frame = ctx([bench("B1", status: "compacted"), bench("B2")], dispatched: ["OP-B2": done])
+
         #expect(!job.stillPrinting(frame))
+    }
+
+    @Test("our own travel op is not a print")
+    func aTravelOpIsNotAPrint() {
+        let trip = op(on: "B2", owner: "P1", kind: OperationKind.travel.rawValue)
+        let frame = ctx([bench("B1", status: "compacted"), bench("B2")], dispatched: ["OP-B2": trip])
+
+        #expect(!job.stillPrinting(frame))
+    }
+
+    // MARK: - The deadline
+
+    /// The engine's one 1800. Every reader aliases onto it, so a wrong value
+    /// here would move every print deadline together and unseen.
+    @Test("the print deadline is the single root its aliases point at")
+    func theDeadlineIsTheOneRoot() {
+        #expect(PrintJob.deadline == 30 * 60)
+        #expect(RelayRun.printDeadline == PrintJob.deadline)
+        #expect(RestockRun.printDeadline == PrintJob.deadline)
     }
 
     // MARK: - The bench
@@ -131,7 +166,7 @@ struct PrintJobTests {
 
     @Test("a pin that cannot take the job hands it to the lowest-coded free bench")
     func substituteIsTheLowestCodedFreeBench() {
-        let queued = printOp(on: "B2", owner: "OTHER")
+        let queued = op(on: "B2", owner: "OTHER")
         let frame = ctx(
             [bench("B1", status: "compacted"), bench("B2"), bench("B7")],
             open: ["B2": queued]
@@ -144,7 +179,7 @@ struct PrintJobTests {
     func allBusyFallsBackToTheLowestCode() {
         let frame = ctx(
             [bench("B1", status: "compacted"), bench("B2"), bench("B7")],
-            open: ["B2": printOp(on: "B2", owner: "OTHER"), "B7": printOp(on: "B7", owner: "OTHER")]
+            open: ["B2": op(on: "B2", owner: "OTHER"), "B7": op(on: "B7", owner: "OTHER")]
         )
 
         #expect(job.bench(frame)?.deviceCode == "B2")

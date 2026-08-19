@@ -28,11 +28,13 @@ struct EventCourierPrintTests {
 
     private func world(
         _ devices: [Device], hosts: Set<String> = [],
-        openOperations: [String: GameModels.Operation] = [:]
+        openOperations: [String: GameModels.Operation] = [:],
+        dispatchedOperations: [String: GameModels.Operation] = [:]
     ) -> WorldSnapshot {
         WorldSnapshot(
             devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, l in l }),
             openOperations: openOperations,
+            dispatchedOperations: dispatchedOperations,
             footprints: [
                 "HUB-1": LocationFootprint(
                     location: "HUB-1", devices: devices.count, resources: 500_000,
@@ -225,6 +227,32 @@ struct EventCourierPrintTests {
             world: world(
                 [EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)],
                 openOperations: openOperations
+            )
+        )
+        #expect(action == .wait)
+    }
+
+    /// The pin refused the job, so the print went to a substitute bench. The
+    /// poll must find it there; watching the pin's own queue would re-decide
+    /// and, with a free bench standing by, order a second courier.
+    @Test("waiting on the clone holds while our print sits on a substitute bench")
+    func awaitingCloneWatchesTheSubstituteBench() {
+        var pin = EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)
+        pin.status = "compacted"
+        let mine = GameModels.Operation(
+            id: "OP-AF2", entityCode: "AF2", kind: OperationKind.print.rawValue,
+            status: .active, source: .poll, startedAt: now, completesAt: nil,
+            lastConfirmedAt: now, detail: .object([:]), directiveID: "c1"
+        )
+        let action = EventCourierPrint().nextAction(
+            directive: directive(step: EventCourierPrint.Step.awaitingClone.rawValue),
+            world: world(
+                [
+                    pin,
+                    EventRunFixtures.device("AF2", type: "autofactory", updatedAt: now),
+                    EventRunFixtures.device("AF3", type: "autofactory", updatedAt: now),
+                ],
+                openOperations: ["AF2": mine], dispatchedOperations: ["OP-AF2": mine]
             )
         )
         #expect(action == .wait)

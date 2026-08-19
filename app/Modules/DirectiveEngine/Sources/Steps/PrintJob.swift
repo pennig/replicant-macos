@@ -50,9 +50,10 @@ struct PrintJob: Equatable, Sendable {
     /// `bench` cannot answer it: the chooser skips a bench carrying an open op,
     /// so it skips the very bench holding our job.
     func stillPrinting(_ ctx: StepContext) -> Bool {
+        // `dispatchedOperations` is already scoped to this directive, legacy
+        // rows with no owner column included, so kind and liveness are the filter.
         let mine = ctx.world.dispatchedOperations.values.contains {
             $0.kind == OperationKind.print.rawValue && $0.status.isOpen
-                && $0.directiveID == ctx.directive.id
         }
         return mine || ctx.ownedOperation(for: ctx.directive.deviceCode) != nil
     }
