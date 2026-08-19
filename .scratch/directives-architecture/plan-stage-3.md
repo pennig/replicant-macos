@@ -196,12 +196,13 @@ Stage 2 was behaviour-preserving by default. Stage 3 is not, and this is the com
 |---|---|---|---|
 | C1 | 6 | `MineFleetPrint` stops waiting for the whole recipe before ordering again; it orders against remaining demand netted by `onOrder` | `MineFleetPrintTests` "three benches carry three types" |
 | C2 | 6 | `RestockRun` stops ordering a duplicate relay when the chooser substitutes a bench (punch-list 255) | `RestockRunTests` "a substituted bench does not buy a second relay" |
-| C3 | 7 | `EventRun` bench capability moves from `deviceType == "autofactory"` to `acceptsPrintJobs && !isCarrierHull` — it gains print-capable vessels and loses any `autofactory` without `enqueue_print` | `EventRunPrintTests` "a print vessel that is not an autofactory is a bench" |
-| C4 | 7 | `EventRun`'s bench-busy guard becomes owner-scoped | `EventRunPrintTests` "a co-tenant's print does not hide a bench" |
-| C5 | 8 | `RelayRun` anchors on the theatre depot rather than `carrier.location` | `RelayRunAcquireTests` "acquire prints at the theatre depot, not where the carrier stands" |
-| C6 | 8 | `RelayRun` prefers a free bench and excludes carrier hulls | `RelayRunAcquireTests` "acquire skips a busy bench and a carrier hull" |
-| C7 | 8 | `RelayRun.acquire` gains an owner-scoped busy guard it has never had | `RelayRunAcquireTests` "acquire does not order twice while its own print is open" |
-| C8 | 9 | `RestockRun` gains a pre-spend fleet-evidence sweep, closing automation-brain ticket 14 | `RestockRunTests` "stale fleet evidence buys a sweep before the spend" |
+| C3 | 4 | `EventRun` bench capability moves from `deviceType == "autofactory"` to `acceptsPrintJobs && !isCarrierHull` — it gains print-capable vessels and loses any `autofactory` without `enqueue_print` | `EventRunPrintTests` "a print vessel that is not an autofactory is a bench" |
+| ~~C4~~ | ~~7~~ | **STRUCK during build.** Claimed `EventRun`'s bench-busy guard becomes owner-scoped. It never was and never became so: the old guard `world.openOperation(for: $0.deviceCode) == nil` and `PrintScheduler.choose`'s `$0.activeJob == nil` are the same any-owner predicate, so the specified test passed against unmodified source. It also contradicts C11, which deliberately stops a mission dispatching onto a bench busy with another run's print. C11 wins. | — |
+| C4' | 4 | `EventRun`'s on-order accounting becomes depot-scoped: the deleted `printsInFlight` read `dispatchedOperations` with no location filter, so a print open at another depot suppressed an order here; `PrintScheduler.onOrder` is depot-scoped | `EventRunPrintTests` "another depot's print does not net here" |
+| C5 | 5 | `RelayRun` anchors on the theatre depot rather than `carrier.location` | `RelayRunAcquireTests` "acquire prints at the theatre depot, not where the carrier stands" |
+| C6 | 5 | `RelayRun` prefers a free bench and excludes carrier hulls | `RelayRunAcquireTests` "acquire skips a busy bench and a carrier hull" |
+| C7 | 5 | `RelayRun.acquire` gains an owner-scoped busy guard it has never had | `RelayRunAcquireTests` "acquire does not order twice while its own print is open" |
+| C8 | 7 | `RestockRun` gains a pre-spend fleet-evidence sweep, closing automation-brain ticket 14 | `RestockRunTests` "stale fleet evidence buys a sweep before the spend" |
 | C9 | 12 | `WorldSnapshot.openOperations` means "the active op per device"; queued ops move to `queuedOperations` | `WorldSnapshotTests` replaces its "one open op per device" case |
 | C10 | 13 | `DeviceDetailView` shows the active job, not the newest open one, and says how many are queued behind it | `DeviceDetailViewTests` (new) |
 

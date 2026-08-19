@@ -1,7 +1,7 @@
 # 37 — `RelayRun.acquire` adopts the scheduler
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 36
 Labels: directives-architecture, stage-3
 
@@ -40,3 +40,35 @@ The second hand-rolled site, and the largest behaviour change in Stage 3.
 **Three pre-existing tests needed rewriting**, all a direct consequence of moving the per-device hub-freshness gate to the depot-wide `PrintJob.fleetEvidenceIsStale` placed last, before the dispatch, per the brief: `RelayRunTests.refreshesAStaleHubRowBeforePrinting` (now `refreshesStaleFleetEvidenceBeforePrinting`), `DirectiveEngineTests.RelayRunEngineTests.aStaleHubRowThenAStaleCensusReachesTheReserveRail`, and `BrainDegradationTests.theReserveRailVetoesThePrintAndTheBrainIdlesInsteadOfThrashing`. The last one is a genuine, favourable behaviour change beyond C5/C6/C7: a persistently short-stock world no longer re-reads the hub device row on every spaced retry, since the fleet-evidence gate sits after the stock veto and is never reached while stock stays short — reads dropped from 3 to 1 over the fifty-virtual-minute run, with the census-read count unaffected.
 
 Borrow count (`grep -c "SalvageRun\.\|RelayRun\.\|RestockRun\.\|MineFleetPrint\.\|HaulRun\.\|EventRun\.\|SurveyRun\.\|MineRun\." *.swift | grep -v ":0$"` in `DirectiveEngine/Sources`), measured after this task's commit: **71** (Brain.swift 31, RelayRun.swift 11, RestockRun.swift 7, EventCourierPrint.swift 5, MineRun.swift 4, BrainReport.swift 3, SalvageRun.swift 2, one each in DirectiveEngine.swift, DirectiveExecutor.swift, EventRun.swift, HaulRun.swift, MineFleetPrint.swift, MineRecipe.swift, SurveyRun.swift, WorldSnapshot.swift) — unchanged from the 71 recorded after ticket 35 (task 4). `hub(near:in:)`'s deletion removed a borrow-free helper, so it does not move this number.
+
+**Built and reviewed 2026-08-19**, subagent-driven, on worktree branch
+`worktree-directives-stage-3` off local `main` at `b7228f1`. **Not merged** — merging is Matt's
+call. Every claim below was checked against the source or the event stream, not taken from a
+subagent's summary.
+
+| Commit | What |
+|---|---|
+| `1ed99fe` | `refactor(directives): RelayRun.acquire prints through PrintScheduler (C5, C6, C7)` |
+| `bea0196` | `fix(directives): RelayRun review round 1 — real C7 fixture, PrintJob idiom, C13` |
+
+C5, C6 and C7 land and `hub(near:in:)` is deleted — it had exactly one caller, inside the
+`acquire` this ticket rewrote. `onRailShort: .stall(.printStockShort)` is preserved: RelayRun
+remains the only site that stalls on a short rail.
+
+**C7 took three attempts to pin, and the first two both passed for the wrong reason.** The
+brief's `acquireDoesNotOrderTwice` was vacuous — a single busy bench is skipped by C6 regardless
+of ownership. The first replacement passed only because it set the carrier's code equal to the
+busy bench's, exploiting `stillPrinting`'s device-scoped disjunct; that cannot happen in
+production, because a RelayRun's `directive.deviceCode` is always the carrier and
+`PrintScheduler.benches` excludes carrier hulls. The third version gives the carrier a code
+distinct from every bench and attributes the print through `dispatchedOperations`, so the
+owner-scoped `mine` disjunct is what does the work. Deleting `mine` alone reddens it and nothing
+else.
+
+**C13 was found here and named.** The mandated reorder puts the fleet-evidence gate after the
+reserve rail, so the hub row stops being re-read whenever the rail already vetoes — a hub-row
+read count of 3 dropping to 1 across a 600-tick regression. No incorrect dispatch results.
+
+`RelayRun` also stopped speaking a sixth idiom: it now gates and picks through
+`PrintJob(depot:).hasBench(ctx)` and `.bench(ctx, for:)` like the other four sites.
+`grep -n "PrintScheduler" Sources/RelayRun.swift` is empty.
