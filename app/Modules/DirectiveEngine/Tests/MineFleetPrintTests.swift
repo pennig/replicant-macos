@@ -161,7 +161,7 @@ struct MineFleetPrintTests {
                 deviceType: MineRecipe.carrierDeviceType, quantity: 1,
                 printTags: [MineRecipe.carrierTag.string]
             ),
-            nextStep: MineFleetPrint.Step.printing.rawValue
+            nextStep: MineFleetPrint.Step.stocking.rawValue
         ))
     }
 
@@ -190,12 +190,13 @@ struct MineFleetPrintTests {
             params: CommandParams(
                 deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]
             ),
-            nextStep: MineFleetPrint.Step.printing.rawValue
+            nextStep: MineFleetPrint.Step.stocking.rawValue
         ))
     }
 
-    /// One print in flight at a time: `CommandClient` supersedes any other open
-    /// op on a device, so a second dispatch orphans the first's operation row.
+    /// One print in flight at a time on a SINGLE-bench depot: with nowhere else
+    /// to fan out to, the busy bench holds the run in `printing` rather than
+    /// dispatching a second job onto it.
     @Test("a print already in flight is never doubled up")
     func openOperationWaits() {
         let snapshot = world(
@@ -203,26 +204,28 @@ struct MineFleetPrintTests {
             openOperations: openPrint(on: "AF1")
         )
 
-        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .wait)
+        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot)
+                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
     }
 
-    /// With the depot's only bench busy — even on a co-tenant's job the
-    /// owner-scoped guard cannot see — there is no free bench to dispatch
-    /// onto, so the run waits rather than superseding it.
-    @Test("a co-tenant's print at the hub waits rather than dispatching onto it")
+    /// With the depot's only bench busy on a co-tenant's job there is no free
+    /// bench to fan out onto, so the run holds in `printing` rather than
+    /// superseding it.
+    @Test("a co-tenant's print at the hub holds rather than dispatching onto it")
     func aCoTenantsPrintWaitsRatherThanDispatching() {
         let snapshot = world(
             devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
             openOperations: openPrint(on: "AF1", directiveID: "OTHER")
         )
 
-        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .wait)
+        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot)
+                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
     }
 
     /// Every bench busy is the system working, not a fault — two hubs, each
-    /// holding another run's print, must wait rather than being treated as
-    /// unreachable.
-    @Test("an all-busy depot waits, it does not stall")
+    /// holding another run's print, hold in `printing` rather than being
+    /// treated as unreachable.
+    @Test("an all-busy depot holds, it does not stall")
     func allBusyWaits() {
         let busy = openPrint(on: "AF1", directiveID: "OTHER")
             .merging(openPrint(on: "AF2", directiveID: "OTHER")) { _, last in last }
@@ -231,7 +234,8 @@ struct MineFleetPrintTests {
             openOperations: busy
         )
 
-        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .wait)
+        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot)
+                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
     }
 
     /// A depot with no print-capable device at all is still a fault: printing
@@ -246,8 +250,8 @@ struct MineFleetPrintTests {
                 == .stall(.unreachableDevice))
     }
 
-    /// Our own print still holds the step — owner-scoping must not make the
-    /// guard against orphaning our own operation row toothless.
+    /// Our own print still holds the step: with the single bench it occupies
+    /// the only bench, so there is nowhere to fan out to either way.
     @Test("our own open print still holds the step")
     func ourOwnPrintStillWaits() {
         let directive = printRun()
@@ -256,7 +260,8 @@ struct MineFleetPrintTests {
             openOperations: openPrint(on: "AF1", directiveID: directive.id)
         )
 
-        #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot) == .wait)
+        #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
     }
 
     /// Nothing polls `LocationFootprint`, so a stale census buys its own read
@@ -368,12 +373,242 @@ struct MineFleetPrintTests {
                 deviceType: MineRecipe.carrierDeviceType, quantity: 1,
                 printTags: [MineRecipe.carrierTag.string]
             ),
-            nextStep: MineFleetPrint.Step.printing.rawValue
+            nextStep: MineFleetPrint.Step.stocking.rawValue
         ))
     }
 
     @Test func stepVocabularyIsFrozen() {
         #expect(MineFleetPrint.Step.allCases.map(\.rawValue) == ["stocking", "printing"])
+    }
+}
+
+// MARK: - Fan-out fixtures
+
+/// Every recipe type except three, so `stocking` always has real demand to net
+/// against `onOrder` across several ticks.
+private func fanOutShortFleet() -> [Device] {
+    let short: Set<String> = ["ami_mining_controller", "mining_drone", "ami_survey_controller"]
+    var out: [Device] = []
+    var n = 0
+    for (type, quantity) in MineRecipe.all where !short.contains(type) {
+        for _ in 0..<quantity {
+            n += 1
+            out.append(mineDevice(
+                "N\(String(format: "%02d", n))", type: type,
+                tags: [MineRecipe.fleetTag.string], location: hubLocation
+            ))
+        }
+    }
+    return out + [carrier()]
+}
+
+/// A print-capable autofactory bench. `printing` mirrors a snapshot's own
+/// `printing` block, matching `PrintSchedulerTests.bench`.
+private func bench(_ code: String, printing: String? = nil) -> Device {
+    var detail: [String: JSONValue] = [:]
+    if let printing { detail["printing"] = .object(["device_type": .string(printing)]) }
+    return Device(
+        deviceCode: code, deviceType: "autofactory", replicantCode: "R1", status: "idle",
+        location: hubLocation, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+        createdAt: Date(timeIntervalSince1970: 0), availableCommands: ["enqueue_print"],
+        features: [], tags: [], detail: .object(detail), updatedAt: now,
+        firstSeenAt: Date(timeIntervalSince1970: 0)
+    )
+}
+
+/// An open print op naming a device type and quantity, so it counts toward
+/// `PrintScheduler.onOrder`.
+private func op(
+    on entity: String, owner: String, deviceType: String, quantity: Int? = nil
+) -> GameModels.Operation {
+    var params: [String: JSONValue] = ["device_type": .string(deviceType)]
+    if let quantity { params["quantity"] = .number(Double(quantity)) }
+    return GameModels.Operation(
+        id: "OP-\(entity)", entityCode: entity, kind: OperationKind.print.rawValue,
+        status: .active, source: .poll, startedAt: now, completesAt: nil,
+        lastConfirmedAt: now, detail: .object(["params": .object(params)]), directiveID: owner
+    )
+}
+
+/// `benches` at the hub alongside a fixed fan-out shortfall, so every fan-out
+/// test always has real demand behind it.
+private func snapshot(
+    _ benches: [Device], open: [String: GameModels.Operation] = [:]
+) -> WorldSnapshot {
+    world(devices: fanOutShortFleet() + benches, openOperations: open)
+}
+
+private func row(startedAgo interval: TimeInterval = 60) -> Directive {
+    printRun(hub: "B1", stepStartedAt: now.addingTimeInterval(-interval))
+}
+
+@Suite("MineFleetPrint — the print-only fan-out (C1)")
+struct MineFleetPrintFanOutTests {
+
+    /// The Stage 3 acceptance criterion. Three autofactories, a shortfall of at
+    /// least three types, and three prints in flight after three evaluations —
+    /// one per tick, because `MissionAction.dispatch` carries one command.
+    @Test("three benches carry three types")
+    func threeBenchesCarryThreeTypes() {
+        var world = snapshot([bench("B1"), bench("B2"), bench("B3")])
+        var directive = row()
+        var open: [String: GameModels.Operation] = [:]
+        var dispatched: [String] = []
+
+        for _ in 0..<3 {
+            guard case let .dispatch(_, deviceCode, params, next) =
+                MineFleetPrint().nextAction(directive: directive, world: world)
+            else { return #expect(Bool(false), "expected a dispatch") }
+            dispatched.append(deviceCode)
+            open[deviceCode] = op(
+                on: deviceCode, owner: directive.id,
+                deviceType: params.deviceType!, quantity: params.quantity
+            )
+            world = snapshot([bench("B1"), bench("B2"), bench("B3")], open: open)
+            directive.step = next
+            // The executor re-stamps on advanceStep; the fan-out must not depend
+            // on the stamp, so hold it still.
+        }
+
+        #expect(Set(dispatched) == ["B1", "B2", "B3"])
+        #expect(Set(open.values.compactMap(\.printedDeviceType)).count == 3)
+    }
+
+    /// "With one autofactory, behaviour equals today's." A single bench still
+    /// orders one job at a time and waits for it — the fan-out must not turn
+    /// into a queue of orders nobody can serve.
+    @Test("one bench orders one job and then waits")
+    func oneBenchOrdersOneJob() {
+        var world = snapshot([bench("B1")])
+        let directive = row()
+
+        guard case let .dispatch(_, deviceCode, params, _) =
+            MineFleetPrint().nextAction(directive: directive, world: world)
+        else { return #expect(Bool(false), "expected a dispatch") }
+
+        world = snapshot(
+            [bench("B1", printing: params.deviceType)],
+            open: ["B1": op(on: deviceCode, owner: directive.id,
+                            deviceType: params.deviceType!, quantity: params.quantity)]
+        )
+
+        #expect(MineFleetPrint().nextAction(directive: directive, world: world)
+                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
+    }
+
+    /// "A co-tenant's job never blocks or extends another run's deadline."
+    /// Two runs, one depot, two benches: each gets one and neither waits on
+    /// the other, and neither run's step clock is touched by the other's job.
+    @Test("a co-tenant's print neither blocks nor extends this run")
+    func coTenantNeitherBlocksNorExtends() {
+        let theirs = op(on: "B1", owner: "OTHER", deviceType: "mining_drone")
+        let world = snapshot(
+            [bench("B1", printing: "mining_drone"), bench("B2")], open: ["B1": theirs]
+        )
+
+        guard case let .dispatch(_, deviceCode, _, _) =
+            MineFleetPrint().nextAction(directive: row(startedAgo: 60), world: world)
+        else { return #expect(Bool(false), "expected a dispatch") }
+        #expect(deviceCode == "B2")
+
+        // And the co-tenant's job does not push this run past its own deadline:
+        // the deadline is measured from OUR step stamp, never from the bench.
+        let past = row(startedAgo: PrintJob.deadline + 1)
+        #expect(MineFleetPrint().nextAction(directive: past, world: world) != .wait)
+    }
+
+    /// **Ruling 3.** Our own print sits open on B1, demand covered; B2 stands
+    /// free. `choose` cannot see ownership, so only `onOrder` netting stops a
+    /// second order — see the task report for the `.done` finding.
+    @Test("this run's own print on one bench draws no second once demand is covered")
+    func ownPrintCoveringDemandDrawsNoSecondBench() {
+        let directive = printRun()
+        let mine = op(on: "AF1", owner: directive.id, deviceType: "mining_drone", quantity: 3)
+        let snapshot = world(
+            devices: printedFleet(omitting: "mining_drone") + [hub(), hub("AF2"), carrier()],
+            openOperations: ["AF1": mine]
+        )
+
+        let action = MineFleetPrint().nextAction(directive: directive, world: snapshot)
+        #expect(action != .dispatch(
+            kind: .print, deviceCode: "AF2",
+            params: CommandParams(deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]),
+            nextStep: MineFleetPrint.Step.stocking.rawValue
+        ), "the over-print bug this stage exists to fix")
+        #expect(action == .done)
+    }
+}
+
+// MARK: - Two runs sharing one depot, through the engine
+
+/// Ticket 18's co-tenant criterion, proved through the real engine: unlike the
+/// unit table above, this exercises `WorldSnapshot.read` and the operations
+/// table fresh between the two evaluations.
+@Suite("MineFleetPrint — two runs at one depot, through the engine")
+struct MineFleetPrintCoTenancyEngineTests {
+
+    /// Two `mineFleetPrint` rows, two benches, one evaluation each: each lands
+    /// its own op on its own bench and neither is superseded.
+    @Test func twoRunsAtOneDepotEachKeepTheirOwnOp() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { printRun(hub: "AF1") }.execute(db)
+            try Directive.insert {
+                Directive(
+                    id: "P2", kind: .mineFleetPrint, status: .running, deviceCode: "AF1",
+                    controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag.string,
+                    sourceRelayCode: nil, targets: [], targetIndex: 0,
+                    step: MineFleetPrint.Step.stocking.rawValue,
+                    stepStartedAt: now.addingTimeInterval(-60),
+                    returnToOrigin: false, originDesignation: hubSystem, attentionReason: nil,
+                    createdAt: now.addingTimeInterval(-600), updatedAt: now
+                )
+            }.execute(db)
+            for row in printedFleet(omitting: "mining_drone") + [hub(), hub("AF2"), carrier()] {
+                try Device.upsert { row }.execute(db)
+            }
+            try LocationFootprint.upsert {
+                LocationFootprint(
+                    location: hubLocation, devices: 3,
+                    resources: BrainCeiling.aggregateSpendFloor * 2,
+                    resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
+                )
+            }.execute(db)
+        }
+        let opCounter = LockIsolated(0)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatchOwned = { kind, deviceCode, _, owner in
+                let n = opCounter.withValue { $0 += 1; return $0 }
+                try? await database.write { db in
+                    try GameModels.Operation.insert {
+                        GameModels.Operation(
+                            id: "OP-\(n)", entityCode: deviceCode, kind: kind.rawValue,
+                            status: .active, source: .optimistic, startedAt: now,
+                            completesAt: nil, lastConfirmedAt: now, detail: .object([:]),
+                            directiveID: owner?.directiveID, step: owner?.step
+                        )
+                    }.execute(db)
+                }
+                return .dispatched(.accepted(operationID: "OP-\(n)"))
+            }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [MineFleetPrint()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "P1")
+            await core.evaluateOnce(directiveID: "P2")
+        }
+
+        let ops = try await database.read { db in try GameModels.Operation.all.fetchAll(db) }
+        #expect(Set(ops.map(\.entityCode)) == ["AF1", "AF2"])
+        #expect(ops.allSatisfy { $0.status != .superseded })
+        let p1 = try await database.read { db in try Directive.where { $0.id.eq("P1") }.fetchOne(db) }
+        let p2 = try await database.read { db in try Directive.where { $0.id.eq("P2") }.fetchOne(db) }
+        #expect(p1?.attentionReason == nil)
+        #expect(p2?.attentionReason == nil)
     }
 }
 
@@ -421,12 +656,13 @@ struct MineFleetPrintFreshEvidenceTests {
                 deviceType: "ami_transport_controller", quantity: 1,
                 printTags: [MineRecipe.fleetTag.string]
             ),
-            nextStep: MineFleetPrint.Step.printing.rawValue
+            nextStep: MineFleetPrint.Step.stocking.rawValue
         ))
     }
 
     /// Nothing is decided while the job runs, so the read is not bought there —
-    /// the evidence that matters is the evidence AFTER the op closes.
+    /// the evidence that matters is the evidence AFTER the op closes. The single
+    /// busy bench leaves nowhere to fan out, so the run holds in `printing`.
     @Test("an open print op is waited out without buying the sweep")
     func anOpenOpSpendsNoRead() {
         let stale = now.addingTimeInterval(-rowLag)
@@ -437,7 +673,8 @@ struct MineFleetPrintFreshEvidenceTests {
         )
         let directive = printRun(stepStartedAt: now.addingTimeInterval(-5))
 
-        #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot) == .wait)
+        #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
     }
 
     /// A veto path spends nothing either: the sweep sits at the last moment before
@@ -587,7 +824,7 @@ struct MineFleetPrintEngineTests {
         let row = try #require(
             await database.read { db in try Directive.where { $0.id.eq("P1") }.fetchOne(db) }
         )
-        #expect(row.step == MineFleetPrint.Step.printing.rawValue)
+        #expect(row.step == MineFleetPrint.Step.stocking.rawValue)
         #expect(row.status == .running)
     }
 

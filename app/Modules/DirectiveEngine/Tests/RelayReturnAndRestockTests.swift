@@ -342,7 +342,7 @@ struct RestockRunTests {
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .dispatch(
             kind: .print, deviceCode: "AF1",
             params: CommandParams(deviceType: RelayRun.relayDeviceType),
-            nextStep: RestockRun.Step.printing.rawValue
+            nextStep: RestockRun.Step.stocking.rawValue
         ))
     }
 
@@ -395,10 +395,9 @@ struct RestockRunTests {
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
     }
 
-    /// **One print in flight at a time, and this is a correctness guard rather
-    /// than a throttle.** `CommandClient` supersedes any other open op on a
-    /// device, so a second dispatch would silently orphan the first's operation
-    /// row — the failure that stranded two Relay Runs on 2026-08-04.
+    /// One print in flight at a time: `CommandClient` supersedes any other open
+    /// op on a device, so a second dispatch would orphan the first's row. With
+    /// a single hub there is nowhere to fan out to, so the run holds in `printing`.
     @Test("a print already in flight is never doubled up")
     func neverPrintsWithOneInFlight() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
@@ -407,7 +406,8 @@ struct RestockRunTests {
             openOperations: openOp("AF1", kind: .print)
         )
 
-        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: RestockRun.Step.printing.rawValue))
     }
 
     /// The reserve floor is the same rail `RelayRun` arms, read through the same
@@ -482,7 +482,8 @@ struct RestockRunTests {
                 "\(label) must not buy a census read")
     }
 
-    /// …and neither does a run whose print is already in flight.
+    /// …and neither does a run whose print is already in flight: the busy bench
+    /// turns it away before the rail is ever consulted.
     @Test("a stale census costs nothing while a print is already running")
     func staleCensusCostsNothingWithAPrintInFlight() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
@@ -493,7 +494,8 @@ struct RestockRunTests {
             footprints: healthyCensus(fetchedAt: stale)
         )
 
-        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: RestockRun.Step.printing.rawValue))
     }
 
     /// A refresh that SUCCEEDS but still does not list the hub is positive
@@ -512,29 +514,31 @@ struct RestockRunTests {
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
     }
 
-    /// **Every declining branch is `.wait`, never `.stall`.** Demand met, cap
-    /// reached, print in flight, reserve short, census stale — none of those
-    /// need an operator, and `brain-robustness-bar` clause 6 is explicit that
-    /// idle-calm must not be dressed up as a halt. Asserted as a sweep so a new
-    /// declining branch added later cannot quietly escalate.
+    /// **No declining branch is ever `.stall`.** Demand met, cap reached, print
+    /// in flight, reserve short, census stale — none of those need an operator,
+    /// and `brain-robustness-bar` clause 6 is explicit that idle-calm must not
+    /// be dressed up as a halt. Asserted as a sweep so a new declining branch
+    /// added later cannot quietly escalate.
     @Test("no ordinary refusal ever escalates")
     func refusalsNeverEscalate() {
         let inFlight = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
             openOperations: openOp("AF1", kind: .print)
         )
-        let cases: [(String, Directive, WorldSnapshot)] = [
-            ("demand met", restockRun(targets: []), world(devices: [hub(), liveRelay("REL0", at: hubLocation)])),
+        let cases: [(String, Directive, WorldSnapshot, MissionAction)] = [
+            ("demand met", restockRun(targets: []),
+             world(devices: [hub(), liveRelay("REL0", at: hubLocation)]), .wait),
             ("pool full", restockRun(targets: ["VEGA"]),
-             world(devices: [hub(), liveRelay("REL0", at: hubLocation), spare("RLY1")])),
-            ("print in flight", restockRun(targets: ["VEGA"]), inFlight),
+             world(devices: [hub(), liveRelay("REL0", at: hubLocation), spare("RLY1")]), .wait),
+            ("print in flight", restockRun(targets: ["VEGA"]), inFlight,
+             .advanceStep(nextStep: RestockRun.Step.printing.rawValue)),
             ("reserve short", restockRun(targets: ["VEGA"]),
-             world(devices: [hub(), liveRelay("REL0", at: hubLocation)], footprints: census(1))),
+             world(devices: [hub(), liveRelay("REL0", at: hubLocation)], footprints: census(1)), .wait),
         ]
 
-        for (label, directive, snapshot) in cases {
+        for (label, directive, snapshot, expected) in cases {
             let action = RestockRun().nextAction(directive: directive, world: snapshot)
-            #expect(action == .wait, "\(label) must wait")
+            #expect(action == expected, "\(label) must not escalate")
             if case .stall = action { Issue.record("\(label) escalated to a human") }
         }
     }
@@ -590,10 +594,10 @@ struct RestockRunTests {
                 == .advanceStep(nextStep: RestockRun.Step.stocking.rawValue))
     }
 
-    /// With the depot's only bench busy — even on a co-tenant's job the
-    /// owner-scoped guard cannot see — there is no free bench to dispatch
-    /// onto, so the run waits rather than superseding it.
-    @Test("a co-tenant's print at the hub waits rather than dispatching onto it")
+    /// With the depot's only bench busy on a co-tenant's job there is no free
+    /// bench to fan out onto, so the run holds in `printing` rather than
+    /// superseding it.
+    @Test("a co-tenant's print at the hub holds rather than dispatching onto it")
     func coTenantPrintWaitsRatherThanDispatching() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let snapshot = world(
@@ -601,13 +605,14 @@ struct RestockRunTests {
             openOperations: openOp("AF1", kind: .print, directiveID: "OTHER")
         )
 
-        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: RestockRun.Step.printing.rawValue))
     }
 
     /// Every bench busy is the system working, not a fault — two hubs, each
-    /// holding another run's print, must wait rather than being treated as
-    /// unreachable.
-    @Test("an all-busy depot waits, it does not stall")
+    /// holding another run's print, hold in `printing` rather than being
+    /// treated as unreachable.
+    @Test("an all-busy depot holds, it does not stall")
     func allBusyWaits() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let busy = openOp("AF1", kind: .print, directiveID: "OTHER")
@@ -617,7 +622,8 @@ struct RestockRunTests {
             openOperations: busy
         )
 
-        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot)
+                == .advanceStep(nextStep: RestockRun.Step.printing.rawValue))
     }
 
     /// A depot with no print-capable device at all is still a fault: printing
@@ -798,7 +804,7 @@ struct RestockEngineTests {
         let row = try #require(
             await database.read { db in try Directive.where { $0.id.eq("R1") }.fetchOne(db) }
         )
-        #expect(row.step == RestockRun.Step.printing.rawValue)
+        #expect(row.step == RestockRun.Step.stocking.rawValue)
         #expect(row.attentionReason == nil)
     }
 

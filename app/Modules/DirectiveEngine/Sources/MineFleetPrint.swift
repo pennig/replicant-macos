@@ -72,11 +72,15 @@ public struct MineFleetPrint: MissionStepMachine {
         MineRecipe.all.map(\.deviceType) + [MineRecipe.carrierDeviceType]
     }
 
-    /// Start one print at `depot`, or decline. Short stock idles against a hub
-    /// buffer that refills from salvage; a busy bench waits rather than stalling,
-    /// since `nextAction` already proved `depot` has a printer to wait on.
+    /// Start one print per missing type, netted against `PrintScheduler.onOrder`
+    /// first so a type already ordered elsewhere is never ordered twice. A busy
+    /// bench holds via `printing` rather than stalling.
     private func stocking(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
-        let missing = Self.remaining(at: depot, in: world)
+        var missing = Self.remaining(at: depot, in: world)
+        for (type, onOrder) in PrintScheduler.onOrder(for: directive.id, at: depot, in: world) {
+            guard let count = missing[type] else { continue }
+            missing[type] = count > onOrder ? count - onOrder : nil
+        }
         if missing.isEmpty { return .done }
 
         guard let type = Self.jobOrder.first(where: { missing[$0] != nil }),
@@ -84,9 +88,10 @@ public struct MineFleetPrint: MissionStepMachine {
         else { return .wait }
         let tag = type == MineRecipe.carrierDeviceType ? MineRecipe.carrierTag : MineRecipe.fleetTag
 
-        let ctx = StepContext(directive: directive, world: world, step: directive.step)
-        let order = PrintOrder(deviceType: type, quantity: quantity, tags: [tag], owner: directive.id)
-        guard let bench = PrintJob(depot: depot).bench(ctx, for: order) else { return .wait }
+        let job = PrintOrder(deviceType: type, quantity: quantity, tags: [tag], owner: directive.id)
+        guard let chosen = PrintScheduler.choose(job, at: depot, in: world) else {
+            return .advanceStep(nextStep: Step.printing.rawValue)
+        }
 
         // The rail, held once in `PrintRail` so no print site can drift from it.
         // Nothing polls `LocationFootprint`, so a stale census buys its own read.
@@ -110,17 +115,17 @@ public struct MineFleetPrint: MissionStepMachine {
             """
         )
         return .dispatch(
-            kind: .print, deviceCode: bench.device.deviceCode,
+            kind: .print, deviceCode: chosen.device.deviceCode,
             params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag.string]),
-            nextStep: Step.printing.rawValue
+            nextStep: Step.stocking.rawValue
         )
     }
 
-    // MARK: - Waiting on the clones
+    // MARK: - Holding the deadline
 
-    /// Wait for the printed rows to appear at `depot`. A multi-quantity job may
-    /// settle one op per clone, so only a full fleet or the deadline hands back
-    /// to `stocking` — an op-close proves nothing about the rows.
+    /// The fan-out happens in `stocking`, which re-enters itself; this step
+    /// exists only to hold a deadline while a busy bench or a landing clone
+    /// leaves nothing else to decide.
     private func printing(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
         if Self.remaining(at: depot, in: world).isEmpty {
             return .advanceStep(nextStep: Step.stocking.rawValue)

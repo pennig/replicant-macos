@@ -74,17 +74,19 @@ public struct RestockRun: MissionStepMachine {
 
     // MARK: - Deciding
 
-    /// Print one relay at `depot`, or wait. Every declining branch is a
-    /// `.wait`, never a `.stall` — demand met, cap reached, a busy bench, or
-    /// the reserve short are all the system working, not a fault.
+    /// Print one relay at `depot`, or decline. Demand nets `idle` against what
+    /// is already `onOrder`, so a bench substitution never buys a second relay.
+    /// A busy bench holds via `printing` rather than stalling.
     private func stocking(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
         let idle = RelayRun.idleRelays(at: depot, in: world).count
+        let onOrder = PrintScheduler.onOrder(for: directive.id, at: depot, in: world)[RelayRun.relayDeviceType] ?? 0
         let desired = Self.desiredIdle(for: directive)
-        guard idle < desired else { return .wait }
+        guard idle + onOrder < desired else { return .wait }
 
-        let ctx = StepContext(directive: directive, world: world, step: directive.step)
         let order = PrintOrder(deviceType: RelayRun.relayDeviceType, owner: directive.id)
-        guard let hub = PrintJob(depot: depot).bench(ctx, for: order) else { return .wait }
+        guard let hub = PrintScheduler.choose(order, at: depot, in: world) else {
+            return .advanceStep(nextStep: Step.printing.rawValue)
+        }
 
         // The rail, held once in `PrintRail` so no print site can drift from it.
         //
@@ -117,7 +119,7 @@ public struct RestockRun: MissionStepMachine {
         return .dispatch(
             kind: .print, deviceCode: hub.device.deviceCode,
             params: CommandParams(deviceType: RelayRun.relayDeviceType),
-            nextStep: Step.printing.rawValue
+            nextStep: Step.stocking.rawValue
         )
     }
 
@@ -134,21 +136,17 @@ public struct RestockRun: MissionStepMachine {
         min(idleCap, directive.targets.count)
     }
 
-    // MARK: - Waiting on the clone
+    // MARK: - Holding the deadline
 
-    /// Wait for a printed relay to reach `world`'s idle pool, then hand back to
-    /// `stocking`. Doesn't care WHICH relay arrived, unlike `RelayRun.printing`
-    /// — any relay topping the pool up survives a superseded print op.
+    /// The fan-out happens in `stocking`, which re-enters itself; this step
+    /// exists only to hold a deadline while a busy bench or a landing clone
+    /// leaves nothing else to decide.
     private func printing(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
         if RelayRun.idleRelays(at: depot, in: world).count >= Self.desiredIdle(for: directive) {
             return .advanceStep(nextStep: Step.stocking.rawValue)
         }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > PrintJob.deadline {
-            logger.notice("restock \(directive.id, privacy: .public): print produced no relay within the deadline — re-deciding")
-            return .advanceStep(nextStep: Step.stocking.rawValue)
-        }
-        let ctx = StepContext(directive: directive, world: world, step: directive.step)
-        if PrintJob(depot: depot).stillPrinting(ctx) { return .wait }
+        if world.now.timeIntervalSince(directive.stepStartedAt) <= PrintJob.deadline { return .wait }
+        logger.notice("restock \(directive.id, privacy: .public): print produced no relay within the deadline — re-deciding")
         return .advanceStep(nextStep: Step.stocking.rawValue)
     }
 
