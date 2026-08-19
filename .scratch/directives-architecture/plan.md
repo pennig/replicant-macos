@@ -82,6 +82,26 @@ Stage 2 — step library (produced by ticket 17; the code lives in `plan-stage-2
 | 31 | `StowOrAttach` over families A and B | 27 |
 | 32 | Constants come home; the borrow count is measured | 26, 28, 29, 30, 31 |
 
+Stage 3 — print scheduler (produced by ticket 18; the code lives in `plan-stage-3.md`, one task per ticket). Two phases: **A delivers goal A and changes no schema; B adds queue depth and carries the one migration.** Phase B does not start until Checkpoint E has been run.
+
+| # | Ticket | Blocked by | Phase |
+|---|---|---|---|
+| 33 | `Bench`, `PrintOrder`, `PrintScheduler.benches` | — | A |
+| 34 | `PrintScheduler.choose` and `onOrder` | 33 | A |
+| 35 | `PrintJob` delegates; a busy depot waits | 34 | A |
+| 36 | `EventRun.printing` adopts the scheduler | 35 | A |
+| 37 | `RelayRun.acquire` adopts the scheduler | 36 | A |
+| 38 | The print-only missions fan out (**acceptance test**) | 37 | A |
+| 39 | `RestockRun` scales its cap and sweeps before it spends | 38 | A |
+| 40 | The Print Queue names the owning run | 39 | A |
+| 41 | `WorldSnapshot.queuedOperations` | 40 | B |
+| 42 | Relax the index; stop the supersede eating siblings | 41 | B |
+| 43 | A completion closes the op it names, or the oldest | 42 | B |
+| 44 | `openOperations` means the active op | 43 | B |
+| 45 | The device inspector stops lying about a busy bench | 44 | B |
+| 46 | The scheduler queues behind a busy bench | 45 | B |
+| 47 | The governor, the doc comments, and the measurement | 46 | B |
+
 ## File structure
 
 **New files (Stages 0–1)**
