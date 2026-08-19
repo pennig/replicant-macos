@@ -27,3 +27,22 @@ Carrier-addressed containment: one command per round for the loading verbs, one 
 - [x] **Step 4:** `swift test --filter DirectiveEngineTests`; `check-comments.sh`; commit.
 
 **Done when:** six sites migrated, the twelve excluded sites recorded with their reasons, and the target green unedited.
+
+## Comments
+
+Resolved by `7abce1f` on `worktree-directives-stage-2-tail`. Six sites migrated:
+`EventRun.swift:430`, `:573`, `:731`; `MineRun.swift:314`, `:396`, `:440`. Twelve excluded sites
+re-pinned with reasons in `.superpowers/sdd/plan-stage-2/task-12-report.md` §5 — family C is
+`RelayRun.swift:691`, family D is `EventRun.swift:444`, `:589`, `:712`, `:803`, and family E's seven
+occupy five shipped dispatch sites (`RelayRun.swift:814`, `Steps/BotPhase.swift:116` and `:214`,
+`SurveyRun.swift:552`, `SalvageRun.swift:537`) because `BotPhase` already merged the two mission pairs.
+
+Two departures from the plan's code block, both ruled by the controller before the work started:
+batch-ness is the constructor parameter `sendsWholeList` rather than `Verb.isBatch` (the plan's rule
+sends one device where `MineRun.adopt` sends the whole pending list), and `MineRun.adopt` builds one
+`StowOrAttach` per `Adoption` because its carrier is not fixed. `placed(_:)` was not shipped — no
+in-scope call site can use it, since the confirm halves do not migrate.
+
+`DirectiveEngineTests` 1768/1768/0 (from a 1756 baseline: 9 new cases, 1 new suite, 2 added
+regression tests for guards that were provably uncovered). `GameServicesTests`, `GameSyncTests`,
+`GameModelsTests`, `DirectivesFeatureTests` all exit 0. No existing assertion edited.
