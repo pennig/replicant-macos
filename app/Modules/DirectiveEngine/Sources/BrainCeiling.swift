@@ -92,12 +92,12 @@ public enum BrainCeiling {
         }.min() ?? 0
     }
 
-    /// The single number `RelayRun` arms `reserveFloor: Int?` with: the TOTAL
+    /// The single number the print rail arms `reserveFloor: Int?` with: the TOTAL
     /// hub reading at which `referenceHubStock`'s binding type sits exactly at
     /// its own floor, rounded UP. It is the only shape `LocationFootprint` can
     /// be checked against, that row carrying one total holdings count and no
     /// per-type breakdown; once the per-type stockpile record lands
-    /// (brain-resource-hub-model), `RelayRun.printStockIsShort` calls
+    /// (brain-resource-hub-model), `PrintRail.printStockIsShort` calls
     /// `printPermitted(hubStock:)` directly and this retires.
     ///
     /// **Never redefine this as `reserveFloors.values.reduce(0, +)`.** The bill

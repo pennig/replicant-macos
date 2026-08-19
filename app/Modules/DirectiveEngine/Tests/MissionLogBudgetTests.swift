@@ -69,17 +69,6 @@ struct MissionLogBudgetTests {
         #expect(lastDispatch(log) == .dispatched(kind: "attach", deviceCode: "M07"))
     }
 
-    /// A row written before the migration carries the fact only in the prose,
-    /// so the fallback is the only thing that can answer. Delete it and this
-    /// reads `.nothingSent`. Stage 2 deletes both.
-    @Test func lastDispatchFallsBackToTheSummaryForALegacyRow() {
-        let log = [
-            stepEntry(dispatchStep, at: now.addingTimeInterval(-30)),
-            legacyDispatch(summary: "Dispatched travel to V9 — SOL", at: now.addingTimeInterval(-20)),
-        ]
-        #expect(lastDispatch(log) == .dispatched(kind: "travel", deviceCode: "V9"))
-    }
-
     /// A legacy row whose prose does not parse either names no order at all —
     /// the dispatch step is then the only step that can make progress.
     @Test func anUnparseableLegacyRowNamesNoOrder() {
@@ -127,20 +116,19 @@ struct MissionLogBudgetTests {
         #expect(counted == 2)
     }
 
-    /// Legacy rows carry the verb only in the prose, so the fallback is the
-    /// only thing that can count them. Delete it and this reads 0. Stage 2
-    /// deletes both.
-    @Test func dispatchRoundsCountsLegacyRowsFromTheSummary() {
+    /// A row written before the columns existed names no order at all. The
+    /// columns are the record; there is no prose to fall back to.
+    @Test("an untyped row counts for nothing")
+    func anUntypedRowCountsForNothing() {
         let log = [
-            stepEntry(dispatchStep, at: now.addingTimeInterval(-60)),
-            legacyDispatch(summary: "Dispatched travel to V1 — SOL", at: now.addingTimeInterval(-50)),
-            legacyDispatch(summary: "Dispatched travel to V2 — SOL", at: now.addingTimeInterval(-40)),
-            legacyDispatch(summary: "Dispatched attach to V3", at: now.addingTimeInterval(-30)),
+            stepEntry(dispatchStep, at: now.addingTimeInterval(-300)),
+            legacyDispatch(summary: "Dispatched attach to C1", at: now.addingTimeInterval(-240)),
+            stepEntry(confirmStep, at: now.addingTimeInterval(-180)),
         ]
-        let counted = MissionLogBudget.dispatchRounds(
-            world(log), dispatch: dispatchStep, confirm: confirmStep, kind: .travel
-        )
-        #expect(counted == 2)
+        #expect(lastDispatch(log) == .nothingSent)
+        #expect(MissionLogBudget.dispatchRounds(
+            world(log), dispatch: dispatchStep, confirm: confirmStep, kind: .attach
+        ) == 0)
     }
 
     /// The count is the CURRENT run's: an entry from before the loop was

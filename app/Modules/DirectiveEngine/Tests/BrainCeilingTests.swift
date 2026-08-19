@@ -170,7 +170,7 @@ struct BrainCeilingTests {
 /// The why-view's reserve-floor readout mirrors the rail it reports on.
 ///
 /// `BrainLimits.hubStockStanding(at:)` (the why-view's four-state verdict) and
-/// `RelayRun.printStockIsShort(at:_:)` (the actual veto) cannot share an
+/// `PrintRail.printStockIsShort(at:_:)` (the actual veto) cannot share an
 /// implementation — they read different shapes, a single figure on a report
 /// versus a footprint table on a `WorldSnapshot`. So the next best thing is a
 /// test that fails the moment the two disagree.
@@ -218,7 +218,7 @@ struct HubStockStandingTests {
             3600,
         ]
         let stocks: [Int?] = [nil, 0, Self.floor - 1, Self.floor, Self.floor + 1, 500_000]
-        let run = RelayRun()
+        let run = PrintRail()
 
         for stock in stocks {
             for age in ages {

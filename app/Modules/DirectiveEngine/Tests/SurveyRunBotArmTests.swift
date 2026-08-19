@@ -171,7 +171,7 @@ import Utils
         var steps = [SurveyRun.Step.confirmingBotDeploy.rawValue]
         var step = SurveyRun.Step.armingBots.rawValue
         var action = MissionAction.wait
-        for _ in 0..<(4 * SurveyRun.botDispatchRounds) {
+        for _ in 0..<(4 * BotPhase.dispatchRounds) {
             steps.append(step)
             let w = repairWorld(devices: [vessel, bot], log: repairStepLog(steps))
             let d = repairDirective(

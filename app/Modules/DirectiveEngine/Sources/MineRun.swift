@@ -47,7 +47,7 @@ public struct MineRun: MissionStepMachine {
 
     /// Shared with the Salvage Run so the two cannot disagree about how long a
     /// carrier row may lag the arrival it reflects.
-    public static let arrivalConfirmDeadline = SalvageRun.arrivalConfirmDeadline
+    public static let arrivalConfirmDeadline = TravelTo.arrivalConfirmDeadline
 
     /// How many rows ride the carrier.
     public static let carriedTotal = MineRecipe.carried.reduce(0) { $0 + $1.quantity }
@@ -310,17 +310,21 @@ public struct MineRun: MissionStepMachine {
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
         let roster = Self.roster(of: directive, in: world)
-        let loose = roster.filter { $0.attachedToDeviceCode != carrier.deviceCode }
-        guard let next = loose.first else {
-            guard roster.count == Self.carriedTotal else {
-                return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
-            }
-            return .advanceStep(nextStep: Step.travelling.rawValue)
-        }
-        return .dispatch(
-            kind: .attach, deviceCode: carrier.deviceCode,
-            params: CommandParams(devices: [next.deviceCode]), nextStep: Step.confirmingAttach.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let job = StowOrAttach(
+            carrierCode: carrier.deviceCode, deviceCodes: roster.map(\.deviceCode),
+            verb: .attach, confirmField: .attachedTo,
+            confirmStep: Step.confirmingAttach.rawValue, sendsWholeList: false
         )
+        switch job.next(ctx) {
+        case let .action(action): return action
+        case .noSubject: return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        case .finished, .more: break
+        }
+        guard roster.count == Self.carriedTotal else {
+            return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        }
+        return .advanceStep(nextStep: Step.travelling.rawValue)
     }
 
     /// Judge the attach just ordered, looping back for the next member.
@@ -337,10 +341,12 @@ public struct MineRun: MissionStepMachine {
             world, dispatch: Step.attaching.rawValue, confirm: Step.confirmingAttach.rawValue
         )
         if roster.count - loose.count >= rounds { return .advanceStep(nextStep: Step.attaching.rawValue) }
-        return MissionConfirm.ladder(
-            [next], directive, world,
-            deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.attachConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict([next], ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Fly the loaded carrier to the belt.
@@ -348,14 +354,16 @@ public struct MineRun: MissionStepMachine {
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
         guard let belt = Self.targetBelt(of: directive) else { return .stall(.unreachableDevice) }
-        if carrier.location == belt { return .advanceStep(nextStep: Step.detaching.rawValue) }
-        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        // The equality check above misreads a row still lagging an arrival.
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: belt), nextStep: Step.confirmingArrival.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let leg = TravelTo(
+            deviceCode: carrier.deviceCode, destination: belt,
+            arrivalTest: .exactLocation, confirmStep: Step.confirmingArrival.rawValue
         )
+        return switch leg.next(ctx) {
+        case let .action(action): action
+        case .finished: .advanceStep(nextStep: Step.detaching.rawValue)
+        case .more, .noSubject: .stall(.unreachableDevice)
+        }
     }
 
     /// Judge the flight: the carrier's own row, read since the travel was
@@ -368,10 +376,14 @@ public struct MineRun: MissionStepMachine {
             return .advanceStep(nextStep: Step.detaching.rawValue)
         }
         if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        return MissionConfirm.ladder(
-            [carrier], directive, world,
-            deadline: Self.arrivalConfirmDeadline, thenStall: .vesselPositionUnconfirmed
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(
+            deadline: Self.arrivalConfirmDeadline, onExpiry: .readThenStall(.vesselPositionUnconfirmed)
         )
+        return switch ladder.verdict([carrier], ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Set the whole fleet down in one command: `detach` takes every code at once.
@@ -380,11 +392,17 @@ public struct MineRun: MissionStepMachine {
     ) -> MissionAction {
         let aboard = Self.roster(of: directive, in: world)
             .filter { $0.attachedToDeviceCode == carrier.deviceCode }
-        guard !aboard.isEmpty else { return .advanceStep(nextStep: Step.adopting.rawValue) }
-        return .dispatch(
-            kind: .detach, deviceCode: carrier.deviceCode,
-            params: CommandParams(devices: aboard.map(\.deviceCode)), nextStep: Step.confirmingDetach.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let job = StowOrAttach(
+            carrierCode: carrier.deviceCode, deviceCodes: aboard.map(\.deviceCode),
+            verb: .detach, confirmField: .loose,
+            confirmStep: Step.confirmingDetach.rawValue, sendsWholeList: true
         )
+        return switch job.next(ctx) {
+        case let .action(action): action
+        case .finished, .more: .advanceStep(nextStep: Step.adopting.rawValue)
+        case .noSubject: .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        }
     }
 
     /// Judge the detach: every member loose, standing at the belt, on a row read
@@ -402,10 +420,12 @@ public struct MineRun: MissionStepMachine {
                 && $0.attachedToDeviceCode == nil && $0.location == belt
         }
         if landed { return .advanceStep(nextStep: Step.adopting.rawValue) }
-        return MissionConfirm.ladder(
-            roster, directive, world,
-            deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.attachConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict(roster, ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Hand the next controller its members. One command per round: `adopt`
@@ -415,14 +435,21 @@ public struct MineRun: MissionStepMachine {
         guard let adoptions = Self.adoptions(of: directive, in: world) else {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
-        guard let next = adoptions.first(where: { !$0.pending.isEmpty }) else {
-            return .advanceStep(nextStep: Step.arming.rawValue)
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        for adoption in adoptions {
+            let job = StowOrAttach(
+                carrierCode: adoption.controller.deviceCode,
+                deviceCodes: adoption.members.map(\.deviceCode),
+                verb: .adopt, confirmField: .controlledBy,
+                confirmStep: Step.confirmingAdopt.rawValue, sendsWholeList: true
+            )
+            switch job.next(ctx) {
+            case let .action(action): return action
+            case .noSubject: return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+            case .finished, .more: continue
+            }
         }
-        return .dispatch(
-            kind: .adopt, deviceCode: next.controller.deviceCode,
-            params: CommandParams(devices: next.pending.map(\.deviceCode)),
-            nextStep: Step.confirmingAdopt.rawValue
-        )
+        return .advanceStep(nextStep: Step.arming.rawValue)
     }
 
     /// Judge the adoption just ordered, looping back for the next controller.
@@ -439,10 +466,12 @@ public struct MineRun: MissionStepMachine {
             world, dispatch: Step.adopting.rawValue, confirm: Step.confirmingAdopt.rawValue
         )
         if done >= rounds { return .advanceStep(nextStep: Step.adopting.rawValue) }
-        return MissionConfirm.ladder(
-            adoptions[done].pending, directive, world,
-            deadline: Self.attachConfirmDeadline, thenStall: .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let ladder = ConfirmRow(deadline: Self.attachConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        return switch ladder.verdict(adoptions[done].pending, ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 
     /// Put the next target to work: name the directive when it is not in force,
@@ -507,22 +536,20 @@ public struct MineRun: MissionStepMachine {
     private func returnHome(
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let hub = RelayRun.theatreDepot(in: world, for: directive) else {
-            // Another theatre is up but this row's own went `.claimed` — wait
-            // for it rather than abandoning the carrier or flying elsewhere.
-            if world.theatreWentClaimed(for: directive) { return .wait }
-            // Nowhere to return to is done, not a stall: the mine is installed.
-            logger.notice("mine run \(directive.id, privacy: .public): no depot to return to — leaving the carrier where it stands")
-            return .done
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let home = ReturnHome(deviceCodes: [carrier.deviceCode], destination: .theatreDepot)
+        return switch home.next(ctx) {
+        case let .action(action): action
+        // Nowhere to return to is done, not a stall: the mine is installed.
+        case .finished, .more: .done
+        case .noSubject: noDepot(directive)
         }
-        if carrier.location == hub { return .done }
-        // The outbound leg's shape — see `travel`.
-        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: hub), nextStep: Step.returning.rawValue
-        )
+    }
+
+    /// Nothing to fly home to. Says so once, then finishes.
+    private func noDepot(_ directive: Directive) -> MissionAction {
+        logger.notice("mine run \(directive.id, privacy: .public): no depot to return to — leaving the carrier where it stands")
+        return .done
     }
 
     /// The confirm ladder for one arm target, named by the device class an
@@ -530,9 +557,13 @@ public struct MineRun: MissionStepMachine {
     private static func armLadder(
         _ device: Device, _ directive: Directive, _ world: WorldSnapshot
     ) -> MissionAction {
-        MissionConfirm.ladder(
-            [device], directive, world, deadline: attachConfirmDeadline,
-            thenStall: device.deviceType == "service_bot" ? .serviceBotNotArmed : .commandRejected
-        )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let reason: DirectiveAttentionReason = device.deviceType == "service_bot"
+            ? .serviceBotNotArmed : .commandRejected
+        let ladder = ConfirmRow(deadline: attachConfirmDeadline, onExpiry: .readThenStall(reason))
+        return switch ladder.verdict([device], ctx) {
+        case let .act(action): action
+        case .judge: .wait
+        }
     }
 }

@@ -1365,7 +1365,7 @@ struct SurveyRunArrivalFreshnessTests {
         let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let fleet = stagedFleet(vesselAt: "SOL-3", updatedAt: rowLaggingArrival)
         let snapshot = world(fleet)
-        #expect(SalvageRun.lastTravelCompletion(for: fleet[0], snapshot) == nil)
+        #expect(TravelTo.lastTravelCompletion(for: fleet[0], snapshot) == nil)
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)
                 == .dispatch(kind: .travel, deviceCode: "VES1",
                              params: CommandParams(destination: "TAU"),
@@ -1390,7 +1390,7 @@ struct SurveyRunArrivalFreshnessTests {
     /// The DEADLINE outranks the throttled read. Reversed, a vessel whose reads
     /// never land never reaches its deadline and buys a `.high` read every tick.
     @Test func surfacesVesselPositionUnconfirmedOnceTheArrivalDeadlinePasses() {
-        let longAgo = fixtureNow.addingTimeInterval(-SalvageRun.arrivalConfirmDeadline)
+        let longAgo = fixtureNow.addingTimeInterval(-TravelTo.arrivalConfirmDeadline)
         let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
         let snapshot = world(
             stagedFleet(vesselAt: "SOL-3", updatedAt: longAgo.addingTimeInterval(-5)),
@@ -1404,7 +1404,7 @@ struct SurveyRunArrivalFreshnessTests {
     /// stall reason so an unresolved probe waits rather than halting the run.
     @Test func buysOneThrottledReadOnceTheRowIsOldEnough() {
         let directive = run(step: SurveyRun.Step.travelling.rawValue, controllerCode: "AMI1")
-        let stale = arrivalClosedAt.addingTimeInterval(-SalvageRun.arrivalReadInterval - 1)
+        let stale = arrivalClosedAt.addingTimeInterval(-TravelTo.arrivalReadInterval - 1)
         let snapshot = world(stagedFleet(vesselAt: "SOL-3", updatedAt: stale),
                              dispatchedOperations: afterArrival())
         #expect(SurveyRun().nextAction(directive: directive, world: snapshot)

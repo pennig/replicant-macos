@@ -143,7 +143,7 @@ public struct HaulRun: MissionStepMachine {
     /// Where `directive` delivers: its own theatre's depot, or `deliveryLocation`
     /// when the row is unstamped or its theatre is non-operational.
     public static func deliverySink(in world: WorldSnapshot, for directive: Directive) -> String {
-        RelayRun.theatreDepot(in: world, for: directive) ?? deliveryLocation
+        world.theatreDepot(for: directive) ?? deliveryLocation
     }
 
     /// The stockpile `controller` is draining, or nil when it runs no config
@@ -369,31 +369,19 @@ public struct HaulRun: MissionStepMachine {
         guard let controller = world.device(controllerCode) else {
             return .stall(.unreachableDevice)
         }
-        guard world.isFresh(controller, since: directive.stepStartedAt) else {
-            // Row read BEFORE the command went out, so it cannot say whether the
-            // controller took it — and the pre-dispatch config is exactly what
-            // `hasTakenSomeHaulConfig` would mistake for evidence.
-            //
-            // Deadline check comes FIRST: a row that can never be refreshed never
-            // satisfies the guard, and a failed read never advances `updatedAt`, so
-            // a staleness-first ordering polls `.high` reads forever.
-            if world.now.timeIntervalSince(directive.stepStartedAt) >= Self.confirmDeadline {
-                return .refreshDevices(deviceCodes: [controllerCode], thenStall: .commandRejected)
-            }
-            if world.now.timeIntervalSince(controller.updatedAt) > Self.confirmReadInterval {
-                return .refreshDevices(deviceCodes: [controllerCode], thenStall: nil)
-            }
-            return .wait
-        }
-        if Self.hasTakenSomeHaulConfig(controller, delivery: Self.deliverySink(in: world, for: directive)) {
+        // A stale row's pre-dispatch config is exactly what `hasTakenSomeHaulConfig`
+        // would mistake for evidence, so success is judged only on a fresh row.
+        if world.isFresh(controller, since: directive.stepStartedAt),
+           Self.hasTakenSomeHaulConfig(controller, delivery: Self.deliverySink(in: world, for: directive)) {
             return .advanceStep(nextStep: Step.assigning.rawValue)
         }
-        if world.now.timeIntervalSince(directive.stepStartedAt) < Self.confirmDeadline {
-            return .wait
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(deadline: Self.confirmDeadline, onExpiry: .readThenStall(.commandRejected))
+        ladder.readInterval = Self.confirmReadInterval
+        return switch ladder.verdict([controller], ctx) {
+        case let .act(action): action
+        case .judge: .wait
         }
-        // Past the deadline, buy one read before giving up — the command may have
-        // landed while the local row sat stale.
-        return .refreshDevices(deviceCodes: [controllerCode], thenStall: .commandRejected)
     }
 
     /// Hold for `pollInterval` against `world`'s clock, then survey again. `.wait`

@@ -463,7 +463,7 @@ struct MineRunTests {
         )
 
         let row = mineRunRow(theatreDepot: targetBelt)
-        #expect(RelayRun.theatreDepot(in: snapshot, for: row) == targetBelt)
+        #expect(snapshot.theatreDepot(for: row) == targetBelt)
         #expect(MineRun().nextAction(directive: row, world: snapshot)
                 == .stall(.unreachableDevice))
     }
@@ -517,6 +517,18 @@ struct MineRunTests {
 
         #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.attaching.rawValue), world: snapshot)
                 == .advanceStep(nextStep: MineRun.Step.travelling.rawValue))
+    }
+
+    /// Nothing left to attach is not a complete fleet. A short roster buys a tag
+    /// read rather than flying an incomplete mine to the belt.
+    @Test("a short fleet with nothing left to attach never flies")
+    func shortFleetWithNothingLooseNeverTravels() {
+        let snapshot = world(
+            devices: carriedFleet(attached: 9, omitting: "mining_drone") + [mineCarrier(), beltRelay]
+        )
+
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.attaching.rawValue), world: snapshot)
+                == .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete))
     }
 
     // MARK: Confirming an attach
@@ -722,6 +734,22 @@ struct MineRunTests {
         )
     }
 
+    /// Re-entered with nothing left aboard — a resumed row, a hand-detach — the
+    /// step still has to move the run on rather than sit on an empty grid.
+    @Test("a grid already empty hands straight over to adoption")
+    func detachWithNothingAboardAdvances() {
+        let snapshot = world(
+            devices: carriedFleet(location: targetBelt)
+                + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.detaching.rawValue), world: snapshot
+            ) == .advanceStep(nextStep: MineRun.Step.adopting.rawValue)
+        )
+    }
+
     // MARK: Confirming the detach
 
     @Test("nine fresh rows loose at the belt hand over to adoption")
@@ -742,6 +770,53 @@ struct MineRunTests {
     func detachStaleRowsBuyARead() {
         let snapshot = world(
             devices: carriedFleet(attached: 9, location: targetBelt, updatedAt: now.addingTimeInterval(-300))
+                + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        let action = MineRun().nextAction(
+            directive: mineRunRow(step: MineRun.Step.confirmingDetach.rawValue), world: snapshot
+        )
+        guard case let .refreshDevices(codes, thenStall) = action else {
+            Issue.record("expected a device read, got \(action)")
+            return
+        }
+        #expect(Set(codes) == Set((1...9).map { "M\(String(format: "%02d", $0))" }))
+        #expect(thenStall == nil)
+    }
+
+    /// Each conjunct of the landing test alone. Varying one at a time is what
+    /// `detachConfirmed` and `detachStaleRowsBuyARead` cannot do between them.
+    @Test("a member still on the carrier is not landed")
+    func detachAttachedMemberIsNotLanded() {
+        let snapshot = world(
+            devices: carriedFleet(attached: 9, location: targetBelt)
+                + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingDetach.rawValue), world: snapshot
+            ) == .wait
+        )
+    }
+
+    @Test("a member loose somewhere other than the belt is not landed")
+    func detachAwayFromTheBeltIsNotLanded() {
+        let snapshot = world(
+            devices: carriedFleet(location: hubLocation) + [mineCarrier(), beltRelay]
+        )
+
+        #expect(
+            MineRun().nextAction(
+                directive: mineRunRow(step: MineRun.Step.confirmingDetach.rawValue), world: snapshot
+            ) == .wait
+        )
+    }
+
+    @Test("a member loose at the belt on an unread row is not landed")
+    func detachStaleLooseMemberIsNotLanded() {
+        let snapshot = world(
+            devices: carriedFleet(location: targetBelt, updatedAt: now.addingTimeInterval(-300))
                 + [mineCarrier(location: targetBelt), beltRelay]
         )
 

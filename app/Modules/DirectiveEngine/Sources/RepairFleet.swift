@@ -13,12 +13,12 @@ import UniverseModels
 /// that carries service bots.
 public enum RepairFleet {
     /// Capacity below which a fleet is worth holding for repair.
-    public static let repairThreshold: Double = 50
+    static let repairThreshold: Double = 50
 
     /// Whether `bot` answers to the fleet tagged `owner`: wearing no fleet tag
     /// it answers anyone; wearing a scoped tag for `owner`'s goal it answers
     /// that theatre alone; wearing only the bare tag it answers any theatre.
-    public static func answers(_ bot: Device, to owner: FleetTag?) -> Bool {
+    static func answers(_ bot: Device, to owner: FleetTag?) -> Bool {
         guard bot.tags.contains(where: { Device.normalizedTag($0).hasPrefix(FleetTag.prefix) })
         else { return true }
         guard let owner else { return false }

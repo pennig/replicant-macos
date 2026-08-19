@@ -66,44 +66,10 @@ public struct SalvageRun: MissionStepMachine {
     /// in another system keeps claiming it is aboard until something reads it.
     public static let stagingFreshness: TimeInterval = 5 * 60
 
-    public static let activationDeadline: TimeInterval = 10 * 60
-
-    /// How long a vessel row may lag the arrival it reflects, measured from the
-    /// ARRIVAL and never `stepStartedAt`. Does NOT cover every route to the stall
-    /// it guards — the reconciler drops an arrival's location write when a
-    /// confirm-read stamps `updatedAt` later in the same wall-clock second, leaving
-    /// a row fresh-but-wrong that passes every watermark computable here.
-    public static let arrivalConfirmDeadline: TimeInterval = 5 * 60
-
-    /// Floor between confirm-reads of the vessel row while waiting for its position
-    /// to catch up. Without it the read fires on every 5s tick.
-    public static let arrivalReadInterval: TimeInterval = 30
-
-    /// How long to let an ordered bot deploy, arm or recall settle before the
-    /// first read.
-    public static let botProbeDelay: TimeInterval = 10
-
-    /// Floor between bot-state probes, so an unmoving row is not re-read each tick.
-    public static let botProbeInterval: TimeInterval = 30
-
-    /// The cap on holding a vessel for repair before surfacing `repairUnfinished`.
-    public static let repairDeadline: TimeInterval = 20 * 60
-
-    /// The cap on a bot recall before the run surfaces `serviceBotNotRecovered`.
-    public static let botRecallDeadline: TimeInterval = 20 * 60
-
     /// The cap on the controller's own flight back to the vessel before the run
     /// surfaces `miningControllerNotRecovered`. Its leg is a cross-system cruise
     /// from whichever body it was deployed at, so it is scaled like a bot recall.
     public static let controllerRecallDeadline: TimeInterval = 20 * 60
-
-    /// The cap on a deploy or arm confirmation. Generous, but finite: without it
-    /// a row that never refreshes buys one `.high` read every tick forever.
-    public static let botConfirmDeadline: TimeInterval = 10 * 60
-
-    /// The cap on dispatch rounds inside a bot deploy, arm or recall loop. A fleet
-    /// of two bots needs two; the rest is slack for a command re-issued once.
-    public static let botDispatchRounds = 6
 
     /// The salvage configuration this mission insists on: deplete `body`, then
     /// recall the drones so the vessel can move on. `recall` is load-bearing —
@@ -124,22 +90,80 @@ public struct SalvageRun: MissionStepMachine {
             logger.notice("\(kind.rawValue, privacy: .public) \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
         }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
         switch step {
         case .preflight: return preflight(directive, vessel, world)
         case .travelling: return travel(directive, vessel, world)
-        case .deployingBots: return deployBots(directive, vessel, world)
-        case .confirmingBotDeploy: return confirmBotDeploy(directive, vessel, world)
-        case .armingBots: return armBots(directive, vessel, world)
-        case .confirmingBotArm: return confirmBotArm(directive, vessel, world)
+        case .deployingBots:
+            return switch botPhase(.deploy, directive).next(ctx) {
+            case let .action(action): action
+            case .finished: .advanceStep(nextStep: Step.armingBots.rawValue)
+            case .more: .advanceStep(nextStep: Step.deployingBots.rawValue)
+            case .noSubject: .stall(.unreachableDevice)
+            }
+        case .confirmingBotDeploy:
+            return switch botPhase(.confirmDeploy, directive).next(ctx) {
+            case let .action(action): action
+            case .finished: .advanceStep(nextStep: Step.armingBots.rawValue)
+            case .more: .advanceStep(nextStep: Step.deployingBots.rawValue)
+            case .noSubject: .stall(.unreachableDevice)
+            }
+        case .armingBots:
+            return switch botPhase(.arm, directive).next(ctx) {
+            case let .action(action): action
+            case .finished: .advanceStep(nextStep: Step.positioning.rawValue)
+            case .more: .advanceStep(nextStep: Step.armingBots.rawValue)
+            case .noSubject: .stall(.unreachableDevice)
+            }
+        case .confirmingBotArm:
+            return switch botPhase(.confirmArm, directive).next(ctx) {
+            case let .action(action): action
+            case .finished: .advanceStep(nextStep: Step.positioning.rawValue)
+            case .more: .advanceStep(nextStep: Step.armingBots.rawValue)
+            case .noSubject: .stall(.unreachableDevice)
+            }
         case .positioning: return position(directive, vessel, world)
         case .configuring: return configure(directive, vessel, world)
         case .launching: return launch(directive, vessel, world)
         case .awaiting: return awaitCompletion(directive, vessel, world)
         case .verifying: return verify(directive, vessel, world)
-        case .repairing: return awaitRepair(directive, vessel, world)
-        case .stowingBots: return stowBots(directive, vessel, world)
-        case .confirmingBotStow: return confirmBotStow(directive, vessel, world)
+        case .repairing:
+            return switch botPhase(.awaitRepair, directive).next(ctx) {
+            case let .action(action): action
+            case .finished, .more: .advanceStep(nextStep: Step.stowingBots.rawValue)
+            case .noSubject: .stall(.unreachableDevice)
+            }
+        case .stowingBots:
+            return switch botPhase(.recall, directive).next(ctx) {
+            case let .action(action): action
+            case .finished: .advanceTarget
+            case .more: .advanceStep(nextStep: Step.stowingBots.rawValue)
+            case .noSubject: .stall(.unreachableDevice)
+            }
+        case .confirmingBotStow:
+            return switch botPhase(.confirmRecall, directive).next(ctx) {
+            case let .action(action): action
+            case .finished: .advanceTarget
+            case .more: .advanceStep(nextStep: Step.stowingBots.rawValue)
+            case .noSubject: .stall(.unreachableDevice)
+            }
         }
+    }
+
+    /// The bot phase this step runs, and where the mission goes when it ends.
+    private func botPhase(_ phase: BotPhase.Phase, _ directive: Directive) -> BotPhase {
+        let (dispatch, confirm): (Step, Step) = switch phase {
+        case .deploy, .confirmDeploy: (.deployingBots, .confirmingBotDeploy)
+        case .arm, .confirmArm: (.armingBots, .confirmingBotArm)
+        case .awaitRepair: (.repairing, .repairing)
+        case .recall, .confirmRecall: (.stowingBots, .confirmingBotStow)
+        }
+        return BotPhase(
+            vesselCode: directive.deviceCode, owner: Self.fleetTag(directive),
+            system: directive.currentTarget, phase: phase,
+            dispatchStep: dispatch.rawValue, confirmStep: confirm.rawValue,
+            runNoun: "salvage run", unrepairedStep: Step.armingBots.rawValue
+        )
     }
 
     // MARK: - Fleet queries
@@ -205,11 +229,11 @@ public struct SalvageRun: MissionStepMachine {
         device.location.map { SiteAssay.system(of: $0) }
     }
 
-    /// `directive`'s theatre depot's SYSTEM. `RelayRun.theatreDepot` names a
+    /// `directive`'s theatre depot's SYSTEM. `world.theatreDepot` names a
     /// LOCATION, and a location in a roam-centre slot aims the census read at
     /// a site rather than a star.
     static func hubSystem(in world: WorldSnapshot, for directive: Directive) -> String? {
-        RelayRun.theatreDepot(in: world, for: directive).map { SiteAssay.system(of: $0) }
+        world.theatreDepot(for: directive).map { SiteAssay.system(of: $0) }
     }
 
     /// Whether `controller` is actually working `gather_salvage`. The name alone
@@ -289,73 +313,23 @@ public struct SalvageRun: MissionStepMachine {
         return .assignController(deviceCode: controller.deviceCode, nextStep: Step.travelling.rawValue)
     }
 
-    // MARK: - Arrival freshness
-
-    /// When the last travel this directive dispatched for `vessel` finished, or nil.
-    /// Filters on `.completed` EXACTLY, never `isTerminal`: `.superseded` and
-    /// `.unknown` also stamp `lastConfirmedAt` on travels that never arrived, and
-    /// either would gate a real dispatch behind an arrival that never happened.
-    static func lastTravelCompletion(for vessel: Device, _ world: WorldSnapshot) -> Date? {
-        world.dispatchedOperations.values
-            .lazy
-            .filter {
-                $0.entityCode == vessel.deviceCode
-                    && $0.kind == OperationKind.travel.rawValue
-                    && $0.status == .completed
-            }
-            .map(\.lastConfirmedAt)
-            .max()
-    }
-
-    /// What a travel dispatch site should do when `vessel`'s row cannot yet be
-    /// trusted to say where it is; nil means dispatch may proceed. One
-    /// `travel.arrived` settles in two transactions — the op closes first, the
-    /// location is written second — so a tick in that gap re-commands travel at an
-    /// already-parked vessel. The watermark is the ARRIVAL, never `stepStartedAt`.
-    ///
-    /// **The order of the three answers is mandated:** deadline, throttled read,
-    /// `.wait`. The throttle measures `updatedAt`, which only advances on a
-    /// SUCCESSFUL read, so a staleness-first ordering never stalls and issues a
-    /// `.high` read every tick under the rate-limit exhaustion that caused it.
-    ///
-    /// **Gates the dispatch path only** — place it after the `openOperation` guard
-    /// and never above the location-equality check, which delays every advance.
-    static func travelPositionUnconfirmed(_ vessel: Device, _ world: WorldSnapshot) -> MissionAction? {
-        // Nothing to post-date, so cold runs and first entries dispatch at once.
-        guard let completion = Self.lastTravelCompletion(for: vessel, world) else { return nil }
-        guard vessel.updatedAt < completion else { return nil }
-        if world.now.timeIntervalSince(completion) >= Self.arrivalConfirmDeadline {
-            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: .vesselPositionUnconfirmed)
-        }
-        if world.now.timeIntervalSince(vessel.updatedAt) > Self.arrivalReadInterval {
-            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
-        }
-        return .wait
-    }
-
     /// Fly `vessel` to `directive`'s current target system, then put the service
     /// bots out. The target is already meshed — the planner offers no other kind.
     private func travel(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else {
             return .advanceStep(nextStep: Step.preflight.rawValue)
         }
-        if Self.system(of: vessel) == target {
-            return .advanceStep(nextStep: Step.deployingBots.rawValue)
-        }
-        // An open op means the trip is under way; waiting stops a second travel
-        // landing on top of the first.
-        if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
-        // The equality check above misreads a row still lagging the arrival.
-        if let unconfirmed = Self.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: vessel.deviceCode,
-            params: CommandParams(destination: target), nextStep: Step.travelling.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let leg = TravelTo(
+            deviceCode: vessel.deviceCode, destination: target,
+            arrivalTest: .system, confirmStep: nil
         )
+        return switch leg.next(ctx) {
+        case let .action(action): action
+        case .finished: .advanceStep(nextStep: Step.deployingBots.rawValue)
+        case .more, .noSubject: .stall(.unreachableDevice)
+        }
     }
-
-    /// Floor between confirm-reads of a relay row while a mission polls one.
-    /// Read by `RelayRun`, which owns every relay the fleet plants.
-    public static let relayPollInterval: TimeInterval = 60
 
     // MARK: - Mining loop
 
@@ -481,17 +455,16 @@ public struct SalvageRun: MissionStepMachine {
             }
             return unresolvedSystem(directive, world, target: target)
         case let .body(body):
-            if vessel.location == body { return .advanceStep(nextStep: Step.configuring.rawValue) }
-            // `.travel` is tracked, so this guard actually fires and the same-step
-            // re-dispatch is safe.
-            if world.openOperation(for: vessel.deviceCode) != nil { return .wait }
-            // The hop to the first body is short, so a tick right after the arrival
-            // op closes lands inside the window where `location` still lags.
-            if let unconfirmed = Self.travelPositionUnconfirmed(vessel, world) { return unconfirmed }
-            return .dispatch(
-                kind: .travel, deviceCode: vessel.deviceCode,
-                params: CommandParams(destination: body), nextStep: Step.positioning.rawValue
+            let ctx = StepContext(directive: directive, world: world, step: directive.step)
+            let leg = TravelTo(
+                deviceCode: vessel.deviceCode, destination: body,
+                arrivalTest: .exactLocation, confirmStep: nil
             )
+            return switch leg.next(ctx) {
+            case let .action(action): action
+            case .finished: .advanceStep(nextStep: Step.configuring.rawValue)
+            case .more, .noSubject: .stall(.unreachableDevice)
+            }
         }
     }
 
@@ -562,13 +535,6 @@ public struct SalvageRun: MissionStepMachine {
     /// every tick.
     public static let reconcileInterval: TimeInterval = 2 * 60
 
-    /// When the LAST of the `stranded` drones is due back, or nil if none reports
-    /// a trip. `activityDeadline` resolves the travel block's leg-vs-route pair,
-    /// so a recall hop yields its real arrival rather than a leg boundary.
-    static func recallArrival(_ stranded: [Device]) -> Date? {
-        stranded.compactMap(\.activityDeadline).max()
-    }
-
     /// Tolerance when comparing a completion's time against the step's start.
     /// Same value as `SurveyRun.eventTimeSkewTolerance`.
     static let eventTimeSkewTolerance: TimeInterval = 5
@@ -627,12 +593,18 @@ public struct SalvageRun: MissionStepMachine {
         let canRead = world.now.timeIntervalSince(lastLook) >= Self.reconcileInterval
         let wireTag = Self.fleetTag(directive)
 
-        // Never believe a row read BEFORE this step began: a pre-launch drone row
-        // still shows it stowed aboard and reads as "recovered" the instant the
-        // step starts. Force a post-launch read of EVERY drone first, throttled so
-        // a failing one cannot loop every tick.
-        guard lastLook >= directive.stepStartedAt else {
+        // A row read before the step began reads as "recovered" instantly, so this
+        // forces one throttled post-launch read; an empty roster bypasses it.
+        guard !drones.isEmpty else {
             return canRead ? .refreshFleet(tag: wireTag, thenStall: nil) : .wait
+        }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(deadline: .infinity, onExpiry: .judge)
+        ladder.refresh = .fleet(wireTag)
+        ladder.readInterval = Self.reconcileInterval
+        switch ladder.verdict(drones, ctx) {
+        case let .act(action): return action
+        case .judge: break
         }
 
         let stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
@@ -655,7 +627,7 @@ public struct SalvageRun: MissionStepMachine {
         // the vessel sits at the body). Wait out any traveller's own ETA; re-read
         // the stragglers on the cadence otherwise.
         if stranded.contains(where: { $0.activityDeadline != nil }) {
-            if let arrival = Self.recallArrival(stranded), arrival > world.now { return .wait }
+            if let arrival = BotPhase.recallArrival(stranded), arrival > world.now { return .wait }
             return canRead
                 ? .refreshDevices(deviceCodes: stranded.map(\.deviceCode), thenStall: nil)
                 : .wait
@@ -664,212 +636,6 @@ public struct SalvageRun: MissionStepMachine {
         // their own. Hand to `verify`, which refreshes once and raises
         // `dronesNotRecovered` if the fresh rows agree.
         return .advanceStep(nextStep: Step.verifying.rawValue)
-    }
-
-    // MARK: - Service bots
-
-    /// Deploy the next service bot still aboard `vessel`, or move on when the
-    /// system already has them all. Exhausting the round budget costs the repair
-    /// and not the salvage; a REJECTED deploy still stalls the run.
-    private func deployBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let aboard = RepairFleet.bots(aboard: vessel, in: world, owner: Self.fleetTag(directive))
-        guard let next = aboard.first else { return .advanceStep(nextStep: Step.armingBots.rawValue) }
-        // `deploy` is untracked and the confirm step re-stamps `stepStartedAt`, so
-        // the log is the only bound on this loop that re-entry cannot rewind.
-        if MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.deployingBots.rawValue, confirm: Step.confirmingBotDeploy.rawValue
-        ) > Self.botDispatchRounds {
-            logger.notice("salvage run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not deploy — mining unrepaired")
-            return .advanceStep(nextStep: Step.armingBots.rawValue)
-        }
-        return .dispatch(
-            kind: .simple("deploy"), deviceCode: next.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingBotDeploy.rawValue
-        )
-    }
-
-    /// One throttled read of `rows` when any predates the step, or nil when they
-    /// are fresh enough to judge. Callers must check their deadline FIRST — a
-    /// failing read never advances `updatedAt`, so a staleness-first order loops.
-    private static func probe(
-        _ rows: [Device], _ directive: Directive, _ world: WorldSnapshot
-    ) -> MissionAction? {
-        guard rows.contains(where: { !world.isFresh($0, since: directive.stepStartedAt) }) else { return nil }
-        let lastLook = rows.map(\.updatedAt).min() ?? .distantPast
-        if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
-        return .refreshDevices(deviceCodes: rows.map(\.deviceCode), thenStall: nil)
-    }
-
-    /// Judge an ordered deploy, looping back for the next bot until none is aboard.
-    private func confirmBotDeploy(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let owner = Self.fleetTag(directive)
-        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-        if elapsed < Self.botProbeDelay { return .wait }
-        if elapsed > Self.botConfirmDeadline {
-            logger.notice("salvage run \(directive.id, privacy: .public): bot deploy unconfirmed — mining unrepaired")
-            return .advanceStep(nextStep: Step.armingBots.rawValue)
-        }
-        let aboard = RepairFleet.bots(aboard: vessel, in: world, owner: owner)
-        guard aboard.isEmpty else {
-            // A row unread since the deploy was ordered cannot yet show it
-            // landing; buy the read rather than believing a stale claim.
-            return Self.probe(aboard, directive, world)
-                ?? .advanceStep(nextStep: Step.deployingBots.rawValue)
-        }
-        // `armingBots` judges the DEPLOYED rows, and nothing has read them since
-        // the deploy was ordered — a stale one reads armed and skips repair.
-        let deployed = RepairFleet.bots(deployedNear: vessel.location, in: world, owner: owner)
-        return Self.probe(deployed, directive, world) ?? .advanceStep(nextStep: Step.armingBots.rawValue)
-    }
-
-    /// Ensure the next mis-armed deployed bot carries an ACTIVE `service`
-    /// directive: `set_directive` when the name is wrong, `activate` when the name
-    /// is right but paused. The run SETS the directive rather than inheriting one.
-    private func armBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let deployed = RepairFleet.bots(
-            deployedNear: vessel.location, in: world, owner: Self.fleetTag(directive)
-        )
-        guard let next = deployed.first(where: { !RepairFleet.isArmed($0) }) else {
-            return .advanceStep(nextStep: Step.positioning.rawValue)
-        }
-        // Both dispatches below are untracked and the confirm step re-stamps
-        // `stepStartedAt`, so the log is the only bound re-entry cannot rewind.
-        if MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.armingBots.rawValue, confirm: Step.confirmingBotArm.rawValue
-        ) > Self.botDispatchRounds {
-            logger.notice("salvage run \(directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not arm")
-            return .stall(.serviceBotNotArmed)
-        }
-        guard next.currentDirective == "service" else {
-            return .dispatch(
-                kind: .setDirective, deviceCode: next.deviceCode,
-                params: CommandParams(directive: "service"), nextStep: Step.confirmingBotArm.rawValue
-            )
-        }
-        return .dispatch(
-            kind: OperationKind.simple("activate"), deviceCode: next.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingBotArm.rawValue
-        )
-    }
-
-    /// Judge an ordered arm, looping back for the next mis-armed bot until none is left.
-    private func confirmBotArm(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-        if elapsed < Self.botProbeDelay { return .wait }
-        if elapsed > Self.botConfirmDeadline { return .stall(.serviceBotNotArmed) }
-        let deployed = RepairFleet.bots(
-            deployedNear: vessel.location, in: world, owner: Self.fleetTag(directive)
-        )
-        // "Everything is armed" is the conclusion that skips repair entirely, so
-        // it needs the same proof the mis-armed one does.
-        if let probe = Self.probe(deployed, directive, world) { return probe }
-        guard deployed.contains(where: { !RepairFleet.isArmed($0) }) else {
-            return .advanceStep(nextStep: Step.positioning.rawValue)
-        }
-        return .advanceStep(nextStep: Step.armingBots.rawValue)
-    }
-
-    /// Hold `vessel` while any deployed service bot is still repairing. Gated on
-    /// the bots falling IDLE, never a capacity threshold — `service` repairs to an
-    /// unquantified level a threshold gate could wait on forever.
-    private func awaitRepair(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let owner = Self.fleetTag(directive)
-        // A nil location cannot answer the system-scoped query, so it is
-        // uncertainty — but only where a bot is actually out there to lose.
-        guard let location = vessel.location else {
-            guard RepairFleet.anyBotDeployed(
-                in: world, system: directive.currentTarget, owner: owner
-            ) else {
-                return .advanceStep(nextStep: Step.stowingBots.rawValue)
-            }
-            let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-            if elapsed > Self.repairDeadline { return .stall(.repairUnfinished) }
-            if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
-            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
-        }
-        let bots = RepairFleet.bots(deployedNear: location, in: world, owner: owner)
-        if bots.isEmpty { return .advanceStep(nextStep: Step.stowingBots.rawValue) }
-        // A fleet nothing is worn enough to hold for leaves without paying the
-        // probe delay or a single read.
-        if !RepairFleet.needsRepair(RepairFleet.fleet(of: vessel, in: world, owner: owner)) {
-            return .advanceStep(nextStep: Step.stowingBots.rawValue)
-        }
-
-        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-        if elapsed < Self.botProbeDelay { return .wait }
-        if elapsed > Self.repairDeadline { return .stall(.repairUnfinished) }
-        // Bots repair silently server-side; an unread row cannot be trusted to
-        // report idle, so treat it as still working until a read says otherwise.
-        let stale = bots.contains { !world.isFresh($0, since: directive.stepStartedAt) }
-        if !stale, !bots.contains(where: RepairFleet.isRepairing) {
-            return .advanceStep(nextStep: Step.stowingBots.rawValue)
-        }
-        let lastLook = bots.map(\.updatedAt).min() ?? .distantPast
-        if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
-        return .refreshDevices(deviceCodes: bots.map(\.deviceCode), thenStall: nil)
-    }
-
-    /// Recall the next service bot still out in the system, or advance the target
-    /// when none is left. `recall`, not `stow`: `stow` needs the bot beside the
-    /// vessel, and a bot that cruised off to repair a drone is not.
-    private func stowBots(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let owner = Self.fleetTag(directive)
-        guard let location = vessel.location else {
-            guard RepairFleet.anyBotOut(
-                in: world, system: directive.currentTarget, owner: owner
-            ) else {
-                return .advanceTarget
-            }
-            if world.now.timeIntervalSince(directive.stepStartedAt) > Self.botRecallDeadline {
-                return .stall(.serviceBotNotRecovered)
-            }
-            if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
-            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
-        }
-        let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
-        guard let next = out.first else { return .advanceTarget }
-        if MissionLogBudget.dispatchRounds(
-            world, dispatch: Step.stowingBots.rawValue, confirm: Step.confirmingBotStow.rawValue
-        ) > Self.botDispatchRounds {
-            return .stall(.serviceBotNotRecovered)
-        }
-        if RepairFleet.openRecall(for: next.deviceCode, in: world) != nil {
-            if world.now.timeIntervalSince(directive.stepStartedAt) > Self.botRecallDeadline {
-                return .stall(.serviceBotNotRecovered)
-            }
-            return .wait
-        }
-        return .dispatch(
-            kind: .simple("recall"), deviceCode: next.deviceCode,
-            params: CommandParams(), nextStep: Step.confirmingBotStow.rawValue
-        )
-    }
-
-    /// Judge an ordered recall, looping back for the next bot until none is out.
-    private func confirmBotStow(_ directive: Directive, _ vessel: Device, _ world: WorldSnapshot) -> MissionAction {
-        let owner = Self.fleetTag(directive)
-        let elapsed = world.now.timeIntervalSince(directive.stepStartedAt)
-        if elapsed < Self.botProbeDelay { return .wait }
-        if elapsed > Self.botRecallDeadline { return .stall(.serviceBotNotRecovered) }
-        guard let location = vessel.location else {
-            guard RepairFleet.anyBotOut(
-                in: world, system: directive.currentTarget, owner: owner
-            ) else {
-                return .advanceTarget
-            }
-            if world.now.timeIntervalSince(vessel.updatedAt) < Self.botProbeInterval { return .wait }
-            return .refreshDevices(deviceCodes: [vessel.deviceCode], thenStall: nil)
-        }
-        let out = RepairFleet.botsOut(near: location, in: world, owner: owner)
-        if out.isEmpty { return .advanceTarget }
-        // A recall cruises the bot home, so wait out its own arrival time.
-        if let arrival = Self.recallArrival(out), arrival > world.now { return .wait }
-        if out.contains(where: { !world.isFresh($0, since: directive.stepStartedAt) }) {
-            let lastLook = out.map(\.updatedAt).min() ?? .distantPast
-            if world.now.timeIntervalSince(lastLook) < Self.botProbeInterval { return .wait }
-            return .refreshDevices(deviceCodes: out.map(\.deviceCode), thenStall: nil)
-        }
-        return .advanceStep(nextStep: Step.stowingBots.rawValue)
     }
 
     // MARK: - Verify & restock
@@ -949,12 +715,17 @@ public struct SalvageRun: MissionStepMachine {
         _ controller: Device, _ vessel: Device, _ directive: Directive, _ world: WorldSnapshot
     ) -> MissionAction? {
         guard controller.stowedInDeviceCode != vessel.deviceCode else { return nil }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.controllerRecallDeadline {
-            return .stall(.miningControllerNotRecovered)
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(
+            deadline: Self.controllerRecallDeadline, onExpiry: .stallNow(.miningControllerNotRecovered)
+        )
+        ladder.watermark = .age(TravelTo.arrivalReadInterval)
+        ladder.readInterval = TravelTo.arrivalReadInterval
+        ladder.waitsOutArrival = true
+        return switch ladder.verdict([controller], ctx) {
+        case let .act(action): action
+        case .judge: .wait
         }
-        if let arrival = controller.activityDeadline, arrival > world.now { return .wait }
-        if world.now.timeIntervalSince(controller.updatedAt) < Self.arrivalReadInterval { return .wait }
-        return .refreshDevices(deviceCodes: [controller.deviceCode], thenStall: nil)
     }
 
     /// The body `controller`'s in-force `gather_salvage` config names, or nil when

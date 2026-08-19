@@ -29,6 +29,54 @@ struct EventRunReturnTests {
         ))
     }
 
+    /// A carrier already working waits: a second attach landing on top of the
+    /// first is the failure this guard exists to stop.
+    @Test("a busy carrier waits rather than ordering a second attach")
+    func busyCarrierWaits() {
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
+            EventRunFixtures.courier(location: "X-1"),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices,
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now,
+            openOperations: ["CARRIER": GameModels.Operation(
+                id: "OP-CARRIER", entityCode: "CARRIER", kind: OperationKind.attach.rawValue,
+                status: .active, source: .poll, startedAt: now, completesAt: nil,
+                lastConfirmedAt: now, detail: .object([:])
+            )]
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.recovering.rawValue, now: now), world: world
+        )
+        #expect(action == .wait)
+    }
+
+    /// The busy guard gates the DISPATCH, not the step: a courier already aboard
+    /// departs even while the carrier is mid-collect.
+    @Test("a courier already aboard a busy carrier still departs")
+    func courierAboardABusyCarrierDeparts() {
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter", location: "X-1"),
+            EventRunFixtures.courier(attachedTo: "CARRIER", location: "X-1"),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices,
+            event: EventRunFixtures.event(resources: [:], devices: []), now: now,
+            openOperations: ["CARRIER": GameModels.Operation(
+                id: "OP-CARRIER", entityCode: "CARRIER", kind: OperationKind.collectResources.rawValue,
+                status: .active, source: .poll, startedAt: now, completesAt: nil,
+                lastConfirmedAt: now, detail: .object([:])
+            )]
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.recovering.rawValue, now: now), world: world
+        )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.returning.rawValue))
+    }
+
     @Test("a courier still loose buys evidence rather than departing")
     func looseCourierNeverDeparts() {
         let devices = [

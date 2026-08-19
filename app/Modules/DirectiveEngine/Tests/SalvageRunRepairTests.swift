@@ -318,7 +318,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         let w = repairWorld(devices: [vessel, bot("BOT1", repairingTarget: "DRONE1"), drone])
         let d = salvageDirective(
             step: SalvageRun.Step.repairing.rawValue, targets: ["TOSLIT"],
-            stepStartedAt: repairFixtureNow.addingTimeInterval(-(SalvageRun.repairDeadline + 60))
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-(BotPhase.repairDeadline + 60))
         )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .stall(.repairUnfinished))
     }
@@ -486,7 +486,7 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
         let w = repairWorld(devices: [vessel, bot("BOT1")])
         let d = salvageDirective(
             step: SalvageRun.Step.confirmingBotStow.rawValue, targets: ["TOSLIT"],
-            stepStartedAt: repairFixtureNow.addingTimeInterval(-(SalvageRun.botRecallDeadline + 60))
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-(BotPhase.recallDeadline + 60))
         )
         #expect(SalvageRun().nextAction(directive: d, world: w)
             == .stall(.serviceBotNotRecovered))

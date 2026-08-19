@@ -1,7 +1,7 @@
 # 28 — The hand-rolled ladders adopt `ConfirmRow`
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 27, 23
 Labels: directives-architecture, stage-2
 

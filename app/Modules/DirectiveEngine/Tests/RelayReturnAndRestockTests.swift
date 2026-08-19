@@ -318,13 +318,13 @@ struct HubRecognitionSeamTests {
 
         for directive in directives {
             let snapshot = try await WorldSnapshot.read(from: database, now: now, directive: directive)
-            let fromMission = RelayRun.theatreDepot(in: snapshot, for: directive)
+            let fromMission = snapshot.theatreDepot(for: directive)
             let fromBrain = view.theatres.first { $0.depot == directive.theatreDepot && $0.isOperational }?.depot
             #expect(fromMission == fromBrain, "theatreDepot \(directive.theatreDepot ?? "nil"): mission vs brain")
         }
         // The positive case is worth pinning to a value, not just to agreement.
         let home = try await WorldSnapshot.read(from: database, now: now, directive: directives[0])
-        #expect(RelayRun.theatreDepot(in: home, for: directives[0]) == hubLocation)
+        #expect(home.theatreDepot(for: directives[0]) == hubLocation)
     }
 }
 
@@ -582,7 +582,7 @@ struct RestockRunTests {
     /// what stops a silent never-arriving print from parking this step forever.
     @Test("a print that produced no relay re-decides instead of parking")
     func printingReDecidesWhenNothingArrived() {
-        let stale = now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+        let stale = now.addingTimeInterval(-(PrintJob.deadline + 60))
         let directive = restockRun(step: RestockRun.Step.printing.rawValue, targets: ["VEGA"], stepStartedAt: stale)
         let snapshot = world(devices: [hub(), liveRelay("REL0", at: hubLocation)])
 
@@ -625,7 +625,7 @@ struct RestockRunTests {
     /// is what makes that true regardless of who else holds the bench.
     @Test("a co-tenant's print past the deadline does not extend the wait")
     func coTenantPrintDoesNotExtendDeadline() {
-        let stale = now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+        let stale = now.addingTimeInterval(-(PrintJob.deadline + 60))
         let directive = restockRun(step: RestockRun.Step.printing.rawValue, targets: ["VEGA"], stepStartedAt: stale)
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],

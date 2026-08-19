@@ -53,25 +53,17 @@ public struct RestockRun: MissionStepMachine {
     /// before it, so re-tuning it as a throughput knob moves nothing.
     public static let idleCap = 10
 
-    /// How long a print may go unclaimed before the run gives up waiting and
-    /// re-decides. Matches `RelayRun.printDeadline` — the same server-side job.
-    public static let printDeadline: TimeInterval = RelayRun.printDeadline
-
-    /// How stale the TABLE-WIDE census may be before `stocking` buys a refresh
-    /// rather than trusting it. Matches `RelayRun.pollInterval`, the bound
-    /// `footprintCensusIsStale` reads it through — not the more generous
-    /// `hubFreshness`, which is `printStockIsShort`'s separate read-time veto.
-    public static let pollInterval: TimeInterval = RelayRun.pollInterval
-
     /// Route `directive`'s current step against `world`.
     ///
     /// Stalls when no hub at the run's depot can take a job: printing somewhere
     /// else would be a fabrication, while handing the job to the bench's own free
     /// hub is the same run carrying on.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
-        guard let hub = MineFleetPrint.printer(for: directive, in: world) else {
-            return .stall(.unreachableDevice)
-        }
+        guard let depot = PrintJob.depot(for: directive, in: world),
+              let hub = PrintJob(depot: depot).bench(
+                  StepContext(directive: directive, world: world, step: directive.step)
+              )
+        else { return .stall(.unreachableDevice) }
         guard let step = Step(rawValue: directive.step) else {
             logger.notice("\(kind.rawValue, privacy: .public) \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
@@ -102,7 +94,7 @@ public struct RestockRun: MissionStepMachine {
         // throttle — owner-scoped, so a co-tenant's job here is never ours to wait on.
         if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
 
-        // The rail, read through `RelayRun`'s own veto so the two cannot drift.
+        // The rail, held once in `PrintRail` so no print site can drift from it.
         //
         // A stale census buys a refresh rather than waiting it out, because
         // **nothing polls `LocationFootprint`** — `refreshFootprint()`'s only
@@ -117,7 +109,7 @@ public struct RestockRun: MissionStepMachine {
         // through to the fail-closed `printStockIsShort`. `thenStall: nil`
         // because restock must never escalate a top-up nobody is waiting on —
         // the price is one census read per tick while demand is unmet.
-        let rail = RelayRun(reserveFloor: reserveFloor)
+        let rail = PrintRail(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }
@@ -160,7 +152,7 @@ public struct RestockRun: MissionStepMachine {
         if RelayRun.idleRelays(at: location, in: world).count >= Self.desiredIdle(for: directive) {
             return .advanceStep(nextStep: Step.stocking.rawValue)
         }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline {
+        if world.now.timeIntervalSince(directive.stepStartedAt) > PrintJob.deadline {
             logger.notice("restock \(directive.id, privacy: .public): print produced no relay within the deadline — re-deciding")
             return .advanceStep(nextStep: Step.stocking.rawValue)
         }

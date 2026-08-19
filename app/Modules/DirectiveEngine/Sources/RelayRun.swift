@@ -34,8 +34,8 @@ public struct RelayRun: MissionStepMachine {
     }
 
     /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
-    /// The dispatch/poll pairs exist because those commands carry no `Operation`
-    /// row — see `trackedKinds`. The two sources meet at `stowing`.
+    /// The dispatch/poll pairs exist because `deactivate`, `stow`, `deploy` and
+    /// `activate` carry no `Operation` row. The two sources meet at `stowing`.
     public enum Step: String, CaseIterable, Sendable {
         /// Decide where the relay comes from, and start it coming. Branches on
         /// `Directive.sourceRelayCode`: nil prints a fresh one at the hub,
@@ -67,8 +67,8 @@ public struct RelayRun: MissionStepMachine {
         /// Dispatch `activate` at the just-deployed relay. Dispatch-only.
         case activating
         /// Poll for `statusBase == "relaying"`, backstopped by
-        /// `SalvageRun.activationDeadline`. Split from `activating` because
-        /// `activate` is immediate and carries no `Operation` row.
+        /// `activationDeadline`. Split from `activating` because `activate` is
+        /// immediate and carries no `Operation` row.
         case confirmingRelay
         /// Confirm the run's actual deliverable: the TARGET SYSTEM is meshed.
         case settling
@@ -82,21 +82,16 @@ public struct RelayRun: MissionStepMachine {
     /// The device type this run plants.
     public static let relayDeviceType = SalvageRun.relayDeviceType
 
-    /// The kinds this machine dispatches that DO create an `Operation` row. A
-    /// `.simple` verb creates none, so a dispatch naming its OWN step re-issues
-    /// every tick forever against a deadline that can never accumulate. A tracked
-    /// kind's operation row IS that missing guard.
-    public static let trackedKinds: Set<OperationKind> = [.travel, .print]
-
-    /// Generous by a wide margin: it exists for the print that never happens, not
-    /// for a slow one.
-    public static let printDeadline: TimeInterval = 30 * 60
-
     /// A `stow` is immediate server-side, so this only covers the confirm-read.
     public static let stowDeadline: TimeInterval = 5 * 60
 
-    /// How old the hub's row may be and still be believed.
-    public static let hubFreshness: TimeInterval = 5 * 60
+    /// How long a just-deployed relay may take to come up `relaying` before the
+    /// run surfaces `relayActivationFailed`.
+    public static let activationDeadline: TimeInterval = 10 * 60
+
+    /// How old the hub's row may be and still be believed. The print rail's
+    /// bound, so the hub-row read and the stock veto cannot drift apart.
+    public static let hubFreshness: TimeInterval = PrintRail.hubFreshness
 
     public static let reclaimDeadline: TimeInterval = stowDeadline
 
@@ -106,7 +101,7 @@ public struct RelayRun: MissionStepMachine {
     public static let reclaimFreshness: TimeInterval = hubFreshness
 
     /// Floor between confirm-reads while a poll step waits.
-    public static let pollInterval: TimeInterval = SalvageRun.relayPollInterval
+    public static let pollInterval: TimeInterval = PrintRail.pollInterval
 
     // MARK: - Entry
 
@@ -300,55 +295,6 @@ public struct RelayRun: MissionStepMachine {
         return SalvageRun.deployedRelay(near: carrier, in: world)
     }
 
-    /// Whether the stockpile census is too old to trust. **The whole
-    /// `LocationFootprint` table, never the hub row alone** — one request upserts
-    /// every location, so gating on the table's max turns "refreshed and still no
-    /// hub row" into positive evidence that falls through to a veto. A per-location
-    /// gate self-loops instead, re-requesting every tick forever.
-    func footprintCensusIsStale(_ world: WorldSnapshot) -> Bool {
-        guard let newest = world.footprints.values.map(\.fetchedAt).max() else { return true }
-        return world.now.timeIntervalSince(newest) > Self.pollInterval
-    }
-
-    /// Whether the reserve rail vetoes a print at `location`. **Fails CLOSED on
-    /// unreadable stock once armed** — a missing census row is evidence nobody told
-    /// us, not evidence the stock is fine, and a print is irreversible. A
-    /// present-but-old row is caught separately on `hubFreshness`, because the
-    /// table-wide gate proves the census refreshed SOMEWHERE, never that this
-    /// location did. Reads TOTAL holdings; the rail is specified per resource type.
-    func printStockIsShort(at location: String, _ world: WorldSnapshot) -> Bool {
-        guard let floor = reserveFloor else { return false }
-        guard let footprint = world.footprints[location] else { return true }
-        if world.now.timeIntervalSince(footprint.fetchedAt) > Self.hubFreshness { return true }
-        return footprint.resources < floor
-    }
-
-    /// WHICH of `printStockIsShort`'s three conditions vetoed a print at
-    /// `location` in `world`, for the one log line the stall emits — in the same
-    /// branch order that function tests them, so the two can only ever agree.
-    ///
-    /// A single "stock below floor" line would be FALSE on two of the three
-    /// branches: a missing census row has no reading to be below anything, and a
-    /// stale row's reading may sit comfortably ABOVE the floor and still veto on
-    /// its AGE alone — sending an operator after a shortage that does not exist
-    /// instead of at a census that stopped listing the hub.
-    func printStockShortDiagnosis(at location: String, _ world: WorldSnapshot) -> String {
-        let floorText = reserveFloor.map(String.init) ?? "unarmed"
-        guard let footprint = world.footprints[location] else {
-            return "no census row for it at all (floor \(floorText))"
-        }
-        // Unrounded, matching `printStockIsShort` — rounding first would disagree
-        // with it inside the half-second either side of the bound.
-        let age = world.now.timeIntervalSince(footprint.fetchedAt)
-        if age > Self.hubFreshness {
-            return """
-                its census row is \(Int(age.rounded()))s old, past the \(Int(Self.hubFreshness))s freshness bound \
-                — the reading it carries (\(footprint.resources)) is not trusted, whatever it says
-                """
-        }
-        return "stock \(footprint.resources) below floor \(floorText)"
-    }
-
     // MARK: - Acquire
 
     /// Where `directive`'s relay comes from, and the command that starts it coming.
@@ -386,13 +332,14 @@ public struct RelayRun: MissionStepMachine {
         // about resources already committed. `.printStockShort` rather than nil
         // because this gates an irreversible spend, so a persistently-unreadable
         // census must reach bounded-retry-then-escalate instead of retrying forever.
-        if reserveFloor != nil, footprintCensusIsStale(world) {
+        let rail = PrintRail(reserveFloor: reserveFloor)
+        if reserveFloor != nil, rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.acquire.rawValue, thenStall: .printStockShort)
         }
-        if let location = hub.location, printStockIsShort(at: location, world) {
+        if let location = hub.location, rail.printStockIsShort(at: location, world) {
             // The most safety-relevant veto here, so it names the condition that
             // fired. No flood risk — the stall halts the run.
-            let why = printStockShortDiagnosis(at: location, world)
+            let why = rail.printStockShortDiagnosis(at: location, world)
             logger.notice("relay run \(directive.id, privacy: .public): print stock short at \(location, privacy: .public) — \(why, privacy: .public)")
             return .stall(.printStockShort)
         }
@@ -425,7 +372,7 @@ public struct RelayRun: MissionStepMachine {
         // Deadline BEFORE the read (`confirm-steps-need-fresh-evidence`): the
         // read below only advances on success, so a staleness-first ordering
         // would never reach the backstop while reads keep failing.
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline {
+        if world.now.timeIntervalSince(directive.stepStartedAt) > PrintJob.deadline {
             logger.notice("relay run \(directive.id, privacy: .public): print produced no relay — \(Self.printDiagnosis(in: world), privacy: .public)")
             return .stall(.noRelayCoLocated)
         }
@@ -560,17 +507,16 @@ public struct RelayRun: MissionStepMachine {
             logger.notice("relay run \(directive.id, privacy: .public): cannot fetch — \(Self.reclaimDiagnosis(code, world), privacy: .public)")
             return .stall(.unreachableDevice)
         }
-        if carrier.location == point { return .advanceStep(nextStep: Step.deactivating.rawValue) }
-        // An open op means the trip is under way — travel is TRACKED, which is
-        // what makes re-dispatching into this same step safe.
-        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        // …and this covers the gap between that op closing and the arrival's
-        // location write landing, where the check above lies about a parked carrier.
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: point), nextStep: Step.fetching.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let leg = TravelTo(
+            deviceCode: carrier.deviceCode, destination: point,
+            arrivalTest: .exactLocation, confirmStep: nil
         )
+        return switch leg.next(ctx) {
+        case let .action(action): action
+        case .finished: .advanceStep(nextStep: Step.deactivating.rawValue)
+        case .more, .noSubject: .stall(.unreachableDevice)
+        }
     }
 
     /// Issue `deactivate` once at `directive`'s source relay, `carrier` standing
@@ -626,21 +572,20 @@ public struct RelayRun: MissionStepMachine {
         // taken means this system is now OFF the mesh, so the very next command
         // must clear the authority gate first — `carrierRetainsAuthority`.
         if source.statusBase != "relaying" { return carrierRetainsAuthority(directive, carrier, world) }
-        // Deadline BEFORE the read (`confirm-steps-need-fresh-evidence`): the
-        // read below only advances on success, so a staleness-first ordering
-        // would never reach the backstop while reads keep failing.
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.reclaimDeadline {
+        // No staleness gate: `.age(pollInterval)` makes the ladder's freshness
+        // check the same test as its own throttle, matching the old plain poll.
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(deadline: Self.reclaimDeadline, onExpiry: .stallNow(.unreachableDevice))
+        ladder.watermark = .age(Self.pollInterval)
+        ladder.readInterval = Self.pollInterval
+        let verdict = ladder.verdict([source], ctx)
+        if case .act(.stall) = verdict {
             logger.notice("relay run \(directive.id, privacy: .public): \(code, privacy: .public) never stopped relaying after deactivate")
-            return .stall(.unreachableDevice)
         }
-        // Nothing else moves this row: `deactivate` emits no operation, and the
-        // `relay.*` SSE route only invalidates FTL-mesh freshness. A bare wait
-        // would sit on a stale row for the whole deadline and then stall on a
-        // relay that is actually down.
-        if world.now.timeIntervalSince(source.updatedAt) > Self.pollInterval {
-            return .refreshDevices(deviceCodes: [code], thenStall: nil)
+        return switch verdict {
+        case let .act(action): action
+        case .judge: .wait
         }
-        return .wait
     }
 
     /// Can `carrier` still command anything at this system? **The check the
@@ -710,17 +655,16 @@ public struct RelayRun: MissionStepMachine {
         if relay.stowedInDeviceCode == carrier.deviceCode {
             return .claimRelay(deviceCode: relay.deviceCode, nextStep: Step.travelling.rawValue)
         }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.stowDeadline {
-            return .stall(.noRelayCoLocated)
+        // No staleness gate: `.age(pollInterval)` makes the ladder's freshness
+        // check the same test as its own throttle, matching the old plain poll.
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(deadline: Self.stowDeadline, onExpiry: .stallNow(.noRelayCoLocated))
+        ladder.watermark = .age(Self.pollInterval)
+        ladder.readInterval = Self.pollInterval
+        return switch ladder.verdict([relay], ctx) {
+        case let .act(action): action
+        case .judge: .wait
         }
-        // Nothing else moves this row: `stow` emits no operation and the stow
-        // event's field application lands only if the event arrives at all. A
-        // bare wait would sit on a stale row for the whole deadline and then
-        // stall on a relay that is actually aboard.
-        if world.now.timeIntervalSince(relay.updatedAt) > Self.pollInterval {
-            return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
-        }
-        return .wait
     }
 
     // MARK: - Travel
@@ -728,35 +672,31 @@ public struct RelayRun: MissionStepMachine {
     /// Fly `carrier` to `directive`'s target system, per `world`.
     private func travel(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
         guard let target = directive.currentTarget else { return .done }
-        if SalvageRun.system(of: carrier) == target {
-            // Somebody meshed this system while we were in flight. Planting a
-            // second relay would spend one for nothing, so skip straight to the
-            // confirmation and keep the relay aboard for the next errand.
-            //
-            // Read off DEVICE rows, never `ftlLinks`: a just-activated relay
-            // produces no link rows at all.
-            let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
-            // …but the paragraph above is only true of a PRINTED relay. A
-            // reclaim reached this branch having already torn its source's
-            // system off the mesh, so finishing here is a net loss dressed as a
-            // success. It still finishes; it does not do so quietly.
-            if meshed, let loss = Self.meshRaceLoss(directive, target: target) {
-                logger.warning("relay run \(directive.id, privacy: .public): \(loss, privacy: .public)")
-            }
-            return .advanceStep(nextStep: meshed ? Step.settling.rawValue : Step.emplacing.rawValue)
-        }
-        // An open op means the trip is under way — the guard that stops a second
-        // travel landing on top of the first, which is exactly what a `.simple`
-        // verb cannot have.
-        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        // …and the guard for the gap between that op closing and the arrival's
-        // location write landing, in which the check above says "not there yet"
-        // about a carrier that already is.
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: target), nextStep: Step.travelling.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let leg = TravelTo(
+            deviceCode: carrier.deviceCode, destination: target,
+            arrivalTest: .system, confirmStep: nil
         )
+        switch leg.next(ctx) {
+        case let .action(action): return action
+        case .more, .noSubject: return .stall(.unreachableDevice)
+        case .finished: break   // arrived — the fork below decides where to
+        }
+        // Somebody meshed this system while we were in flight. Planting a
+        // second relay would spend one for nothing, so skip straight to the
+        // confirmation and keep the relay aboard for the next errand.
+        //
+        // Read off DEVICE rows, never `ftlLinks`: a just-activated relay
+        // produces no link rows at all.
+        let meshed = SalvageTargetPlanner.meshSystems(in: Array(world.devices.values)).contains(target)
+        // …but the paragraph above is only true of a PRINTED relay. A
+        // reclaim reached this branch having already torn its source's
+        // system off the mesh, so finishing here is a net loss dressed as a
+        // success. It still finishes; it does not do so quietly.
+        if meshed, let loss = Self.meshRaceLoss(directive, target: target) {
+            logger.warning("relay run \(directive.id, privacy: .public): \(loss, privacy: .public)")
+        }
+        return .advanceStep(nextStep: meshed ? Step.settling.rawValue : Step.emplacing.rawValue)
     }
 
     /// Wait out `SalvageRun.systemResolutionDeadline`, spend `.refreshSystem`
@@ -801,14 +741,16 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.noRelayCoLocated)
         }
         if carrier.location != point {
-            if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-            // The `!=` above is the check that misreads a row still lagging the
-            // previous arrival; prove the row post-dates that arrival first.
-            if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-            return .dispatch(
-                kind: .travel, deviceCode: carrier.deviceCode,
-                params: CommandParams(destination: point), nextStep: Step.emplacing.rawValue
+            let ctx = StepContext(directive: directive, world: world, step: directive.step)
+            let leg = TravelTo(
+                deviceCode: carrier.deviceCode, destination: point,
+                arrivalTest: .exactLocation, confirmStep: nil
             )
+            switch leg.next(ctx) {
+            case let .action(action): return action
+            case .more, .noSubject: return .stall(.unreachableDevice)
+            case .finished: break   // standing at the point — deploy below
+            }
         }
         // Re-entry after a `deploy` whose step move was lost: re-issuing `deploy`
         // at a deployed relay is rejected, so hand off to activation instead.
@@ -871,16 +813,18 @@ public struct RelayRun: MissionStepMachine {
         }
         // `statusBase`, not `status` — a raw comparison reads a live relay as dead.
         if relay.statusBase == Self.relayingStatus { return .advanceStep(nextStep: Step.settling.rawValue) }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > SalvageRun.activationDeadline {
-            return .stall(.relayActivationFailed)
+        // No staleness gate: `.age(pollInterval)` makes the ladder's freshness
+        // check the same test as its own throttle, matching the old plain poll.
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var ladder = ConfirmRow(
+            deadline: Self.activationDeadline, onExpiry: .stallNow(.relayActivationFailed)
+        )
+        ladder.watermark = .age(Self.pollInterval)
+        ladder.readInterval = Self.pollInterval
+        return switch ladder.verdict([relay], ctx) {
+        case let .act(action): action
+        case .judge: .wait
         }
-        // Nothing else moves this row — the `relay.*` SSE route only invalidates
-        // FTL-mesh freshness — so a bare wait can sit on a stale row for the
-        // whole deadline and then stall on a relay that came up fine.
-        if world.now.timeIntervalSince(relay.updatedAt) > Self.pollInterval {
-            return .refreshDevices(deviceCodes: [relay.deviceCode], thenStall: nil)
-        }
-        return .wait
     }
 
     /// Confirm `directive`'s actual deliverable: the TARGET SYSTEM is meshed. A
@@ -906,27 +850,18 @@ public struct RelayRun: MissionStepMachine {
     /// an exact match. No hub to fly to is `.done`, not a stall — the relay is
     /// planted and the deliverable is met.
     private func returnHome(_ directive: Directive, _ carrier: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let hub = Self.theatreDepot(in: world, for: directive) else {
-            // Another theatre is up but this row's own went `.claimed` — wait
-            // for it rather than abandoning the carrier or flying elsewhere.
-            if world.theatreWentClaimed(for: directive) { return .wait }
-            logger.notice("relay run \(directive.id, privacy: .public): no hub to return to — leaving the carrier where it stands")
-            return .done
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let home = ReturnHome(deviceCodes: [carrier.deviceCode], destination: .theatreDepot)
+        return switch home.next(ctx) {
+        case let .action(action): action
+        case .finished, .more: .done
+        case .noSubject: noHub(directive)
         }
-        if carrier.location == hub { return .done }
-        // The outbound leg's shape — see `fetch`.
-        if world.openOperation(for: carrier.deviceCode) != nil { return .wait }
-        if let unconfirmed = SalvageRun.travelPositionUnconfirmed(carrier, world) { return unconfirmed }
-        return .dispatch(
-            kind: .travel, deviceCode: carrier.deviceCode,
-            params: CommandParams(destination: hub), nextStep: Step.returning.rawValue
-        )
     }
 
-    /// The depot of the theatre `directive` serves, resolved off its own row
-    /// through `world` — never a second recognition rule, or the return leg
-    /// could drift from the theatre that launched it.
-    static func theatreDepot(in world: WorldSnapshot, for directive: Directive) -> String? {
-        world.theatreDepot(for: directive)
+    /// Nothing to fly home to. Says so once, then finishes.
+    private func noHub(_ directive: Directive) -> MissionAction {
+        logger.notice("relay run \(directive.id, privacy: .public): no hub to return to — leaving the carrier where it stands")
+        return .done
     }
 }

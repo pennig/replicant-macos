@@ -179,7 +179,10 @@ struct MineFleetPrintSubstituteTests {
             busy: busy
         )
 
-        #expect(MineFleetPrint.printer(for: run(hub: "AF1"), in: snapshot)?.deviceCode == "AF2")
+        let directive = run(hub: "AF1")
+        let ctx = StepContext(directive: directive, world: snapshot, step: directive.step)
+
+        #expect(PrintJob(depot: depot).bench(ctx)?.deviceCode == "AF2")
     }
 
     /// With the bench empty of anything able there is nothing to substitute, and

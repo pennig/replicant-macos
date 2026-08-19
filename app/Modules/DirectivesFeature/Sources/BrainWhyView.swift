@@ -695,7 +695,7 @@ public struct BrainWhy: Equatable, Sendable {
         )
 
         // ALL THREE of the rail's veto conditions, in its own branch order —
-        // `BrainLimits.hubStockStanding` mirrors `RelayRun.printStockIsShort`
+        // `BrainLimits.hubStockStanding` mirrors `PrintRail.printStockIsShort`
         // and is test-pinned against it. Rendering only two of them was a real
         // defect: a fresh-looking figure on an hour-old census row would have
         // read as headroom by contrast, while the rail refused every print.

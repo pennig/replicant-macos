@@ -39,9 +39,11 @@ public struct MineFleetPrint: MissionStepMachine {
     /// the run's depot can take a job — printing somewhere else would be a
     /// fabrication, but printing at the same bench with a free hub is not.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
-        guard let hub = Self.printer(for: directive, in: world) else {
-            return .stall(.unreachableDevice)
-        }
+        guard let depot = PrintJob.depot(for: directive, in: world),
+              let hub = PrintJob(depot: depot).bench(
+                  StepContext(directive: directive, world: world, step: directive.step)
+              )
+        else { return .stall(.unreachableDevice) }
         guard let step = Step(rawValue: directive.step) else {
             logger.notice("\(kind.rawValue, privacy: .public) \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
@@ -50,22 +52,6 @@ public struct MineFleetPrint: MissionStepMachine {
         case .printing: return printing(directive, hub, world)
         case .stocking: return stocking(directive, hub, world)
         }
-    }
-
-    /// The hub to print with: the row's own while it still accepts jobs, else a
-    /// free able hub at the same depot, lowest code first. A hub keeps advertising
-    /// `enqueue_print` while packed or under way, so only status separates them.
-    static func printer(for directive: Directive, in world: WorldSnapshot) -> Device? {
-        let pinned = world.device(directive.deviceCode)
-        guard let depot = directive.theatreDepot ?? pinned?.location else { return nil }
-        if let pinned, pinned.acceptsPrintJobs, pinned.location == depot { return pinned }
-        let able = world.devices.values
-            .filter { $0.acceptsPrintJobs && $0.location == depot && !$0.isCarrierHull }
-        // Substituting opens a queue either way, so a bench standing free beats one
-        // already serving another run. Lowest code breaks both ties.
-        return able.filter { world.openOperation(for: $0.deviceCode) == nil }
-            .min { $0.deviceCode < $1.deviceCode }
-            ?? able.min { $0.deviceCode < $1.deviceCode }
     }
 
     // MARK: - Deciding
@@ -86,20 +72,6 @@ public struct MineFleetPrint: MissionStepMachine {
         MineRecipe.all.map(\.deviceType) + [MineRecipe.carrierDeviceType]
     }
 
-    /// Whether every row `remaining(at:)` judges predates this step. `printing`
-    /// hands back only once the print op has closed, so such rows are rows from
-    /// before the clone landed — and a landed clone reads as an empty slot.
-    static func fleetEvidenceIsStale(
-        _ directive: Directive, at location: String, in world: WorldSnapshot
-    ) -> Bool {
-        let newest = world.devices.values
-            .filter { $0.location == location }
-            .map(\.updatedAt)
-            .max()
-        guard let newest else { return true }
-        return newest < directive.stepStartedAt
-    }
-
     /// Start one print at `hub`'s location, or decline. Short stock idles against a
     /// hub buffer that refills from salvage; only an unreadable hub — gone from the
     /// fleet, without a location, or a sweep that will not land — escalates.
@@ -113,9 +85,9 @@ public struct MineFleetPrint: MissionStepMachine {
         // throttle — owner-scoped, so a co-tenant's job here is never ours to wait on.
         if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
 
-        // The rail, read through `RelayRun`'s own veto so the two cannot drift.
+        // The rail, held once in `PrintRail` so no print site can drift from it.
         // Nothing polls `LocationFootprint`, so a stale census buys its own read.
-        let rail = RelayRun(reserveFloor: reserveFloor)
+        let rail = PrintRail(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }
@@ -123,7 +95,7 @@ public struct MineFleetPrint: MissionStepMachine {
 
         // Last moment before an irreversible spend, and the one read that can
         // settle it: a clone is PRESENT at the hub, so one scoped sweep sees it.
-        if Self.fleetEvidenceIsStale(directive, at: location, in: world) {
+        if PrintJob.fleetEvidenceIsStale(directive, at: location, in: world) {
             return .refreshDevicesInSystem(designation: location, thenStall: .unreachableDevice)
         }
 
@@ -158,7 +130,7 @@ public struct MineFleetPrint: MissionStepMachine {
         }
         // A bench is shared and `openOperation` is keyed by device alone, so gating
         // the deadline on one lets a co-tenant's print park this run past it.
-        if world.now.timeIntervalSince(directive.stepStartedAt) <= RestockRun.printDeadline {
+        if world.now.timeIntervalSince(directive.stepStartedAt) <= PrintJob.deadline {
             return .wait
         }
         logger.notice("mine fleet print \(directive.id, privacy: .public): print produced nothing within the deadline — re-deciding")

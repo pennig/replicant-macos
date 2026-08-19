@@ -390,7 +390,7 @@ struct BrainWhyViewTests {
     /// below floor, **stale**, and unread — not just the two a bare figure can
     /// express.
     ///
-    /// The staleness case is the one this test exists for. `RelayRun
+    /// The staleness case is the one this test exists for. `PrintRail
     /// .printStockIsShort` vetoes on a census row older than
     /// `RelayRun.hubFreshness` regardless of how healthy the number looks, so
     /// a card rendering an hour-old 41,000-unit reading as "against a 35,078

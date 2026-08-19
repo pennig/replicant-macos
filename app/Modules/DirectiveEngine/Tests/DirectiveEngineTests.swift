@@ -2674,7 +2674,7 @@ struct RelayRunEngineTests {
                 )
             }.execute(db)
             // No `LocationFootprint` rows at all — the census is stale by
-            // `RelayRun.footprintCensusIsStale`'s "never read" branch.
+            // `PrintRail.footprintCensusIsStale`'s "never read" branch.
         }
         let deviceReads = LockIsolated<[String]>([])
         let footprintReads = LockIsolated(0)
