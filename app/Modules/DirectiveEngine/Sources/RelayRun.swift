@@ -307,7 +307,8 @@ public struct RelayRun: MissionStepMachine {
             logger.notice("relay run \(directive.id, privacy: .public): no depot stamped")
             return .stall(.unreachableDevice)
         }
-        guard !PrintScheduler.benches(at: depot, in: world).isEmpty else {
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        guard PrintJob(depot: depot).hasBench(ctx) else {
             logger.notice("relay run \(directive.id, privacy: .public): no print hub at \(depot, privacy: .public)")
             return .stall(.unreachableDevice)
         }
@@ -328,15 +329,13 @@ public struct RelayRun: MissionStepMachine {
             return .stall(.printStockShort)
         }
 
-        if PrintJob(depot: depot).stillPrinting(
-            StepContext(directive: directive, world: world, step: directive.step)
-        ) { return .wait }
+        if PrintJob(depot: depot).stillPrinting(ctx) { return .wait }
 
-        let job = PrintOrder(
+        let order = PrintOrder(
             deviceType: Self.relayDeviceType, owner: directive.id,
             onRailShort: .stall(.printStockShort)
         )
-        guard let chosen = PrintScheduler.choose(job, at: depot, in: world) else { return .wait }
+        guard let chosen = PrintJob(depot: depot).bench(ctx, for: order) else { return .wait }
 
         // Last moment before a real resource spend, so the rows behind the fleet
         // read get one authoritative confirmation.

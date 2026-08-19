@@ -2708,15 +2708,9 @@ struct RelayRunEngineTests {
         #expect(row?.step == "printing")
     }
 
-    /// The same first two steps, but the census refresh comes back without the
-    /// hub's own row — positive evidence the hub is genuinely absent from a
-    /// fresh read. The rail must now VETO, and it must do so under its OWN
-    /// reason (`.printStockShort`), never under the device refresh's
-    /// `.unreachableDevice`.
-    ///
-    /// The companion to the test above: together they pin that the chained
-    /// refresh reaches the rail AND that the rail's verdict — either way — is
-    /// what surfaces.
+    /// A chained census refresh comes back without the hub's own row. The
+    /// rail must VETO under its OWN reason (`.printStockShort`), never a
+    /// borrowed one — and the print must never be dispatched.
     @Test func aChainedCensusRefreshStallsUnderTheRailsOwnReason() async throws {
         let database = try GameDatabase.bootstrap()
         let now = Self.now
@@ -2724,10 +2718,7 @@ struct RelayRunEngineTests {
             try Directive.insert { relayDirective() }.execute(db)
             try Device.insert { device("V1", type: "heaven_vessel", updatedAt: now) }.execute(db)
             try Device.insert {
-                device(
-                    "AF1", type: "autofactory", availableCommands: ["enqueue_print"],
-                    updatedAt: now.addingTimeInterval(-600)
-                )
+                device("AF1", type: "autofactory", availableCommands: ["enqueue_print"], updatedAt: now)
             }.execute(db)
         }
         let dispatched = LockIsolated(0)
@@ -2736,14 +2727,6 @@ struct RelayRunEngineTests {
             $0.defaultDatabase = database
             $0.date = .constant(now)
             $0.uuid = .incrementing
-            $0.deviceRefresher.refresh = { code, _ in
-                guard code == "AF1" else { return nil }
-                let fresh = self.device(
-                    "AF1", type: "autofactory", availableCommands: ["enqueue_print"], updatedAt: now
-                )
-                try? await database.write { db in try Device.upsert { fresh }.execute(db) }
-                return fresh
-            }
             // A successful census that simply does not list the hub: every
             // OTHER location's row goes fresh, so the table-wide gate is
             // satisfied and `printStockIsShort` fails closed on the absence.

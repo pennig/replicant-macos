@@ -198,14 +198,17 @@ private func op(on entity: String, owner: String?, deviceType: String? = nil) ->
 }
 
 /// A world for the scheduler tail: `devices`, plus a default carrier at
-/// `depot` (overridden when a test's own device shares its code), and an
-/// abundant fresh footprint at every location a device stands.
-private func snapshot(_ devices: [Device], open: [String: GameModels.Operation] = [:]) -> WorldSnapshot {
+/// `depot`, an abundant fresh footprint everywhere a device stands, and
+/// `dispatched` fed straight into `dispatchedOperations`.
+private func snapshot(
+    _ devices: [Device], open: [String: GameModels.Operation] = [:],
+    dispatched: [String: GameModels.Operation] = [:]
+) -> WorldSnapshot {
     let locations = Set(devices.compactMap(\.location)).union([depot])
     let footprints = Dictionary(uniqueKeysWithValues: locations.map { ($0, footprint($0, resources: 999_999)) })
     return world(
         devices: [device("C1", location: depot)] + devices,
-        openOperations: open, footprints: footprints
+        openOperations: open, dispatchedOperations: dispatched, footprints: footprints
     )
 }
 
@@ -226,9 +229,9 @@ private func acquiring(carrier: String = "C1", depot: String = depot, id: String
 
 @Suite("Relay Run — acquire adopts the scheduler")
 struct RelayRunAcquireSchedulerTests {
-    /// C5. `hub(near:in:)` anchored on `carrier.location` — a device location,
-    /// which `PrintJob.swift:20-21` warns against: a hub that unfurls elsewhere
-    /// must not drag the run with it.
+    /// C5. `acquire` anchors the print on the run's stamped theatre depot,
+    /// never on wherever the carrier currently stands — a carrier away from
+    /// home must not drag the print to it.
     @Test("acquire prints at the theatre depot, not where the carrier stands")
     func acquirePrintsAtTheDepot() {
         let carrier = device("C1", location: elsewhere)
@@ -241,8 +244,8 @@ struct RelayRunAcquireSchedulerTests {
         #expect(deviceCode == "B1")
     }
 
-    /// C6. `hub` preferred "anything but our own carrier", then lowest code —
-    /// never a free bench, and a carrier hull was a legal pick.
+    /// C6. The chosen bench must be idle — never a busy one — and never a
+    /// carrier hull, even when either would sort first by device code.
     @Test("acquire skips a busy bench and a carrier hull")
     func acquireSkipsBusyAndHulls() {
         let world = snapshot(
@@ -260,7 +263,9 @@ struct RelayRunAcquireSchedulerTests {
         #expect(deviceCode == "B3")
     }
 
-    /// C7. `acquire` had no open-op guard at all — alone among the five sites.
+    /// C7, as a regression alongside C6: a lone busy bench holding this run's
+    /// own print must not be re-ordered. Vacuous re C7 alone — see the next
+    /// test, which isolates the owner-scoped guard from C6's busy-skip.
     @Test("acquire does not order twice while its own print is open")
     func acquireDoesNotOrderTwice() {
         let world = snapshot(
@@ -271,17 +276,19 @@ struct RelayRunAcquireSchedulerTests {
         #expect(RelayRun().nextAction(directive: acquiring(id: "R-1"), world: world) == .wait)
     }
 
-    /// C7 isolated from C6: a FREE bench (B2) stands ready, so only the
-    /// owner-scoped guard, not the busy-bench skip, can be stopping this.
+    /// C7, isolated from C6: a FREE bench (B2) stands ready, and the carrier
+    /// (`C1`, no bench's code) is not the busy one, so only `stillPrinting`'s
+    /// owner-scoped `mine` check — never a device-code coincidence — stops this.
     @Test("acquire does not order at a free bench while its own print is open elsewhere")
     func acquireDoesNotDoubleOrderAtAFreeBench() {
+        let mine = op(on: "B1", owner: "R-1", deviceType: "ftl_relay")
         let world = snapshot(
             [bench("B1", printing: "ftl_relay"), bench("B2")],
-            open: ["B1": op(on: "B1", owner: "R-1", deviceType: "ftl_relay")]
+            open: ["B1": mine], dispatched: ["OP-B1": mine]
         )
 
         #expect(
-            RelayRun().nextAction(directive: acquiring(carrier: "B1", id: "R-1"), world: world) == .wait
+            RelayRun().nextAction(directive: acquiring(id: "R-1"), world: world) == .wait
         )
     }
 }
