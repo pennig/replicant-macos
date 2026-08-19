@@ -289,6 +289,7 @@ At `3ae52be` the total over these files is **70**, with `Brain.swift` at 31 and 
 | # | Task | Change | Test that pins it |
 |---|---|---|---|
 | C11 | 3 | A mission no longer dispatches onto a bench that is busy with **another run's** print | `PrintSchedulerTests` "no free bench yields no choice", plus `MineFleetPrintTests` "an all-busy depot waits, it does not stall" |
+| C12 | 3 | `RestockRun.printing`'s own-print check moves from a device-scoped `openOperation(for: hub.deviceCode, owner:)` to directive-wide `PrintJob.stillPrinting`, since the step no longer carries a fixed device to scope the old check to | `RestockRunTests` "waiting on the clone holds while OUR OWN print op is open", plus "waiting on a clone holds while the print op is open" |
 
 `PrintJob.bench` ends `?? able.min { $0.deviceCode < $1.deviceCode }` (`PrintJob.swift:46`) — when every bench is busy it returns a busy one. The caller's guard is owner-scoped (`MineFleetPrint.swift:86`), so a **co-tenant's** op there is invisible and the mission dispatches anyway. `CommandClient.swift:247-262` then marks the co-tenant's op `.superseded`, and the co-tenant's run loses track of a print that is still running. Under Phase A's fan-out, benches are busy far more often, so this goes from rare to routine. `PrintScheduler.choose` returns `nil` when no bench can take the job, and the caller waits.
 

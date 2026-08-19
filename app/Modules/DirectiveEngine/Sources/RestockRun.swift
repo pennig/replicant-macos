@@ -53,10 +53,9 @@ public struct RestockRun: MissionStepMachine {
     /// before it, so re-tuning it as a throughput knob moves nothing.
     public static let idleCap = 10
 
-    /// Route `directive`'s current step against `world`.
-    ///
-    /// Stalls only when no hub stands at the run's depot at all: printing
-    /// somewhere else would be a fabrication. Every bench busy is a wait.
+    /// Route `directive`'s current step against `world`. Stalls only when no
+    /// hub stands at the run's depot at all — printing somewhere else would
+    /// be a fabrication. Every bench busy is a wait, not a stall.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
         guard let depot = PrintJob.depot(for: directive, in: world) else {
             return .stall(.unreachableDevice)
@@ -75,13 +74,9 @@ public struct RestockRun: MissionStepMachine {
 
     // MARK: - Deciding
 
-    /// Print one relay at `depot`, or wait, judging `directive`'s demand against
-    /// `world`'s idle pool and census.
-    ///
-    /// **Every branch that declines is a `.wait`, never a `.stall`** — demand
-    /// met, cap reached, a busy bench, or the reserve saying not yet are all the
-    /// system working, and dressing idle calm up as a halt spends an operator's
-    /// attention on nothing. `nextAction` already proved `depot` has a printer.
+    /// Print one relay at `depot`, or wait. Every declining branch is a
+    /// `.wait`, never a `.stall` — demand met, cap reached, a busy bench, or
+    /// the reserve short are all the system working, not a fault.
     private func stocking(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
         let idle = RelayRun.idleRelays(at: depot, in: world).count
         let desired = Self.desiredIdle(for: directive)

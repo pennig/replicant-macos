@@ -31,10 +31,9 @@ struct PrintJob: Equatable, Sendable {
         directive.theatreDepot ?? world.device(directive.deviceCode)?.location
     }
 
-    /// The bench that should take `order`, or nil when none at this depot can.
-    ///
-    /// Nil means every bench is occupied, which is a wait — never a stall, and
-    /// never a dispatch onto someone else's job.
+    /// The bench that should take `order`, or nil when every bench at this
+    /// depot is occupied — a wait, never a stall, and never a dispatch onto
+    /// someone else's job.
     func bench(_ ctx: StepContext, for order: PrintOrder) -> Bench? {
         PrintScheduler.choose(order, at: depot, in: ctx.world)
     }
