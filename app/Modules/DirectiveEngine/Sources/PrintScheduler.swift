@@ -9,7 +9,6 @@
 import GameModels
 
 /// One print-capable device at a depot, with what it is carrying.
-///
 /// `queueDepth` comes from the printer's own snapshot; `owners` can only come
 /// from the ops table, because a queue entry carries no id.
 struct Bench: Equatable, Sendable {
@@ -49,7 +48,6 @@ struct PrintOrder: Equatable, Sendable {
 enum PrintScheduler {
 
     /// Every bench standing at `depot`, lowest device code first.
-    ///
     /// A carrier hull is excluded even when it advertises the command: printing
     /// into a vessel a run is about to fly away is a job that leaves with it.
     static func benches(at depot: String, in world: WorldSnapshot) -> [Bench] {
@@ -68,7 +66,6 @@ enum PrintScheduler {
     }
 
     /// The bench's load: the waiting queue plus the job on the platen.
-    ///
     /// The two live in different blocks and never overlap, and `queueSize` is
     /// the bench's capacity rather than its load.
     private static func depth(of device: Device) -> Int {
