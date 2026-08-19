@@ -45,13 +45,14 @@ private func bench(
 
 private func op(
     on entity: String, owner: String?, status: OperationStatus = .active,
+    kind: String = OperationKind.print.rawValue,
     deviceType: String? = nil, quantity: Int? = nil
 ) -> GameModels.Operation {
     var params: [String: JSONValue] = [:]
     if let deviceType { params["device_type"] = .string(deviceType) }
     if let quantity { params["quantity"] = .number(Double(quantity)) }
     return GameModels.Operation(
-        id: "OP-\(entity)", entityCode: entity, kind: OperationKind.print.rawValue,
+        id: "OP-\(entity)", entityCode: entity, kind: kind,
         status: status, source: .poll, startedAt: now, completesAt: nil,
         lastConfirmedAt: now, detail: .object(["params": .object(params)]),
         directiveID: owner
@@ -178,8 +179,8 @@ struct PrintSchedulerChoiceTests {
         #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
     }
 
-    /// C11. Today `PrintJob.bench` falls back to a busy bench, the caller's
-    /// owner-scoped guard misses a co-tenant's op, and the dispatch supersedes it.
+    /// When every bench is occupied there is nothing to choose: the caller
+    /// waits rather than dispatching onto a bench already carrying a job.
     @Test("no bench can take the job, so there is no choice")
     func allBusyYieldsNil() {
         let world = snapshot(
@@ -265,6 +266,22 @@ struct PrintSchedulerOnOrderTests {
         let world = snapshot(
             [bench("B1")],
             open: ["B1": op(on: "B1", owner: "D-7")]
+        )
+
+        #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world).isEmpty)
+    }
+
+    /// A decodable payload is not enough on its own: only print ops are on order.
+    @Test("a non-print op does not count, even with a printable payload")
+    func nonPrintKindDoesNotCount() {
+        let world = snapshot(
+            [bench("B1")],
+            open: [
+                "B1": op(
+                    on: "B1", owner: "D-7", kind: OperationKind.mine.rawValue,
+                    deviceType: "ftl_relay", quantity: 5
+                )
+            ]
         )
 
         #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world).isEmpty)
