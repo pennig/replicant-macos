@@ -1,7 +1,7 @@
 # 14 — RestockRun shares MineFleetPrint's over-print race, and is less guarded
 
 Type: task
-Status: needs-triage
+Status: resolved
 
 Blocked by: nothing. Ticket 13's fix has landed in `MineFleetPrint`; this ticket
 is to port it.
@@ -118,3 +118,17 @@ printed clone's device row has landed — is unchanged; ticket 07 did not port a
 was not implemented. `WorldSnapshot.isFresh(_:since:)`, added by ticket 07, is
 available for whoever picks this up — the watermark work here is now a
 one-line call rather than a hand-rolled compare.
+
+Resolved at `30b783b` (directives-architecture ticket 39, Stage 3 Task 7):
+`RestockRun.stocking` now calls `PrintJob.fleetEvidenceIsStale` as the last
+gate before the dispatch, returning `.refreshDevicesInSystem(designation:
+depot, thenStall: .unreachableDevice)` when every device row at the depot
+predates `stepStartedAt`. Covered by
+`RestockRunCapAndSweepTests.staleEvidenceBuysASweep` (the gate fires) and
+`.metDemandBuysNoSweep` (a vetoed pass buys no read).
+
+Of this ticket's two asks, the gate landed as specified. The ordering ask —
+"census first, reserve veto, then the device sweep" — also matches: the sweep
+sits after `PrintRail`'s `footprintCensusIsStale`/`printStockIsShort` checks
+and immediately before the dispatch, the same position `MineFleetPrint.stocking`
+uses.
