@@ -149,5 +149,10 @@ test file); sixteen doc pointers renamed off `RelayRun.printStockIsShort` /
 
 All five targets green: `DirectiveEngineTests` 1782/1782/0 (226 suites + 1556 cases — 7 new pins,
 1 new suite), `GameServicesTests` 324/324/0, `GameSyncTests` 81/81/0, `GameModelsTests` 153/153/0,
-`DirectivesFeatureTests` 297/297/0. The borrow count is unchanged at 20 — this round added tests and
-renamed comments, and touched no cross-mission reference.
+`DirectivesFeatureTests` 297/297/0.
+
+The reconstructed borrow count is **unchanged at 20** — this round added tests and renamed comments
+and touched no cross-mission code reference. The printed script moved **74 → 70**, because it counts
+comment lines and four of the renamed pointers (`BrainReport.swift` ×2, `BrainCeiling.swift`,
+`Brain.swift`) spelled `RelayRun.` inside a `///`. A four-point move for zero code change is a fair
+illustration of why that script is recorded for continuity rather than judged by.
