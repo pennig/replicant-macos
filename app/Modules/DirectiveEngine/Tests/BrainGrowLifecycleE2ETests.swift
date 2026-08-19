@@ -482,9 +482,8 @@ private func drive(
                 censusReads.withValue { $0 += 1 }
                 return server.census()
             }
-            // Restock's pre-spend sweep (C8): a scoped read of the rows already
-            // in `database`, stamped with THIS tick's instant — the same
-            // authoritative freshness a real `GET devices?location=` buys.
+            // Restock's pre-spend sweep: rows from `database`, stamped fresh —
+            // the same authoritative read a real `GET devices?location=` buys.
             $0.devicesClient.fetchAtLocation = { designation in
                 let rows = (try? await database.read { db in
                     try Device.where { $0.location.eq(designation) }.fetchAll(db)

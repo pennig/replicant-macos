@@ -32,22 +32,6 @@ private func bench(_ code: String, printing: String? = nil, updatedAt: Date = no
     )
 }
 
-/// Idle spares standing at the hub — satisfied demand, evidence as fresh as
-/// every other fixture row unless a test overrides it.
-private func idleRelays(_ count: Int) -> [Device] {
-    (1...count).map { i in
-        Device(
-            deviceCode: "RLY\(i)", deviceType: RelayRun.relayDeviceType, replicantCode: "R1",
-            status: RelayRun.idleRelayStatus, location: hubLocation, locationName: nil,
-            operationalCapacity: 100, queueSize: 0, stowedInDeviceCode: nil,
-            controllerDeviceCode: nil, attachedToDeviceCode: nil,
-            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
-            features: ["cruise", "relay", "stow"], tags: [], detail: .object([:]), updatedAt: now,
-            firstSeenAt: Date(timeIntervalSince1970: 0)
-        )
-    }
-}
-
 /// An open print op naming a device type and quantity, so it counts toward
 /// `PrintScheduler.onOrder`.
 private func op(
@@ -63,13 +47,14 @@ private func op(
 }
 
 private func snapshot(
-    _ devices: [Device], open: [String: GameModels.Operation] = [:]
+    _ devices: [Device], open: [String: GameModels.Operation] = [:],
+    resources: Int = BrainCeiling.aggregateSpendFloor * 2
 ) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: open, dispatchedOperations: [:],
         footprints: [hubLocation: LocationFootprint(
-            location: hubLocation, devices: 1, resources: BrainCeiling.aggregateSpendFloor * 2,
+            location: hubLocation, devices: 1, resources: resources,
             resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
         )],
         now: now
@@ -115,8 +100,9 @@ struct RestockRunFanOutTests {
 @Suite("Restock Run — the cap scales with benches, and buys evidence before it spends (C8)")
 struct RestockRunCapAndSweepTests {
 
-    /// Ticket 18's formula. Written with literals rather than in terms of
-    /// `idleCap`, so that changing either term reddens this test.
+    /// The cap is per-bench first, then an absolute ceiling: written with
+    /// literals rather than in terms of `idleCap`, so that changing either
+    /// term reddens this test.
     @Test("the idle cap scales with bench count")
     func idleCapScalesWithBenches() {
         // One bench: three. Four benches: twelve, clipped to ten.
@@ -149,13 +135,13 @@ struct RestockRunCapAndSweepTests {
         )
     }
 
-    /// The gate sits at the last moment before the spend, after every branch
-    /// that declines — a vetoed pass must buy no read.
-    @Test("a met demand buys no sweep")
-    func metDemandBuysNoSweep() {
+    /// The gate sits LAST: with the reserve rail already short, fleet
+    /// evidence being stale too must never buy a sweep before the veto lands.
+    @Test("a short reserve declines before the sweep is ever reached")
+    func shortReserveDeclinesBeforeTheSweep() {
         let stale = bench("B1", updatedAt: now.addingTimeInterval(-3600))
-        let world = snapshot([stale] + idleRelays(1))
+        let world = snapshot([stale], resources: 0)
 
-        #expect(RestockRun().nextAction(directive: restocking(wanting: 1), world: world) == .wait)
+        #expect(RestockRun().nextAction(directive: restocking(startedAgo: 60), world: world) == .wait)
     }
 }

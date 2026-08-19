@@ -367,10 +367,9 @@ struct RestockRunTests {
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
     }
 
-    /// **The cap.** Demand far beyond `idleCap` does not turn the whole
-    /// stockpile into relays nobody is flying yet: ten parked spares is 3,700
-    /// units of capital sitting in inventory rather than held as reserve. Four
-    /// benches so the absolute ceiling, not the per-bench one, is what binds.
+    /// **The cap.** Four benches, so the absolute ceiling — not the
+    /// per-bench one — binds: ten parked spares is 3,700 units of capital
+    /// sitting in inventory rather than held as reserve.
     @Test("demand beyond the cap is clamped to the cap")
     func stopsAtTheCap() {
         let manyTargets = (1...25).map { "SYS\($0)" }
