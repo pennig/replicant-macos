@@ -76,7 +76,8 @@ public struct EventCourierPrint: MissionStepMachine {
         if container(at: depot, in: world) != nil {
             return .advanceStep(nextStep: Step.replicating.rawValue)
         }
-        guard let printer = MineFleetPrint.printer(for: directive, in: world) else {
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        guard let printer = PrintJob(depot: depot).bench(ctx) else {
             return .stall(.unreachableDevice)
         }
         if world.openOperation(for: printer.deviceCode, owner: directive.id) != nil { return .wait }
@@ -85,7 +86,7 @@ public struct EventCourierPrint: MissionStepMachine {
             return .refreshFootprint(nextStep: Step.printing.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }
-        if MineFleetPrint.fleetEvidenceIsStale(directive, at: depot, in: world) {
+        if PrintJob.fleetEvidenceIsStale(directive, at: depot, in: world) {
             return .refreshDevicesInSystem(designation: depot, thenStall: .unreachableDevice)
         }
         logger.info(
@@ -107,10 +108,13 @@ public struct EventCourierPrint: MissionStepMachine {
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {
         if container(at: depot, in: world) != nil { return .advanceStep(nextStep: Step.replicating.rawValue) }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > RestockRun.printDeadline {
+        if world.now.timeIntervalSince(directive.stepStartedAt) > PrintJob.deadline {
             return .advanceStep(nextStep: Step.printing.rawValue)
         }
-        if world.openOperation(for: directive.deviceCode, owner: directive.id) != nil { return .wait }
+        // Substitution may have put the job on a bench the launch pin does not
+        // name, so the ops table answers this, not the bench chooser.
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        if PrintJob(depot: depot).stillPrinting(ctx) { return .wait }
         return .advanceStep(nextStep: Step.printing.rawValue)
     }
 

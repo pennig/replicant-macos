@@ -54,8 +54,8 @@ public struct RestockRun: MissionStepMachine {
     public static let idleCap = 10
 
     /// How long a print may go unclaimed before the run gives up waiting and
-    /// re-decides. Matches `RelayRun.printDeadline` — the same server-side job.
-    public static let printDeadline: TimeInterval = RelayRun.printDeadline
+    /// re-decides. Matches `PrintJob.deadline` — the same server-side job.
+    public static let printDeadline: TimeInterval = PrintJob.deadline
 
     /// How stale the TABLE-WIDE census may be before `stocking` buys a refresh
     /// rather than trusting it. Matches `RelayRun.pollInterval`, the bound
@@ -69,9 +69,11 @@ public struct RestockRun: MissionStepMachine {
     /// else would be a fabrication, while handing the job to the bench's own free
     /// hub is the same run carrying on.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
-        guard let hub = MineFleetPrint.printer(for: directive, in: world) else {
-            return .stall(.unreachableDevice)
-        }
+        guard let depot = PrintJob.depot(for: directive, in: world),
+              let hub = PrintJob(depot: depot).bench(
+                  StepContext(directive: directive, world: world, step: directive.step)
+              )
+        else { return .stall(.unreachableDevice) }
         guard let step = Step(rawValue: directive.step) else {
             logger.notice("\(kind.rawValue, privacy: .public) \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait

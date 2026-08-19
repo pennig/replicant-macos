@@ -88,9 +88,8 @@ public struct RelayRun: MissionStepMachine {
     /// kind's operation row IS that missing guard.
     public static let trackedKinds: Set<OperationKind> = [.travel, .print]
 
-    /// Generous by a wide margin: it exists for the print that never happens, not
-    /// for a slow one.
-    public static let printDeadline: TimeInterval = 30 * 60
+    /// The print bound, held once in `PrintJob` so the print sites cannot drift.
+    public static let printDeadline: TimeInterval = PrintJob.deadline
 
     /// A `stow` is immediate server-side, so this only covers the confirm-read.
     public static let stowDeadline: TimeInterval = 5 * 60

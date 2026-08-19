@@ -347,7 +347,7 @@ public struct EventRun: MissionStepMachine {
             return .refreshFootprint(nextStep: Step.printing.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }
-        if MineFleetPrint.fleetEvidenceIsStale(directive, at: depot, in: world) {
+        if PrintJob.fleetEvidenceIsStale(directive, at: depot, in: world) {
             return .refreshDevicesInSystem(designation: depot, thenStall: .unreachableDevice)
         }
 

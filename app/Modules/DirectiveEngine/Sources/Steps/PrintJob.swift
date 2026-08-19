@@ -1,0 +1,72 @@
+//
+//  PrintJob.swift
+//  Replicould — DirectiveEngine
+//
+//  Enqueuing one print at a depot: which depot anchors the decision, which
+//  bench takes the job, whether the fleet evidence is good enough to order
+//  against, and whether our own job is still open.
+//
+
+import Foundation
+import GameModels
+
+/// One print order at one depot, as a pure value.
+struct PrintJob: Equatable, Sendable {
+    /// How long a print may go unfinished before the run re-decides. Generous
+    /// by a wide margin: it exists for the print that never happens, not for a
+    /// slow one.
+    static let deadline: TimeInterval = 30 * 60
+
+    /// The depot the bench must stand at. Never a device location — a hub that
+    /// unfurls elsewhere must not drag the run with it.
+    let depot: String
+
+    init(depot: String) {
+        self.depot = depot
+    }
+
+    /// The depot a print decision is anchored on: the run's stamped theatre,
+    /// else where the pinned bench is standing. Nil is a stall at every caller.
+    static func depot(for directive: Directive, in world: WorldSnapshot) -> String? {
+        directive.theatreDepot ?? world.device(directive.deviceCode)?.location
+    }
+
+    /// The bench to print with: the row's own while it still accepts jobs, else
+    /// a free able bench at the depot, lowest code first. A hub keeps advertising
+    /// `enqueue_print` while packed or under way, so only status separates them.
+    func bench(_ ctx: StepContext) -> Device? {
+        let pinned = ctx.world.device(ctx.directive.deviceCode)
+        if let pinned, pinned.acceptsPrintJobs, pinned.location == depot { return pinned }
+        let able = ctx.world.devices.values
+            .filter { $0.acceptsPrintJobs && $0.location == depot && !$0.isCarrierHull }
+        // Substituting opens a queue either way, so a bench standing free beats one
+        // already serving another run. Lowest code breaks both ties.
+        return able.filter { ctx.openOperation(for: $0.deviceCode) == nil }
+            .min { $0.deviceCode < $1.deviceCode }
+            ?? able.min { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// Whether this run's own print is still open, wherever substitution put it.
+    /// `bench` cannot answer it: the chooser skips a bench carrying an open op,
+    /// so it skips the very bench holding our job.
+    func stillPrinting(_ ctx: StepContext) -> Bool {
+        let mine = ctx.world.dispatchedOperations.values.contains {
+            $0.kind == OperationKind.print.rawValue && $0.status.isOpen
+                && $0.directiveID == ctx.directive.id
+        }
+        return mine || ctx.ownedOperation(for: ctx.directive.deviceCode) != nil
+    }
+
+    /// Whether every row at `location` predates the step — the evidence a print
+    /// decision is made against. No rows there at all is no evidence.
+    static func fleetEvidenceIsStale(
+        _ directive: Directive, at location: String, in world: WorldSnapshot
+    ) -> Bool {
+        let newest = world.devices.values
+            .filter { $0.location == location }
+            .map(\.updatedAt)
+            .max()
+        guard let newest else { return true }
+        return newest < directive.stepStartedAt
+    }
+}
