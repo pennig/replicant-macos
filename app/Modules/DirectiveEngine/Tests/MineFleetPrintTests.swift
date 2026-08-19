@@ -520,7 +520,7 @@ struct MineFleetPrintFanOutTests {
 
     /// **Ruling 3.** Our own print sits open on B1, demand covered; B2 stands
     /// free. `choose` cannot see ownership, so only `onOrder` netting stops a
-    /// second order — see the task report for the `.done` finding.
+    /// second order — the run holds in `printing`, it does not complete.
     @Test("this run's own print on one bench draws no second once demand is covered")
     func ownPrintCoveringDemandDrawsNoSecondBench() {
         let directive = printRun()
@@ -536,7 +536,7 @@ struct MineFleetPrintFanOutTests {
             params: CommandParams(deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]),
             nextStep: MineFleetPrint.Step.stocking.rawValue
         ), "the over-print bug this stage exists to fix")
-        #expect(action == .done)
+        #expect(action == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
     }
 }
 
@@ -609,6 +609,61 @@ struct MineFleetPrintCoTenancyEngineTests {
         let p2 = try await database.read { db in try Directive.where { $0.id.eq("P2") }.fetchOne(db) }
         #expect(p1?.attentionReason == nil)
         #expect(p2?.attentionReason == nil)
+    }
+}
+
+// MARK: - stocking and printing must agree on completion
+
+/// The regression this task's own review caught: `stocking` must decide
+/// `.done` on the TRUE shortfall, never on demand merely netted to zero by
+/// `onOrder` — that is what `printing` is for.
+@Suite("MineFleetPrint — fully-ordered demand does not complete the run")
+struct MineFleetPrintCompletionGuardTests {
+
+    /// Demand outstanding, fully covered by an open order, no device rows for
+    /// the clone yet: the run must hold in `printing`, not report `.completed`.
+    @Test func fullyOrderedDemandHoldsInPrintingRatherThanCompleting() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert { printRun(hub: "AF1") }.execute(db)
+            for row in printedFleet(omitting: "mining_drone") + [hub(), carrier()] {
+                try Device.upsert { row }.execute(db)
+            }
+            try GameModels.Operation.insert {
+                GameModels.Operation(
+                    id: "OP-1", entityCode: "AF1", kind: OperationKind.print.rawValue,
+                    status: .active, source: .poll, startedAt: now, completesAt: nil,
+                    lastConfirmedAt: now,
+                    detail: .object(["params": .object([
+                        "device_type": .string("mining_drone"), "quantity": .number(3),
+                    ])]),
+                    directiveID: "P1"
+                )
+            }.execute(db)
+            try LocationFootprint.upsert {
+                LocationFootprint(
+                    location: hubLocation, devices: 2,
+                    resources: BrainCeiling.aggregateSpendFloor * 2,
+                    resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
+                )
+            }.execute(db)
+        }
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in .dispatched(.accepted(operationID: nil)) }
+        } operation: {
+            let core = DirectiveEngineCore(machines: [MineFleetPrint()], tick: .seconds(5))
+            await core.evaluateOnce(directiveID: "P1")
+        }
+
+        let row = try #require(
+            await database.read { db in try Directive.where { $0.id.eq("P1") }.fetchOne(db) }
+        )
+        #expect(row.step == MineFleetPrint.Step.printing.rawValue)
+        #expect(row.status == .running)
     }
 }
 

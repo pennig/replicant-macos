@@ -72,16 +72,19 @@ public struct MineFleetPrint: MissionStepMachine {
         MineRecipe.all.map(\.deviceType) + [MineRecipe.carrierDeviceType]
     }
 
-    /// Start one print per missing type, netted against `PrintScheduler.onOrder`
-    /// first so a type already ordered elsewhere is never ordered twice. A busy
-    /// bench holds via `printing` rather than stalling.
+    /// Start one print per missing type. `.done` is decided on the TRUE
+    /// shortfall; netting against `PrintScheduler.onOrder` only picks what to
+    /// order next, or hands off to `printing` once everything left is ordered.
     private func stocking(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
-        var missing = Self.remaining(at: depot, in: world)
+        let remaining = Self.remaining(at: depot, in: world)
+        if remaining.isEmpty { return .done }
+
+        var missing = remaining
         for (type, onOrder) in PrintScheduler.onOrder(for: directive.id, at: depot, in: world) {
             guard let count = missing[type] else { continue }
             missing[type] = count > onOrder ? count - onOrder : nil
         }
-        if missing.isEmpty { return .done }
+        if missing.isEmpty { return .advanceStep(nextStep: Step.printing.rawValue) }
 
         guard let type = Self.jobOrder.first(where: { missing[$0] != nil }),
               let quantity = missing[type]
