@@ -439,8 +439,10 @@ private func snapshot(
     world(devices: fanOutShortFleet() + benches, openOperations: open)
 }
 
-private func row(startedAgo interval: TimeInterval = 60) -> Directive {
-    printRun(hub: "B1", stepStartedAt: now.addingTimeInterval(-interval))
+private func row(
+    step: String = MineFleetPrint.Step.stocking.rawValue, startedAgo interval: TimeInterval = 60
+) -> Directive {
+    printRun(step: step, hub: "B1", stepStartedAt: now.addingTimeInterval(-interval))
 }
 
 @Suite("MineFleetPrint — the print-only fan-out (C1)")
@@ -512,15 +514,20 @@ struct MineFleetPrintFanOutTests {
         else { return #expect(Bool(false), "expected a dispatch") }
         #expect(deviceCode == "B2")
 
-        // And the co-tenant's job does not push this run past its own deadline:
-        // the deadline is measured from OUR step stamp, never from the bench.
-        let past = row(startedAgo: PrintJob.deadline + 1)
-        #expect(MineFleetPrint().nextAction(directive: past, world: world) != .wait)
+        // The co-tenant's job must not extend THIS run's deadline: drive it
+        // through printing with the co-tenant's bench the only one present.
+        let stalled = snapshot([bench("B1", printing: "mining_drone")], open: ["B1": theirs])
+        let recent = row(step: MineFleetPrint.Step.printing.rawValue, startedAgo: 60)
+        #expect(MineFleetPrint().nextAction(directive: recent, world: stalled) == .wait)
+
+        let expired = row(step: MineFleetPrint.Step.printing.rawValue, startedAgo: PrintJob.deadline + 1)
+        #expect(MineFleetPrint().nextAction(directive: expired, world: stalled)
+                == .advanceStep(nextStep: MineFleetPrint.Step.stocking.rawValue))
     }
 
-    /// **Ruling 3.** Our own print sits open on B1, demand covered; B2 stands
-    /// free. `choose` cannot see ownership, so only `onOrder` netting stops a
-    /// second order — the run holds in `printing`, it does not complete.
+    /// Our own print sits open on B1, demand covered; B2 stands free. `choose`
+    /// cannot see ownership, so only `onOrder` netting stops a second order —
+    /// the run holds in `printing`, it does not complete.
     @Test("this run's own print on one bench draws no second once demand is covered")
     func ownPrintCoveringDemandDrawsNoSecondBench() {
         let directive = printRun()
@@ -614,9 +621,9 @@ struct MineFleetPrintCoTenancyEngineTests {
 
 // MARK: - stocking and printing must agree on completion
 
-/// The regression this task's own review caught: `stocking` must decide
-/// `.done` on the TRUE shortfall, never on demand merely netted to zero by
-/// `onOrder` — that is what `printing` is for.
+/// `stocking` and `printing` must agree on what finished means: both key
+/// off the un-netted shortfall, so ordering demand is never mistaken for
+/// delivering it.
 @Suite("MineFleetPrint — fully-ordered demand does not complete the run")
 struct MineFleetPrintCompletionGuardTests {
 

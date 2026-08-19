@@ -73,9 +73,9 @@ private func restocking(id: String = "R1", wanting: Int, hub code: String = "B1"
 @Suite("Restock Run — the print-only fan-out (C2)")
 struct RestockRunFanOutTests {
 
-    /// C2, punch-list line 255, and Ruling 3's own-print case: the chooser
-    /// moves to free bench B2 while B1 holds our own open order, and a
-    /// demand of one is already fully covered by it.
+    /// C2, punch-list line 255: the chooser moves to free bench B2 while B1
+    /// holds our own open order, and a demand of one is already fully
+    /// covered by it.
     @Test("a substituted bench does not buy a second relay")
     func substitutedBenchBuysNoSecondRelay() {
         let mine = op(on: "B1", owner: "R-1", deviceType: "ftl_relay")
