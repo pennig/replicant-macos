@@ -1485,6 +1485,11 @@ struct RelayRunSettleTests {
 
 @Suite("Relay Run — .simple verbs are split dispatch/poll")
 struct RelayRunSimpleVerbTests {
+    /// The oracle these tests classify against: the kinds this machine
+    /// dispatches that DO create an `Operation` row, so a same-step redispatch
+    /// has a guard. Held here because no production site reads it.
+    private static let trackedKinds: Set<OperationKind> = [.travel, .print]
+
     /// **The constraint this machine can hurt a live account by breaking.** A
     /// `.simple` verb carries NO `Operation` row, so `world.openOperation` can
     /// never guard it; and `DirectiveExecutor.apply` re-stamps `stepStartedAt`
@@ -1532,7 +1537,7 @@ struct RelayRunSimpleVerbTests {
                 Issue.record("step \(step) was expected to dispatch, got \(action)")
                 continue
             }
-            #expect(!RelayRun.trackedKinds.contains(kind),
+            #expect(!Self.trackedKinds.contains(kind),
                     "step \(step) dispatches \(kind.rawValue), which this test believes is untracked")
             #expect(next != step, Comment(rawValue:
                 "step \(step) dispatches the untracked verb \(kind.rawValue) back into ITSELF — "
@@ -1556,7 +1561,7 @@ struct RelayRunSimpleVerbTests {
             Issue.record("expected a travel dispatch")
             return
         }
-        #expect(RelayRun.trackedKinds.contains(kind))
+        #expect(Self.trackedKinds.contains(kind))
         #expect(next == RelayRun.Step.travelling.rawValue)
     }
 }

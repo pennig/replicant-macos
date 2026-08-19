@@ -34,8 +34,8 @@ public struct RelayRun: MissionStepMachine {
     }
 
     /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
-    /// The dispatch/poll pairs exist because those commands carry no `Operation`
-    /// row — see `trackedKinds`. The two sources meet at `stowing`.
+    /// The dispatch/poll pairs exist because `deactivate`, `stow`, `deploy` and
+    /// `activate` carry no `Operation` row. The two sources meet at `stowing`.
     public enum Step: String, CaseIterable, Sendable {
         /// Decide where the relay comes from, and start it coming. Branches on
         /// `Directive.sourceRelayCode`: nil prints a fresh one at the hub,
@@ -81,12 +81,6 @@ public struct RelayRun: MissionStepMachine {
 
     /// The device type this run plants.
     public static let relayDeviceType = SalvageRun.relayDeviceType
-
-    /// The kinds this machine dispatches that DO create an `Operation` row. A
-    /// `.simple` verb creates none, so a dispatch naming its OWN step re-issues
-    /// every tick forever against a deadline that can never accumulate. A tracked
-    /// kind's operation row IS that missing guard.
-    public static let trackedKinds: Set<OperationKind> = [.travel, .print]
 
     /// The print bound, held once in `PrintJob` so the print sites cannot drift.
     public static let printDeadline: TimeInterval = PrintJob.deadline

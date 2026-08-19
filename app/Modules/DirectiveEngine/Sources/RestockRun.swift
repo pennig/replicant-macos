@@ -57,12 +57,6 @@ public struct RestockRun: MissionStepMachine {
     /// re-decides. Matches `PrintJob.deadline` — the same server-side job.
     public static let printDeadline: TimeInterval = PrintJob.deadline
 
-    /// How stale the TABLE-WIDE census may be before `stocking` buys a refresh
-    /// rather than trusting it. Matches `RelayRun.pollInterval`, the bound
-    /// `footprintCensusIsStale` reads it through — not the more generous
-    /// `hubFreshness`, which is `printStockIsShort`'s separate read-time veto.
-    public static let pollInterval: TimeInterval = RelayRun.pollInterval
-
     /// Route `directive`'s current step against `world`.
     ///
     /// Stalls when no hub at the run's depot can take a job: printing somewhere
