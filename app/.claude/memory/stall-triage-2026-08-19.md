@@ -82,7 +82,8 @@ Matt chose a wider convoy over more trips: the lease is now
 `Directive.freighterCodes`, `EventRun.loadPlan` divides the bill across the
 holds by TOTAL capacity (not free space, or a mid-load recompute re-cuts the
 shares), and every leg — load, depart, stage, return, deposit — covers all of
-them. The brain leases one hull per hold-full and idles naming the shortfall
+them. The depart leg did not: it ordered the lead hull and left. See
+[[loop-legs-must-dispatch-in-step]]. The brain leases one hull per hold-full and idles naming the shortfall
 rather than launching a convoy that cannot finish.
 
 `leasedFreighters` is the single accessor over `freighterCodes` and the

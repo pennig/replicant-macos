@@ -50,10 +50,12 @@ struct EventRunDeliveryTests {
         let action = EventRun().nextAction(
             directive: EventRunFixtures.directive(step: EventRun.Step.departing.rawValue, now: now), world: world
         )
+        // Same-step, even for a lone freighter: the step ends at the loop's
+        // own `.advanceStep` once every hull is placed, never on a dispatch.
         #expect(action == .dispatch(
             kind: .travel, deviceCode: "FREIGHT",
             params: CommandParams(destination: "X-1"),
-            nextStep: EventRun.Step.confirmingArrival.rawValue
+            nextStep: EventRun.Step.departing.rawValue
         ))
     }
 
