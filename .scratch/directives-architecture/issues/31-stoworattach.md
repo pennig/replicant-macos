@@ -46,3 +46,10 @@ in-scope call site can use it, since the confirm halves do not migrate.
 `DirectiveEngineTests` 1768/1768/0 (from a 1756 baseline: 9 new cases, 1 new suite, 2 added
 regression tests for guards that were provably uncovered). `GameServicesTests`, `GameSyncTests`,
 `GameModelsTests`, `DirectivesFeatureTests` all exit 0. No existing assertion edited.
+
+Review fixes landed in `657d8ce` — six added tests, one doc line, no behaviour change.
+`DirectiveEngineTests` 1774/1774/0. Each test proved by the mutation it defends producing exactly its
+own failure across the full target: the three conjuncts of `MineRun.confirmDetach`'s landing
+predicate (`MineRun.swift:418-421`), `MineRun.detach`'s folded empty-grid advance (`:403`),
+`EventRun.recovering`'s busy-guard placement (`EventRun.swift:738`), and `ConfirmField.loose`'s
+non-carrier-scoping (`Steps/StowOrAttach.swift:77`).
