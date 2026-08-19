@@ -1,7 +1,7 @@
 # 31 — `StowOrAttach` over families A and B
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 27
 Labels: directives-architecture, stage-2
 
@@ -21,9 +21,9 @@ Carrier-addressed containment: one command per round for the loading verbs, one 
 
 ---
 
-- [ ] **Step 1:** Write `Tests/Steps/StowOrAttachTests.swift`: attach orders the first loose device; finishes when all aboard; adopt confirms on the controller column; detach sends the whole list at once. Build fixtures locally — `survey-fleet-repair-build.md` records what a shared internal test helper did to four suites when Swift preferred it over a private one.
-- [ ] **Step 2:** Write `Sources/Steps/StowOrAttach.swift`.
-- [ ] **Step 3:** Migrate the six sites. Each keeps its own round-budget check and its own `ConfirmRow` ladder — `StowOrAttach` replaces the selection-and-dispatch half only. `MineRun.confirmDetach` keeps its extra `location == belt` assertion.
-- [ ] **Step 4:** `swift test --filter DirectiveEngineTests`; `check-comments.sh`; commit.
+- [x] **Step 1:** Write `Tests/Steps/StowOrAttachTests.swift`: attach orders the first loose device; finishes when all aboard; adopt confirms on the controller column; detach sends the whole list at once. Build fixtures locally — `survey-fleet-repair-build.md` records what a shared internal test helper did to four suites when Swift preferred it over a private one.
+- [x] **Step 2:** Write `Sources/Steps/StowOrAttach.swift`.
+- [x] **Step 3:** Migrate the six sites. Each keeps its own round-budget check and its own `ConfirmRow` ladder — `StowOrAttach` replaces the selection-and-dispatch half only. `MineRun.confirmDetach` keeps its extra `location == belt` assertion.
+- [x] **Step 4:** `swift test --filter DirectiveEngineTests`; `check-comments.sh`; commit.
 
 **Done when:** six sites migrated, the twelve excluded sites recorded with their reasons, and the target green unedited.

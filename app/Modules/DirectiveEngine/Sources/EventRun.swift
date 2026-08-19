@@ -426,12 +426,16 @@ public struct EventRun: MissionStepMachine {
             tag: Self.fleetTag(forTheatre: depot), in: world
         )
 
-        if let next = payload.first(where: { $0.attachedToDeviceCode != carrier.deviceCode }) {
-            return .dispatch(
-                kind: .attach, deviceCode: carrier.deviceCode,
-                params: CommandParams(devices: [next.deviceCode]),
-                nextStep: Step.confirmingLoad.rawValue
-            )
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let job = StowOrAttach(
+            carrierCode: carrier.deviceCode, deviceCodes: payload.map(\.deviceCode),
+            verb: .attach, confirmField: .attachedTo,
+            confirmStep: Step.confirmingLoad.rawValue, sendsWholeList: false
+        )
+        switch job.next(ctx) {
+        case let .action(action): return action
+        case .noSubject: return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
+        case .finished, .more: break
         }
 
         if option.resources.isEmpty { return .advanceStep(nextStep: Step.departing.rawValue) }
@@ -565,11 +569,16 @@ public struct EventRun: MissionStepMachine {
 
         let aboard = Self.staged(convoy, in: world)
         if !aboard.isEmpty, Self.stageRounds(world, .detach) < 1 {
-            return .dispatch(
-                kind: .detach, deviceCode: convoy.carrier.deviceCode,
-                params: CommandParams(devices: aboard.map(\.deviceCode)),
-                nextStep: Step.confirmingStage.rawValue
+            let ctx = StepContext(directive: directive, world: world, step: directive.step)
+            let job = StowOrAttach(
+                carrierCode: convoy.carrier.deviceCode, deviceCodes: aboard.map(\.deviceCode),
+                verb: .detach, confirmField: .loose,
+                confirmStep: Step.confirmingStage.rawValue, sendsWholeList: true
             )
+            switch job.next(ctx) {
+            case let .action(action): return action
+            case .finished, .more, .noSubject: break
+            }
         }
 
         guard !option.resources.isEmpty else { return .advanceStep(nextStep: Step.confirmingProgress.rawValue) }
@@ -718,15 +727,18 @@ public struct EventRun: MissionStepMachine {
         guard let courier = convoy.courier else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
-        if courier.attachedToDeviceCode == convoy.carrier.deviceCode {
-            return .advanceStep(nextStep: Step.returning.rawValue)
-        }
-        if world.openOperation(for: convoy.carrier.deviceCode) != nil { return .wait }
-        return .dispatch(
-            kind: .attach, deviceCode: convoy.carrier.deviceCode,
-            params: CommandParams(devices: [courier.deviceCode]),
-            nextStep: Step.confirmingRecovery.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let job = StowOrAttach(
+            carrierCode: convoy.carrier.deviceCode, deviceCodes: [courier.deviceCode],
+            verb: .attach, confirmField: .attachedTo,
+            confirmStep: Step.confirmingRecovery.rawValue, sendsWholeList: false
         )
+        return switch job.next(ctx) {
+        case let .action(action):
+            world.openOperation(for: convoy.carrier.deviceCode) != nil ? .wait : action
+        case .finished, .more: .advanceStep(nextStep: Step.returning.rawValue)
+        case .noSubject: .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
+        }
     }
 
     /// Judge the re-attach on the courier's own row. `attach` is immediate and

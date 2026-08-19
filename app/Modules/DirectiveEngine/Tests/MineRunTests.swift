@@ -519,6 +519,18 @@ struct MineRunTests {
                 == .advanceStep(nextStep: MineRun.Step.travelling.rawValue))
     }
 
+    /// Nothing left to attach is not a complete fleet. A short roster buys a tag
+    /// read rather than flying an incomplete mine to the belt.
+    @Test("a short fleet with nothing left to attach never flies")
+    func shortFleetWithNothingLooseNeverTravels() {
+        let snapshot = world(
+            devices: carriedFleet(attached: 9, omitting: "mining_drone") + [mineCarrier(), beltRelay]
+        )
+
+        #expect(MineRun().nextAction(directive: mineRunRow(step: MineRun.Step.attaching.rawValue), world: snapshot)
+                == .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete))
+    }
+
     // MARK: Confirming an attach
 
     /// The command's own confirm-read lands just BEFORE the step is stamped, so

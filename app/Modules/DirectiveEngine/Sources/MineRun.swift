@@ -310,17 +310,21 @@ public struct MineRun: MissionStepMachine {
         _ directive: Directive, _ carrier: Device, _ world: WorldSnapshot
     ) -> MissionAction {
         let roster = Self.roster(of: directive, in: world)
-        let loose = roster.filter { $0.attachedToDeviceCode != carrier.deviceCode }
-        guard let next = loose.first else {
-            guard roster.count == Self.carriedTotal else {
-                return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
-            }
-            return .advanceStep(nextStep: Step.travelling.rawValue)
-        }
-        return .dispatch(
-            kind: .attach, deviceCode: carrier.deviceCode,
-            params: CommandParams(devices: [next.deviceCode]), nextStep: Step.confirmingAttach.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let job = StowOrAttach(
+            carrierCode: carrier.deviceCode, deviceCodes: roster.map(\.deviceCode),
+            verb: .attach, confirmField: .attachedTo,
+            confirmStep: Step.confirmingAttach.rawValue, sendsWholeList: false
         )
+        switch job.next(ctx) {
+        case let .action(action): return action
+        case .noSubject: return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        case .finished, .more: break
+        }
+        guard roster.count == Self.carriedTotal else {
+            return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        }
+        return .advanceStep(nextStep: Step.travelling.rawValue)
     }
 
     /// Judge the attach just ordered, looping back for the next member.
@@ -388,11 +392,17 @@ public struct MineRun: MissionStepMachine {
     ) -> MissionAction {
         let aboard = Self.roster(of: directive, in: world)
             .filter { $0.attachedToDeviceCode == carrier.deviceCode }
-        guard !aboard.isEmpty else { return .advanceStep(nextStep: Step.adopting.rawValue) }
-        return .dispatch(
-            kind: .detach, deviceCode: carrier.deviceCode,
-            params: CommandParams(devices: aboard.map(\.deviceCode)), nextStep: Step.confirmingDetach.rawValue
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let job = StowOrAttach(
+            carrierCode: carrier.deviceCode, deviceCodes: aboard.map(\.deviceCode),
+            verb: .detach, confirmField: .loose,
+            confirmStep: Step.confirmingDetach.rawValue, sendsWholeList: true
         )
+        return switch job.next(ctx) {
+        case let .action(action): action
+        case .finished, .more: .advanceStep(nextStep: Step.adopting.rawValue)
+        case .noSubject: .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+        }
     }
 
     /// Judge the detach: every member loose, standing at the belt, on a row read
@@ -425,14 +435,21 @@ public struct MineRun: MissionStepMachine {
         guard let adoptions = Self.adoptions(of: directive, in: world) else {
             return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
         }
-        guard let next = adoptions.first(where: { !$0.pending.isEmpty }) else {
-            return .advanceStep(nextStep: Step.arming.rawValue)
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        for adoption in adoptions {
+            let job = StowOrAttach(
+                carrierCode: adoption.controller.deviceCode,
+                deviceCodes: adoption.members.map(\.deviceCode),
+                verb: .adopt, confirmField: .controlledBy,
+                confirmStep: Step.confirmingAdopt.rawValue, sendsWholeList: true
+            )
+            switch job.next(ctx) {
+            case let .action(action): return action
+            case .noSubject: return .refreshFleet(tag: MineRecipe.fleetTag, thenStall: .mineFleetIncomplete)
+            case .finished, .more: continue
+            }
         }
-        return .dispatch(
-            kind: .adopt, deviceCode: next.controller.deviceCode,
-            params: CommandParams(devices: next.pending.map(\.deviceCode)),
-            nextStep: Step.confirmingAdopt.rawValue
-        )
+        return .advanceStep(nextStep: Step.arming.rawValue)
     }
 
     /// Judge the adoption just ordered, looping back for the next controller.
