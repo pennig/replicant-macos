@@ -597,16 +597,19 @@ struct BrainStallDispositionTests {
         }
     }
 
-    /// Records that `.decisionRequest` is currently unreachable, so the sweep
-    /// above is understood as a guard for the future rather than as live
-    /// coverage. If this ever fails, the reason is not that something broke —
-    /// it is that the branch has gone live and the report above needs
-    /// revisiting.
-    @Test func noAttentionReasonAsksForAnOperatorDecisionYet() {
+    /// The exact set the brain hands back to the operator rather than working.
+    /// Adding to it means adding a surface the operator can answer it from.
+    @Test func onlyAnUnchosenEventOptionAsksForAnOperatorDecision() {
         let requests = DirectiveAttentionReason.allCases.filter { $0.brainDisposition == .decisionRequest }
+        #expect(requests == [.eventOptionNotChosen])
+    }
+
+    /// A choice is not a fault, so the retry budget must never be spent on one.
+    @Test func aDecisionRequestIsEscalatedWithoutARetry() {
+        let stalled = stalledRelayRun(reason: .eventOptionNotChosen)
         #expect(
-            requests.isEmpty,
-            "\(requests) now map to .decisionRequest — the brain surfaces them untouched; confirm that is still right"
+            Brain.stallResponse(for: stalled, log: [], now: t(0))
+                == .escalated(directiveID: "D1", reason: .eventOptionNotChosen)
         )
     }
 

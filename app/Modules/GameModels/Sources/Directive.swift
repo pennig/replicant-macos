@@ -183,6 +183,9 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// The option's component tree reaches a device type the account holds no
     /// blueprint for, so the payload cannot be built at any price.
     case eventOptionBlueprintMissing
+    /// Two or more options are buildable and none is picked, so the run has no
+    /// payload to work toward. Only the operator can settle it.
+    case eventOptionNotChosen
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -216,6 +219,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .awaitingCourierReplication: "Courier needs a replicant"
         case .printBlockedOnComponents: "Print blocked on components"
         case .eventOptionBlueprintMissing: "Blueprint not unlocked"
+        case .eventOptionNotChosen: "Event option not chosen"
         }
     }
 
@@ -287,6 +291,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "A print at the depot outlived its deadline and the run had nothing else it could order — most often a queued job waiting on component devices it doesn't have. Retry once that print clears, or cancel the one blocking the queue."
         case .eventOptionBlueprintMissing:
             "The option's build tree needs the blueprints named above and the account holds none of them, so no amount of printing reaches it. Unlock those blueprints, or pick an option that avoids them under Location Events, then retry."
+        case .eventOptionNotChosen:
+            "The event offers more than one buildable option and none is picked, so the run has no payload to work toward. Pick one under Missions, then retry. Unlocking a blueprint mid-run can reopen a choice the run started with only one answer to."
         }
     }
 }
@@ -321,6 +327,8 @@ public extension DirectiveAttentionReason {
              .miningDirectivePaused, .miningControllerNotRecovered, .mineFleetIncomplete,
              .eventCriteriaUnmet, .awaitingCourierReplication, .eventOptionBlueprintMissing:
             return .escalate
+        case .eventOptionNotChosen:
+            return .decisionRequest
         }
     }
 }

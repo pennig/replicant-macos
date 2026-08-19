@@ -176,6 +176,38 @@ public struct EventRun: MissionStepMachine {
         return .advanceStep(nextStep: Step.printing.rawValue)
     }
 
+    // MARK: - The option in force
+
+    /// The option every step works toward, or why no step can name one.
+    enum OptionVerdict: Equatable, Sendable {
+        case decided(EventPlan.Option)
+        case unresolved(DirectiveAttentionReason, detail: String)
+    }
+
+    /// The option `event` is being worked under, resolved on the SAME catalogue
+    /// `EventRanking` launched the run under. Resolving on an empty one widens
+    /// the printable set to every option, which no `chosenOption` then settles.
+    static func optionInForce(_ event: LocationEvent, in world: WorldSnapshot) -> OptionVerdict {
+        switch EventPlan.resolve(
+            event, chosenOption: event.chosenOption,
+            bills: world.blueprintBills, components: world.blueprintComponents
+        ) {
+        case .decided(let option):
+            return .decided(option)
+        case .needsChoice:
+            return .unresolved(.eventOptionNotChosen, detail: event.designation)
+        case .blocked(let offered):
+            let missing = offered.reduce(into: Set<String>()) { $0.formUnion($1.unprintable) }
+            return .unresolved(
+                .eventOptionBlueprintMissing,
+                detail: missing.sorted().map(BlueprintPresentation.displayName)
+                    .joined(separator: ", ")
+            )
+        case .undecodable:
+            return .unresolved(.unreachableDevice, detail: event.designation)
+        }
+    }
+
     // MARK: - Printing
 
     /// What the option still needs printed, and the device types in its tree the
@@ -297,11 +329,14 @@ public struct EventRun: MissionStepMachine {
     private func printing(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let depot = world.theatreDepot(for: directive),
-              case .decided(let option) = EventPlan.resolve(
-                  event, chosenOption: event.chosenOption, bills: [:]
-              )
-        else { return .stall(.unreachableDevice) }
+        guard let depot = world.theatreDepot(for: directive) else {
+            return .stall(.unreachableDevice)
+        }
+        let option: EventPlan.Option
+        switch Self.optionInForce(event, in: world) {
+        case .decided(let decided): option = decided
+        case .unresolved(let reason, let detail): return .stall(reason, detail: detail)
+        }
 
         let tag = Self.fleetTag(forTheatre: depot)
         let outstanding = Self.missingTree(for: option, at: depot, in: world, tag: tag)
@@ -407,11 +442,14 @@ public struct EventRun: MissionStepMachine {
     private func loading(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let depot = world.theatreDepot(for: directive),
-              case .decided(let option) = EventPlan.resolve(
-                  event, chosenOption: event.chosenOption, bills: [:]
-              )
-        else { return .stall(.unreachableDevice) }
+        guard let depot = world.theatreDepot(for: directive) else {
+            return .stall(.unreachableDevice)
+        }
+        let option: EventPlan.Option
+        switch Self.optionInForce(event, in: world) {
+        case .decided(let decided): option = decided
+        case .unresolved(let reason, let detail): return .stall(reason, detail: detail)
+        }
 
         guard let courier = convoy.courier else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
@@ -464,11 +502,13 @@ public struct EventRun: MissionStepMachine {
         )
         if landed >= rounds { return .advanceStep(nextStep: Step.loading.rawValue) }
 
-        guard let depot = world.theatreDepot(for: directive), let courier = convoy.courier,
-              case .decided(let option) = EventPlan.resolve(
-                  event, chosenOption: event.chosenOption, bills: [:]
-              )
+        guard let depot = world.theatreDepot(for: directive), let courier = convoy.courier
         else { return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice) }
+        let option: EventPlan.Option
+        switch Self.optionInForce(event, in: world) {
+        case .decided(let decided): option = decided
+        case .unresolved(let reason, let detail): return .stall(reason, detail: detail)
+        }
 
         let payload = Self.loadPayload(
             courier: courier, option: option, depot: depot,
@@ -563,9 +603,11 @@ public struct EventRun: MissionStepMachine {
     private func staging(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard case .decided(let option) = EventPlan.resolve(
-            event, chosenOption: event.chosenOption, bills: [:]
-        ) else { return .stall(.unreachableDevice) }
+        let option: EventPlan.Option
+        switch Self.optionInForce(event, in: world) {
+        case .decided(let decided): option = decided
+        case .unresolved(let reason, let detail): return .stall(reason, detail: detail)
+        }
 
         let aboard = Self.staged(convoy, in: world)
         if !aboard.isEmpty, Self.stageRounds(world, .detach) < 1 {
