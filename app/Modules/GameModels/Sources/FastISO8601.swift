@@ -74,25 +74,33 @@ extension Date {
                   buffer[13] == UInt8(ascii: ":"), buffer[16] == UInt8(ascii: ":")
             else { return nil }
 
-            func number(_ range: Range<Int>) -> Int? {
-                var value = 0
-                for index in range {
-                    let digit = Int(buffer[index]) &- 48
-                    guard (0...9).contains(digit) else { return nil }
-                    value = value * 10 + digit
-                }
-                return value
-            }
+            // Written flat — no nested helper, no `Range.contains` — because
+            // this runs unoptimized in debug builds, where both cost more than
+            // the parse. Digits are `UInt8`, so a non-digit wraps above 9.
+            let y0 = buffer[0] &- 48, y1 = buffer[1] &- 48
+            let y2 = buffer[2] &- 48, y3 = buffer[3] &- 48
+            let mo0 = buffer[5] &- 48, mo1 = buffer[6] &- 48
+            let d0 = buffer[8] &- 48, d1 = buffer[9] &- 48
+            let h0 = buffer[11] &- 48, h1 = buffer[12] &- 48
+            let mi0 = buffer[14] &- 48, mi1 = buffer[15] &- 48
+            let s0 = buffer[17] &- 48, s1 = buffer[18] &- 48
+            guard y0 <= 9, y1 <= 9, y2 <= 9, y3 <= 9, mo0 <= 9, mo1 <= 9,
+                  d0 <= 9, d1 <= 9, h0 <= 9, h1 <= 9, mi0 <= 9, mi1 <= 9,
+                  s0 <= 9, s1 <= 9
+            else { return nil }
 
-            guard let year = number(0..<4), let month = number(5..<7),
-                  let day = number(8..<10), let hour = number(11..<13),
-                  let minute = number(14..<16), let second = number(17..<19),
-                  // Foundation's Gregorian calendar is a hybrid that runs
-                  // Julian before the 1582 cutover, where this proleptic
-                  // arithmetic is two days out. `.distantPast` lands there and
-                  // is a live sentinel, so anything that old goes to Foundation.
-                  year >= 1583,
-                  (1...12).contains(month), (1...31).contains(day),
+            let year = Int(y0) * 1000 + Int(y1) * 100 + Int(y2) * 10 + Int(y3)
+            let month = Int(mo0) * 10 + Int(mo1)
+            let day = Int(d0) * 10 + Int(d1)
+            let hour = Int(h0) * 10 + Int(h1)
+            let minute = Int(mi0) * 10 + Int(mi1)
+            let second = Int(s0) * 10 + Int(s1)
+
+            // Foundation's Gregorian calendar is a hybrid that runs Julian
+            // before the 1582 cutover, where this proleptic arithmetic is two
+            // days out. `.distantPast` lands there and is a live sentinel, so
+            // anything that old goes to Foundation.
+            guard year >= 1583, month >= 1, month <= 12, day >= 1, day <= 31,
                   hour < 24, minute < 60, second < 60
             else { return nil }
 
@@ -104,11 +112,13 @@ extension Date {
                 guard buffer[19] == UInt8(ascii: "."), buffer.count > 20 else { return nil }
                 var numerator = 0
                 var denominator = 1.0
-                for index in 20..<buffer.count {
-                    let digit = Int(buffer[index]) &- 48
-                    guard (0...9).contains(digit) else { return nil }
-                    numerator = numerator * 10 + digit
+                var index = 20
+                while index < buffer.count {
+                    let digit = buffer[index] &- 48
+                    guard digit <= 9 else { return nil }
+                    numerator = numerator * 10 + Int(digit)
                     denominator *= 10
+                    index += 1
                 }
                 fraction = Double(numerator) / denominator
             }
