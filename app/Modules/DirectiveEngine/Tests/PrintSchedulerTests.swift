@@ -166,6 +166,18 @@ struct PrintSchedulerChoiceTests {
         #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
     }
 
+    /// The op row lands before the next poll returns a `printing` block, so
+    /// `queueDepth` alone would miss it.
+    @Test("a bench whose op row beats its snapshot is still occupied")
+    func opRowBeatsSnapshot() {
+        let world = snapshot(
+            [bench("B1"), bench("B2")],
+            open: ["B1": op(on: "B1", owner: "OTHER")]
+        )
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
+    }
+
     /// C11. Today `PrintJob.bench` falls back to a busy bench, the caller's
     /// owner-scoped guard misses a co-tenant's op, and the dispatch supersedes it.
     @Test("no bench can take the job, so there is no choice")
