@@ -767,7 +767,7 @@ struct BrainGrowLifecycleE2ETests {
         let reads = LockIsolated<[ConfirmRead]>([])
         let uuid = UUIDGenerator.incrementing
 
-        // Stopped short of `SalvageRun.activationDeadline` (10 min) on purpose:
+        // Stopped short of `RelayRun.activationDeadline` (10 min) on purpose:
         // this test is about the mesh not growing, and letting the run stall
         // would drag the brain's stall-response layer in, which is
         // `BrainStallResponseTests`' subject.

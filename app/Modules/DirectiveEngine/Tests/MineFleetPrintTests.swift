@@ -173,7 +173,7 @@ struct MineFleetPrintTests {
         let snapshot = world(devices: printedFleet() + [hub()])
         let run = printRun(
             step: "not-a-real-step",
-            stepStartedAt: now.addingTimeInterval(-RestockRun.printDeadline - 1)
+            stepStartedAt: now.addingTimeInterval(-PrintJob.deadline - 1)
         )
 
         #expect(MineFleetPrint().nextAction(directive: run, world: snapshot) == .wait)
@@ -308,7 +308,7 @@ struct MineFleetPrintTests {
     func printingRedecidesPastTheDeadline() {
         let directive = printRun(
             step: MineFleetPrint.Step.printing.rawValue,
-            stepStartedAt: now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+            stepStartedAt: now.addingTimeInterval(-(PrintJob.deadline + 60))
         )
         let snapshot = world(devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()])
 
@@ -322,7 +322,7 @@ struct MineFleetPrintTests {
     func printingRedecidesPastTheDeadlineWithTheBenchBusy() {
         let directive = printRun(
             step: MineFleetPrint.Step.printing.rawValue,
-            stepStartedAt: now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+            stepStartedAt: now.addingTimeInterval(-(PrintJob.deadline + 60))
         )
         let snapshot = world(
             devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
@@ -453,7 +453,7 @@ struct MineFleetPrintFreshEvidenceTests {
         let stale = now.addingTimeInterval(-rowLag)
         let directive = printRun(
             step: MineFleetPrint.Step.printing.rawValue,
-            stepStartedAt: now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+            stepStartedAt: now.addingTimeInterval(-(PrintJob.deadline + 60))
         )
         let snapshot = world(devices:
             printedFleet(omitting: "ami_transport_controller", updatedAt: stale)

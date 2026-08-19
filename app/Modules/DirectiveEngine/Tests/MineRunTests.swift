@@ -463,7 +463,7 @@ struct MineRunTests {
         )
 
         let row = mineRunRow(theatreDepot: targetBelt)
-        #expect(RelayRun.theatreDepot(in: snapshot, for: row) == targetBelt)
+        #expect(snapshot.theatreDepot(for: row) == targetBelt)
         #expect(MineRun().nextAction(directive: row, world: snapshot)
                 == .stall(.unreachableDevice))
     }

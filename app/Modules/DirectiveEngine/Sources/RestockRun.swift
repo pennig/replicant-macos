@@ -53,10 +53,6 @@ public struct RestockRun: MissionStepMachine {
     /// before it, so re-tuning it as a throughput knob moves nothing.
     public static let idleCap = 10
 
-    /// How long a print may go unclaimed before the run gives up waiting and
-    /// re-decides. Matches `PrintJob.deadline` — the same server-side job.
-    public static let printDeadline: TimeInterval = PrintJob.deadline
-
     /// Route `directive`'s current step against `world`.
     ///
     /// Stalls when no hub at the run's depot can take a job: printing somewhere
@@ -156,7 +152,7 @@ public struct RestockRun: MissionStepMachine {
         if RelayRun.idleRelays(at: location, in: world).count >= Self.desiredIdle(for: directive) {
             return .advanceStep(nextStep: Step.stocking.rawValue)
         }
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline {
+        if world.now.timeIntervalSince(directive.stepStartedAt) > PrintJob.deadline {
             logger.notice("restock \(directive.id, privacy: .public): print produced no relay within the deadline — re-deciding")
             return .advanceStep(nextStep: Step.stocking.rawValue)
         }

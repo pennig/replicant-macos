@@ -148,13 +148,11 @@ struct PrintJobTests {
 
     // MARK: - The deadline
 
-    /// The engine's one 1800. Every reader aliases onto it, so a wrong value
-    /// here would move every print deadline together and unseen.
-    @Test("the print deadline is the single root its aliases point at")
+    /// The engine's one 1800. Every print site reads it directly, so a wrong
+    /// value here would move every print deadline together and unseen.
+    @Test("the print deadline is the single root every print site reads")
     func theDeadlineIsTheOneRoot() {
         #expect(PrintJob.deadline == 30 * 60)
-        #expect(RelayRun.printDeadline == PrintJob.deadline)
-        #expect(RestockRun.printDeadline == PrintJob.deadline)
     }
 
     // MARK: - The bench

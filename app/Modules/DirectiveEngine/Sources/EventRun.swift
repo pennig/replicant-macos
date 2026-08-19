@@ -53,7 +53,7 @@ public struct EventRun: MissionStepMachine {
 
     /// Deadlines, all in the shape the sibling runs use.
     /// What a print gets on top of its own run time: queue wait and confirm lag.
-    public static let printSlack: TimeInterval = RestockRun.printDeadline
+    public static let printSlack: TimeInterval = PrintJob.deadline
     public static let loadConfirmDeadline: TimeInterval = 5 * 60
     public static let arrivalConfirmDeadline: TimeInterval = 5 * 60
     public static let stageConfirmDeadline: TimeInterval = 5 * 60

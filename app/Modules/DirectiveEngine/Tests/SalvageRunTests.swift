@@ -1054,7 +1054,7 @@ struct SalvageRunVerificationTests {
         let ashore = device(
             "CTRL", type: "ami_mining_controller", location: "TOSLIT-6-5",
             controlled: ["DRONE"], directives: ["gather_salvage"],
-            updatedAt: now.addingTimeInterval(-SalvageRun.arrivalReadInterval - 1)
+            updatedAt: now.addingTimeInterval(-TravelTo.arrivalReadInterval - 1)
         )
         let world = world(devices: [atSystem, ashore, drone],
                           systems: ["TOSLIT": miningToslit], siteAssays: miningToslitAssays, now: now)
@@ -1442,7 +1442,7 @@ struct SalvageRunArrivalFreshnessTests {
     /// reaches its deadline, never stalls, and buys a `.high` read every tick
     /// forever at ~12 reads a minute.
     @Test func surfacesVesselPositionUnconfirmedOnceTheArrivalDeadlinePasses() {
-        let longAgo = fixtureNow.addingTimeInterval(-SalvageRun.arrivalConfirmDeadline)
+        let longAgo = fixtureNow.addingTimeInterval(-TravelTo.arrivalConfirmDeadline)
         let snapshot = world(
             devices: [laggingVessel(at: "TOSLIT-3", updatedAt: longAgo.addingTimeInterval(-5)), controller, drone],
             dispatchedOperations: afterArrival(completedAt: longAgo),
@@ -1472,7 +1472,7 @@ struct SalvageRunArrivalFreshnessTests {
     /// closing on its own within a tick or two, and paying for a read every
     /// time would spend the budget on a race that resolves itself.
     @Test func waitsRatherThanReadingWithinTheArrivalReadInterval() {
-        let atTheBoundary = fixtureNow.addingTimeInterval(-SalvageRun.arrivalReadInterval)
+        let atTheBoundary = fixtureNow.addingTimeInterval(-TravelTo.arrivalReadInterval)
         let snapshot = world(
             devices: [laggingVessel(at: "TOSLIT-3", updatedAt: atTheBoundary), controller, drone],
             dispatchedOperations: afterArrival(),

@@ -67,8 +67,8 @@ public struct RelayRun: MissionStepMachine {
         /// Dispatch `activate` at the just-deployed relay. Dispatch-only.
         case activating
         /// Poll for `statusBase == "relaying"`, backstopped by
-        /// `SalvageRun.activationDeadline`. Split from `activating` because
-        /// `activate` is immediate and carries no `Operation` row.
+        /// `activationDeadline`. Split from `activating` because `activate` is
+        /// immediate and carries no `Operation` row.
         case confirmingRelay
         /// Confirm the run's actual deliverable: the TARGET SYSTEM is meshed.
         case settling
@@ -82,11 +82,12 @@ public struct RelayRun: MissionStepMachine {
     /// The device type this run plants.
     public static let relayDeviceType = SalvageRun.relayDeviceType
 
-    /// The print bound, held once in `PrintJob` so the print sites cannot drift.
-    public static let printDeadline: TimeInterval = PrintJob.deadline
-
     /// A `stow` is immediate server-side, so this only covers the confirm-read.
     public static let stowDeadline: TimeInterval = 5 * 60
+
+    /// How long a just-deployed relay may take to come up `relaying` before the
+    /// run surfaces `relayActivationFailed`.
+    public static let activationDeadline: TimeInterval = 10 * 60
 
     /// How old the hub's row may be and still be believed. The print rail's
     /// bound, so the hub-row read and the stock veto cannot drift apart.
@@ -371,7 +372,7 @@ public struct RelayRun: MissionStepMachine {
         // Deadline BEFORE the read (`confirm-steps-need-fresh-evidence`): the
         // read below only advances on success, so a staleness-first ordering
         // would never reach the backstop while reads keep failing.
-        if world.now.timeIntervalSince(directive.stepStartedAt) > Self.printDeadline {
+        if world.now.timeIntervalSince(directive.stepStartedAt) > PrintJob.deadline {
             logger.notice("relay run \(directive.id, privacy: .public): print produced no relay — \(Self.printDiagnosis(in: world), privacy: .public)")
             return .stall(.noRelayCoLocated)
         }
@@ -816,7 +817,7 @@ public struct RelayRun: MissionStepMachine {
         // check the same test as its own throttle, matching the old plain poll.
         let ctx = StepContext(directive: directive, world: world, step: directive.step)
         var ladder = ConfirmRow(
-            deadline: SalvageRun.activationDeadline, onExpiry: .stallNow(.relayActivationFailed)
+            deadline: Self.activationDeadline, onExpiry: .stallNow(.relayActivationFailed)
         )
         ladder.watermark = .age(Self.pollInterval)
         ladder.readInterval = Self.pollInterval
@@ -862,12 +863,5 @@ public struct RelayRun: MissionStepMachine {
     private func noHub(_ directive: Directive) -> MissionAction {
         logger.notice("relay run \(directive.id, privacy: .public): no hub to return to — leaving the carrier where it stands")
         return .done
-    }
-
-    /// The depot of the theatre `directive` serves, resolved off its own row
-    /// through `world` — never a second recognition rule, or the return leg
-    /// could drift from the theatre that launched it.
-    static func theatreDepot(in world: WorldSnapshot, for directive: Directive) -> String? {
-        world.theatreDepot(for: directive)
     }
 }

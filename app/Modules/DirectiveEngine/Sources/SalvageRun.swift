@@ -66,12 +66,6 @@ public struct SalvageRun: MissionStepMachine {
     /// in another system keeps claiming it is aboard until something reads it.
     public static let stagingFreshness: TimeInterval = 5 * 60
 
-    public static let activationDeadline: TimeInterval = 10 * 60
-
-    public static let arrivalConfirmDeadline = TravelTo.arrivalConfirmDeadline
-
-    public static let arrivalReadInterval = TravelTo.arrivalReadInterval
-
     /// The cap on the controller's own flight back to the vessel before the run
     /// surfaces `miningControllerNotRecovered`. Its leg is a cross-system cruise
     /// from whichever body it was deployed at, so it is scaled like a bot recall.
@@ -235,11 +229,11 @@ public struct SalvageRun: MissionStepMachine {
         device.location.map { SiteAssay.system(of: $0) }
     }
 
-    /// `directive`'s theatre depot's SYSTEM. `RelayRun.theatreDepot` names a
+    /// `directive`'s theatre depot's SYSTEM. `world.theatreDepot` names a
     /// LOCATION, and a location in a roam-centre slot aims the census read at
     /// a site rather than a star.
     static func hubSystem(in world: WorldSnapshot, for directive: Directive) -> String? {
-        RelayRun.theatreDepot(in: world, for: directive).map { SiteAssay.system(of: $0) }
+        world.theatreDepot(for: directive).map { SiteAssay.system(of: $0) }
     }
 
     /// Whether `controller` is actually working `gather_salvage`. The name alone
@@ -336,10 +330,6 @@ public struct SalvageRun: MissionStepMachine {
         case .more, .noSubject: .stall(.unreachableDevice)
         }
     }
-
-    /// Floor between confirm-reads of a relay row while a mission polls one.
-    /// Read by `RelayRun`, which owns every relay the fleet plants.
-    public static let relayPollInterval: TimeInterval = 60
 
     // MARK: - Mining loop
 
@@ -729,8 +719,8 @@ public struct SalvageRun: MissionStepMachine {
         var ladder = ConfirmRow(
             deadline: Self.controllerRecallDeadline, onExpiry: .stallNow(.miningControllerNotRecovered)
         )
-        ladder.watermark = .age(Self.arrivalReadInterval)
-        ladder.readInterval = Self.arrivalReadInterval
+        ladder.watermark = .age(TravelTo.arrivalReadInterval)
+        ladder.readInterval = TravelTo.arrivalReadInterval
         ladder.waitsOutArrival = true
         return switch ladder.verdict([controller], ctx) {
         case let .act(action): action

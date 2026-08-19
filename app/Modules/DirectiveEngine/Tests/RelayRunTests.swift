@@ -1019,7 +1019,7 @@ struct RelayRunPrintingTests {
         let snapshot = world(devices: [carrier(), hub()], now: fixtureNow)
         let overdue = running(
             step: RelayRun.Step.printing.rawValue,
-            stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.printDeadline - 1)
+            stepStartedAt: fixtureNow.addingTimeInterval(-PrintJob.deadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.noRelayCoLocated))
     }
@@ -1064,7 +1064,7 @@ struct RelayRunPrintingTests {
         let snapshot = world(devices: [carrier(), hub()], dispatchedOperations: [superseded.id: superseded])
         let overdue = running(
             step: RelayRun.Step.printing.rawValue,
-            stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.printDeadline - 1)
+            stepStartedAt: fixtureNow.addingTimeInterval(-PrintJob.deadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.noRelayCoLocated))
     }
@@ -1449,7 +1449,7 @@ struct RelayRunConfirmRelayTests {
         let snapshot = world(devices: [carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4")])
         let overdue = running(
             step: RelayRun.Step.confirmingRelay.rawValue,
-            stepStartedAt: fixtureNow.addingTimeInterval(-SalvageRun.activationDeadline - 1)
+            stepStartedAt: fixtureNow.addingTimeInterval(-RelayRun.activationDeadline - 1)
         )
         #expect(RelayRun().nextAction(directive: overdue, world: snapshot) == .stall(.relayActivationFailed))
     }

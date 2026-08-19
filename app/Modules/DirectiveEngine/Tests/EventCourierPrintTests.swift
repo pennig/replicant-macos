@@ -262,7 +262,7 @@ struct EventCourierPrintTests {
     /// extend the wait past the deadline — the deadline is a hard ceiling.
     @Test("a print that produced no clone past the deadline re-decides")
     func awaitingCloneReDecidesPastDeadline() {
-        let stale = now.addingTimeInterval(-(RestockRun.printDeadline + 60))
+        let stale = now.addingTimeInterval(-(PrintJob.deadline + 60))
         let openOperations = ["PRINTER": GameModels.Operation(
             id: "OP-c1", entityCode: "PRINTER", kind: OperationKind.print.rawValue,
             status: .active, source: .poll, startedAt: now, completesAt: nil,

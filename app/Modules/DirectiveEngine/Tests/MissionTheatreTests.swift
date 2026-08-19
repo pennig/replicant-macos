@@ -40,8 +40,8 @@ struct MissionTheatreTests {
         let home = directiveFixture(id: "D1", kind: .relayRun, theatreDepot: "AINALRAM-BELT-1")
         let pocket = directiveFixture(id: "D2", kind: .relayRun, theatreDepot: "DENEBED-BELT-1")
 
-        #expect(RelayRun.theatreDepot(in: snapshot, for: home) == "AINALRAM-BELT-1")
-        #expect(RelayRun.theatreDepot(in: snapshot, for: pocket) == "DENEBED-BELT-1")
+        #expect(snapshot.theatreDepot(for: home) == "AINALRAM-BELT-1")
+        #expect(snapshot.theatreDepot(for: pocket) == "DENEBED-BELT-1")
     }
 
     @Test("A salvage run's hub system comes from its own row")
@@ -57,7 +57,7 @@ struct MissionTheatreTests {
         let snapshot = twoTheatreSnapshot()
         let orphan = directiveFixture(id: "D3", kind: .relayRun, theatreDepot: nil)
 
-        #expect(RelayRun.theatreDepot(in: snapshot, for: orphan) == nil)
+        #expect(snapshot.theatreDepot(for: orphan) == nil)
     }
 
     @Test("A row naming a depot that no longer exists resolves to nothing")
@@ -65,7 +65,7 @@ struct MissionTheatreTests {
         let snapshot = twoTheatreSnapshot()
         let stale = directiveFixture(id: "D4", kind: .relayRun, theatreDepot: "GONE-BELT-1")
 
-        #expect(RelayRun.theatreDepot(in: snapshot, for: stale) == nil)
+        #expect(snapshot.theatreDepot(for: stale) == nil)
     }
 
     /// `MineSitePlanner` has no directive row to read a depot from, so it

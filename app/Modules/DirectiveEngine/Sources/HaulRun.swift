@@ -143,7 +143,7 @@ public struct HaulRun: MissionStepMachine {
     /// Where `directive` delivers: its own theatre's depot, or `deliveryLocation`
     /// when the row is unstamped or its theatre is non-operational.
     public static func deliverySink(in world: WorldSnapshot, for directive: Directive) -> String {
-        RelayRun.theatreDepot(in: world, for: directive) ?? deliveryLocation
+        world.theatreDepot(for: directive) ?? deliveryLocation
     }
 
     /// The stockpile `controller` is draining, or nil when it runs no config
