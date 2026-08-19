@@ -29,7 +29,8 @@ public struct PrintQueueListView: View {
             selection: $store.selectedDeviceCode,
             style: .inline
         ) { device, isSelected in
-            PrintQueueRow(device: device).rcSidebarRow(isSelected: isSelected)
+            PrintQueueRow(device: device, owners: store.owners[device.deviceCode] ?? [])
+                .rcSidebarRow(isSelected: isSelected)
         }
         .background(.rcContentBackground)
         .overlay {
@@ -72,6 +73,8 @@ public struct PrintQueueListView: View {
 
 private struct PrintQueueRow: View {
     let device: Device
+    /// Owning-run titles for the print open on this bench, from `PrintQueueOwners`.
+    let owners: [String]
 
     private var printing: PrintingSnapshot? { device.printingSnapshot }
 
@@ -106,6 +109,12 @@ private struct PrintQueueRow: View {
                             .lineLimit(1)
                         Spacer(minLength: Space.xs)
                         locationLabel
+                    }
+                    if !owners.isEmpty {
+                        Text("Ordered by \(owners.joined(separator: ", "))")
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextTertiary)
+                            .lineLimit(1)
                     }
                     if let pct = printing.progressPercent {
                         ProgressView(value: min(max(pct / 100, 0), 1))

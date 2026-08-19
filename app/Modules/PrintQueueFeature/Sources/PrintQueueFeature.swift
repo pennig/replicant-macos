@@ -32,6 +32,11 @@ public struct PrintQueueFeature {
         @ObservationStateIgnored
         @FetchAll(Device.order { $0.deviceType }) public var fleet: [Device]
 
+        /// Owning-run titles per bench, keyed by device code — which directive
+        /// run(s) have an open print on that bench.
+        @ObservationStateIgnored
+        @Fetch(PrintQueueOwners()) public var owners: [String: [String]] = [:]
+
         /// The inspected printer (drives the detail pane).
         public var selectedDeviceCode: String?
         public var isLoading: Bool

@@ -235,6 +235,12 @@ public struct PrintQueueDetailView: View {
                 }
             }
 
+            if let running = store.owners[device.deviceCode], !running.isEmpty {
+                Text("Ordered by \(running.joined(separator: ", "))")
+                    .font(.rcCaption)
+                    .foregroundStyle(Color.rcTextTertiary)
+            }
+
             if items.isEmpty {
                 Text("No jobs queued.")
                     .font(.rcCaption)
