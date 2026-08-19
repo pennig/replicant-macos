@@ -46,11 +46,11 @@ public struct RestockRun: MissionStepMachine {
 
     public var firstStep: String { Step.stocking.rawValue }
 
-    /// The most idle relays this will leave parked at the hub.
-    ///
-    /// A ceiling on capital held as inventory rather than reserve, never a
-    /// throttle on throughput — demand and then the reserve floor both bind
-    /// before it, so re-tuning it as a throughput knob moves nothing.
+    /// The most idle relays this will leave parked at the hub, per bench.
+    public static let idlePerBench = 3
+
+    /// The absolute ceiling, whatever the bench count: capital held as
+    /// inventory, never a throughput throttle.
     public static let idleCap = 10
 
     /// Route `directive`'s current step against `world`. Stalls only when no
@@ -80,7 +80,8 @@ public struct RestockRun: MissionStepMachine {
     private func stocking(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
         let idle = RelayRun.idleRelays(at: depot, in: world).count
         let onOrder = PrintScheduler.onOrder(for: directive.id, at: depot, in: world)[RelayRun.relayDeviceType] ?? 0
-        let desired = Self.desiredIdle(for: directive)
+        let benches = PrintScheduler.benches(at: depot, in: world).count
+        let desired = Self.desiredIdle(for: directive, benches: benches)
         guard idle + onOrder < desired else { return .wait }
 
         let order = PrintOrder(deviceType: RelayRun.relayDeviceType, owner: directive.id)
@@ -109,6 +110,12 @@ public struct RestockRun: MissionStepMachine {
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }
 
+        // Last moment before an irreversible spend, and the one read that can
+        // settle it: a clone is PRESENT at the hub, so one scoped sweep sees it.
+        if PrintJob.fleetEvidenceIsStale(directive, at: depot, in: world) {
+            return .refreshDevicesInSystem(designation: depot, thenStall: .unreachableDevice)
+        }
+
         logger.info(
             """
             restock \(directive.id, privacy: .public): printing a relay at \
@@ -124,16 +131,10 @@ public struct RestockRun: MissionStepMachine {
     }
 
     /// How many idle relays the hub should hold for `directive`: its own
-    /// `targets` count, capped at `idleCap`.
-    ///
-    /// **Read off `targets` because the mission cannot compute demand.** Demand
-    /// is a galaxy-wide judgement over `ValueCatalog`/`GrowRanking`, which run on
-    /// a `WorldView`, while a mission's `WorldSnapshot` scopes `systems` and
-    /// `siteAssays` to this directive's own targets — so deriving it here would
-    /// only ever see what the row already names. `Brain.tendRestock` keeps the
-    /// list current.
-    static func desiredIdle(for directive: Directive) -> Int {
-        min(idleCap, directive.targets.count)
+    /// `targets` count, capped at `idlePerBench` times `benches` and at
+    /// `idleCap` overall.
+    static func desiredIdle(for directive: Directive, benches: Int) -> Int {
+        min(idleCap, idlePerBench * benches, directive.targets.count)
     }
 
     // MARK: - Holding the deadline
@@ -142,7 +143,8 @@ public struct RestockRun: MissionStepMachine {
     /// exists only to hold a deadline while a busy bench or a landing clone
     /// leaves nothing else to decide.
     private func printing(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
-        if RelayRun.idleRelays(at: depot, in: world).count >= Self.desiredIdle(for: directive) {
+        let benches = PrintScheduler.benches(at: depot, in: world).count
+        if RelayRun.idleRelays(at: depot, in: world).count >= Self.desiredIdle(for: directive, benches: benches) {
             return .advanceStep(nextStep: Step.stocking.rawValue)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) <= PrintJob.deadline { return .wait }

@@ -17,7 +17,9 @@ private let now = Date(timeIntervalSince1970: 1_750_000_000)
 private let hubLocation = "AINALRAM-BELT-1"
 private let hubSystem = "AINALRAM"
 
-private func bench(_ code: String, printing: String? = nil) -> Device {
+private let depot = hubLocation
+
+private func bench(_ code: String, printing: String? = nil, updatedAt: Date = now) -> Device {
     var detail: [String: JSONValue] = [:]
     if let printing { detail["printing"] = .object(["device_type": .string(printing)]) }
     return Device(
@@ -25,9 +27,25 @@ private func bench(_ code: String, printing: String? = nil) -> Device {
         location: hubLocation, locationName: nil, operationalCapacity: 100, queueSize: 0,
         stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: ["enqueue_print"],
-        features: [], tags: [], detail: .object(detail), updatedAt: now,
+        features: [], tags: [], detail: .object(detail), updatedAt: updatedAt,
         firstSeenAt: Date(timeIntervalSince1970: 0)
     )
+}
+
+/// Idle spares standing at the hub — satisfied demand, evidence as fresh as
+/// every other fixture row unless a test overrides it.
+private func idleRelays(_ count: Int) -> [Device] {
+    (1...count).map { i in
+        Device(
+            deviceCode: "RLY\(i)", deviceType: RelayRun.relayDeviceType, replicantCode: "R1",
+            status: RelayRun.idleRelayStatus, location: hubLocation, locationName: nil,
+            operationalCapacity: 100, queueSize: 0, stowedInDeviceCode: nil,
+            controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
+            features: ["cruise", "relay", "stow"], tags: [], detail: .object([:]), updatedAt: now,
+            firstSeenAt: Date(timeIntervalSince1970: 0)
+        )
+    }
 }
 
 /// An open print op naming a device type and quantity, so it counts toward
@@ -59,15 +77,23 @@ private func snapshot(
 }
 
 /// `wanting` sizes `targets` so `desiredIdle` reads exactly that demand.
-private func restocking(id: String = "R1", wanting: Int, hub code: String = "B1") -> Directive {
+private func restocking(
+    id: String = "R1", wanting: Int = 1, hub code: String = "B1", startedAgo: TimeInterval = 60
+) -> Directive {
     Directive(
         id: id, kind: .restockRun, status: .running, deviceCode: code,
         controllerCode: nil, roamCentre: nil, fleetTag: nil, sourceRelayCode: nil,
         targets: (0..<wanting).map { "T\($0)" }, targetIndex: 0,
-        step: RestockRun.Step.stocking.rawValue, stepStartedAt: now.addingTimeInterval(-60),
+        step: RestockRun.Step.stocking.rawValue, stepStartedAt: now.addingTimeInterval(-startedAgo),
         returnToOrigin: false, originDesignation: hubSystem, attentionReason: nil,
         createdAt: now.addingTimeInterval(-600), updatedAt: now
     )
+}
+
+/// A directive whose `targets` count is `count` and nothing else — the shape
+/// `desiredIdle` reads demand off.
+private func wanting(_ count: Int) -> Directive {
+    restocking(wanting: count)
 }
 
 @Suite("Restock Run — the print-only fan-out (C2)")
@@ -83,5 +109,53 @@ struct RestockRunFanOutTests {
 
         // Demand is one relay, and one is already on order.
         #expect(RestockRun().nextAction(directive: restocking(id: "R-1", wanting: 1), world: world) == .wait)
+    }
+}
+
+@Suite("Restock Run — the cap scales with benches, and buys evidence before it spends (C8)")
+struct RestockRunCapAndSweepTests {
+
+    /// Ticket 18's formula. Written with literals rather than in terms of
+    /// `idleCap`, so that changing either term reddens this test.
+    @Test("the idle cap scales with bench count")
+    func idleCapScalesWithBenches() {
+        // One bench: three. Four benches: twelve, clipped to ten.
+        #expect(RestockRun.desiredIdle(for: wanting(20), benches: 1) == 3)
+        #expect(RestockRun.desiredIdle(for: wanting(20), benches: 3) == 9)
+        #expect(RestockRun.desiredIdle(for: wanting(20), benches: 4) == 10)
+        #expect(RestockRun.desiredIdle(for: wanting(20), benches: 0) == 0)
+    }
+
+    /// In the live row `targets.count` is 1, so the cap has never been the
+    /// binding term. This fixture manufactures the case where it is.
+    @Test("demand still binds below the cap")
+    func demandBindsBelowTheCap() {
+        #expect(RestockRun.desiredIdle(for: wanting(1), benches: 4) == 1)
+    }
+
+    /// A printed clone's row lands off the SSE frame minutes to hours after its
+    /// print op closes, so "no op open" is not evidence the pool is still
+    /// short. automation-brain ticket 14.
+    @Test("stale fleet evidence buys a sweep before the spend")
+    func staleEvidenceBuysASweep() {
+        // Every device row at the depot predates the step stamp, so nothing
+        // observed since this step began can vouch for the pool.
+        let stale = bench("B1", updatedAt: now.addingTimeInterval(-3600))
+        let world = snapshot([stale])
+
+        #expect(
+            RestockRun().nextAction(directive: restocking(startedAgo: 60), world: world)
+                == .refreshDevicesInSystem(designation: depot, thenStall: .unreachableDevice)
+        )
+    }
+
+    /// The gate sits at the last moment before the spend, after every branch
+    /// that declines — a vetoed pass must buy no read.
+    @Test("a met demand buys no sweep")
+    func metDemandBuysNoSweep() {
+        let stale = bench("B1", updatedAt: now.addingTimeInterval(-3600))
+        let world = snapshot([stale] + idleRelays(1))
+
+        #expect(RestockRun().nextAction(directive: restocking(wanting: 1), world: world) == .wait)
     }
 }

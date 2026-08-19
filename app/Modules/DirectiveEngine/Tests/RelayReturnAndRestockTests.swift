@@ -68,14 +68,14 @@ private func carrier(_ code: String = "V1", location: String?) -> Device {
     device(code, type: "heaven_vessel", location: location, tags: [Brain.carrierTag.string])
 }
 
-private func hub(_ code: String = "AF1", location: String = hubLocation) -> Device {
-    device(code, type: "autofactory", location: location, availableCommands: ["enqueue_print"])
+private func hub(_ code: String = "AF1", location: String = hubLocation, updatedAt: Date = now) -> Device {
+    device(code, type: "autofactory", location: location, availableCommands: ["enqueue_print"], updatedAt: updatedAt)
 }
 
 /// A planted, live relay. Its SYSTEM is what makes a location count as meshed,
 /// which is half of what makes a hub a hub.
-private func liveRelay(_ code: String, at location: String) -> Device {
-    device(code, type: "ftl_relay", location: location, status: "relaying", features: ["relay"])
+private func liveRelay(_ code: String, at location: String, updatedAt: Date = now) -> Device {
+    device(code, type: "ftl_relay", location: location, status: "relaying", features: ["relay"], updatedAt: updatedAt)
 }
 
 /// An idle spare standing at the hub — what restock exists to produce.
@@ -369,15 +369,17 @@ struct RestockRunTests {
 
     /// **The cap.** Demand far beyond `idleCap` does not turn the whole
     /// stockpile into relays nobody is flying yet: ten parked spares is 3,700
-    /// units of capital sitting in inventory rather than held as reserve.
+    /// units of capital sitting in inventory rather than held as reserve. Four
+    /// benches so the absolute ceiling, not the per-bench one, is what binds.
     @Test("demand beyond the cap is clamped to the cap")
     func stopsAtTheCap() {
         let manyTargets = (1...25).map { "SYS\($0)" }
         let directive = restockRun(targets: manyTargets)
-        #expect(RestockRun.desiredIdle(for: directive) == RestockRun.idleCap)
+        let benches = [hub(), hub("AF2"), hub("AF3"), hub("AF4")]
+        #expect(RestockRun.desiredIdle(for: directive, benches: benches.count) == RestockRun.idleCap)
 
         let spares = (1...RestockRun.idleCap).map { spare("RLY\($0)") }
-        let snapshot = world(devices: [hub(), liveRelay("REL0", at: hubLocation)] + spares)
+        let snapshot = world(devices: benches + [liveRelay("REL0", at: hubLocation)] + spares)
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait,
                 "at the cap the printer stops, however much demand is left")
@@ -391,7 +393,7 @@ struct RestockRunTests {
         let directive = restockRun(targets: [])
         let snapshot = world(devices: [hub(), liveRelay("REL0", at: hubLocation)])
 
-        #expect(RestockRun.desiredIdle(for: directive) == 0)
+        #expect(RestockRun.desiredIdle(for: directive, benches: 1) == 0)
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
     }
 
@@ -707,8 +709,8 @@ struct RestockEngineTests {
                     createdAt: Self.instant, updatedAt: Self.instant
                 )
             }.execute(db)
-            try Device.insert { hub() }.execute(db)
-            try Device.insert { liveRelay("REL0", at: hubLocation) }.execute(db)
+            try Device.insert { hub(updatedAt: Self.instant) }.execute(db)
+            try Device.insert { liveRelay("REL0", at: hubLocation, updatedAt: Self.instant) }.execute(db)
             if let censusFetchedAt {
                 try LocationFootprint.insert {
                     LocationFootprint(

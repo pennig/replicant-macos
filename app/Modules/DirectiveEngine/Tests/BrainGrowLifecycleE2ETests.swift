@@ -5,10 +5,10 @@
 //  The whole grow lifecycle through the REAL stack — nothing above the command
 //  wire is stubbed, because a pure-unit ranker test does not satisfy the bar
 //  (`SalvageTargetPlanner` once shipped unit-green with zero production callers).
-//  Only three dependencies are scripted, all of them things that would otherwise
-//  reach replicant.space: the command wire, the footprint read, and the device
-//  refresher. `Brain`, the engine loops, the REGISTERED `RelayRun`,
-//  `DirectiveExecutor` and the live governor are all the production article.
+//  Only four dependencies are scripted, all of them things that would otherwise
+//  reach replicant.space: the command wire, the footprint read, the device
+//  sweep, and the device refresher. `Brain`, the engine loops, the REGISTERED
+//  `RelayRun`, `DirectiveExecutor` and the live governor are all production.
 //
 //  `ScriptedServer` stands in for the server AND the sync that folds its answers
 //  back into SQLite, keeping the `Operation` bookkeeping where the `.simple`-verb
@@ -481,6 +481,19 @@ private func drive(
             $0.locationsClient.footprint = { [censusReads] in
                 censusReads.withValue { $0 += 1 }
                 return server.census()
+            }
+            // Restock's pre-spend sweep (C8): a scoped read of the rows already
+            // in `database`, stamped with THIS tick's instant — the same
+            // authoritative freshness a real `GET devices?location=` buys.
+            $0.devicesClient.fetchAtLocation = { designation in
+                let rows = (try? await database.read { db in
+                    try Device.where { $0.location.eq(designation) }.fetchAll(db)
+                }) ?? []
+                return rows.map { row in
+                    var row = row
+                    row.updatedAt = now
+                    return row
+                }
             }
         } operation: { () -> Tick in
             @Shared(.brainReport) var report: BrainReport?
