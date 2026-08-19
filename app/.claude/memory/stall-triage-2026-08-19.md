@@ -82,17 +82,53 @@ Matt chose a wider convoy over more trips: the lease is now
 `Directive.freighterCodes`, `EventRun.loadPlan` divides the bill across the
 holds by TOTAL capacity (not free space, or a mid-load recompute re-cuts the
 shares), and every leg — load, depart, stage, return, deposit — covers all of
-them. The brain leases one hull per hold-full and idles naming the shortfall
+them. The depart leg did not: it ordered the lead hull and left. See
+[[loop-legs-must-dispatch-in-step]]. The brain leases one hull per hold-full and idles naming the shortfall
 rather than launching a convoy that cannot finish.
 
 `leasedFreighters` is the single accessor over `freighterCodes` and the
 `freighterCode` mirror. Read the column directly and a row written through the
 other field leases a hull that nothing reserves.
 
-**Still open.** `PrintJob.deadline` is measured from `stepStartedAt` and
-ignores the op's own `completesAt`, so a queue deeper than 30 minutes still
-trips it even with the misattribution gone. See
-[[printer-selection-ignores-status]] for the rest of the shared-bench story.
-A run launched BEFORE the lease became a list holds one freighter for its whole
-life — nothing widens a convoy mid-flight, so such a row stalls
-`.eventLoadExceedsHold` and wants cancelling rather than retrying.
+**Still open.** A run launched BEFORE the lease became a list holds one
+freighter for its whole life — nothing widens a convoy mid-flight, so such a row
+stalls `.eventLoadExceedsHold` and wants cancelling rather than retrying.
+
+## Defect 3 was fixed in the copy production does not call (closed 2026-08-19 pm)
+
+The device-type guard went into `Reconciler.completeOpenOperation`. That is not
+the close production takes. `GameSync.deviceRoute` sends every event carrying a
+parseable `createdAt` through **`applyDeviceEvent`**, which holds its own copy of
+the close — `allowedKinds` and event-time, never the device type;
+`applyOperationEvent` is only the malformed-`createdAt` fallback. So the guard
+shipped, the app was rebuilt over it, and the ledger kept mis-stamping: relay run
+`A6876263`'s op `926CC591` asked `ftl_relay` and was closed on a `mining_drone`
+completion at 17:34. The three guards are now one `completionMayClose` both paths
+ask, because two copies is how the first fix missed.
+
+**A guard added to one of two closes is not a guard.** Ask which path the router
+actually takes before believing a fix is live.
+
+## …and the misattribution was never the whole stall
+
+Fixing it leaves the run waiting with an open op — and `printing` checks the
+deadline ABOVE `printInFlight`, so the flat 30 minutes still fires. Autofactory
+`43C9B54A` runs a strictly serial queue (each job's `startedAt` is the previous
+job's `completesAt`) at ~10 minutes a job, kept 3–5 deep by the mine automation.
+All four of the day's `printing` stalls fired at exactly `stepStartedAt + 1800s`
+with the bench still working: `A6876263` dispatched 17:29:27, stalled 17:59:31,
+and its relay `8EC8A25D` came off the bench at 18:07:29.
+
+`PrintJob.deadline`'s premise — "for the print that never happens, not for a slow
+one" — is sound; it simply cannot see a queue. `RelayRun.printStillQueued` now
+extends it while an open print op's own `completesAt` is still ahead, which the
+poll rolls forward job by job, and which our own completion ends by matching the
+type. `PrintJob.queuedCeiling` (4h) bounds it, because a bench that never idles
+would otherwise hold the carrier for ever; the number is a liveness backstop
+chosen against a deepest-observed queue of 1h49m, and is the one value here worth
+re-tuning from evidence.
+
+`EventCourierPrint`, `MineFleetPrint` and `RestockRun` share the flat-deadline
+shape on the same bench and were deliberately left alone — no `printing`-deadline
+stall of theirs appears in the log. See [[printer-selection-ignores-status]] for
+the rest of the shared-bench story.

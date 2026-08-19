@@ -131,6 +131,75 @@ struct EventRunMultiFreighterTests {
         #expect(ownership.reserved.isSuperset(of: ["CARRIER", "FREIGHT-1", "FREIGHT-2"]))
     }
 
+    // MARK: - Departure
+
+    /// The convoy mid-departure: `placed` names the hulls already standing at
+    /// the event, and everything else is still at the depot.
+    private func departingConvoy(placed: Set<String>) -> [Device] {
+        func site(_ code: String) -> String { placed.contains(code) ? "X-1" : "HUB-1" }
+        return [
+            EventRunFixtures.device(
+                "CARRIER", type: "surge_carrier", location: site("CARRIER"), tags: ["auto:carrier"]
+            ),
+            EventRunFixtures.courier(attachedTo: "CARRIER", location: site("CARRIER")),
+            EventRunFixtures.device(
+                "FREIGHT-1", type: "cargo_freighter", location: site("FREIGHT-1"),
+                cargoUsed: 500, cargoCapacity: 500
+            ),
+            EventRunFixtures.device(
+                "FREIGHT-2", type: "cargo_freighter", location: site("FREIGHT-2"),
+                cargoUsed: 300, cargoCapacity: 500
+            ),
+        ]
+    }
+
+    private func departing(_ placed: Set<String>) -> MissionAction {
+        action(.departing, departingConvoy(placed: placed), ["FREIGHT-1", "FREIGHT-2"])
+    }
+
+    /// Ordering the lead freighter must not end the step: the second hull has
+    /// no order yet, and `confirmingArrival` waits on every one of them.
+    @Test func departingKeepsTheStepWhileAHullIsStillAtTheDepot() {
+        #expect(departing(["CARRIER"]) == .dispatch(
+            kind: .travel, deviceCode: "FREIGHT-1",
+            params: CommandParams(destination: "X-1"),
+            nextStep: EventRun.Step.departing.rawValue
+        ))
+    }
+
+    /// The leg the stalled run never dispatched.
+    @Test func departingOrdersTheSecondFreighterOnceTheFirstIsPlaced() {
+        #expect(departing(["CARRIER", "FREIGHT-1"]) == .dispatch(
+            kind: .travel, deviceCode: "FREIGHT-2",
+            params: CommandParams(destination: "X-1"),
+            nextStep: EventRun.Step.departing.rawValue
+        ))
+    }
+
+    /// Only a whole convoy standing at the event ends the step.
+    @Test func departingAdvancesOnlyWhenEveryHullStands() {
+        #expect(
+            departing(["CARRIER", "FREIGHT-1", "FREIGHT-2"])
+                == .advanceStep(nextStep: EventRun.Step.confirmingArrival.rawValue)
+        )
+    }
+
+    /// Walk `departing` as the executor does — dispatch, place that hull,
+    /// re-enter only while the dispatch still names this step. Every hull must
+    /// carry an order before the convoy reaches `confirmingArrival`.
+    @Test func everyHullIsOrderedBeforeTheStepEnds() {
+        var placed: Set<String> = []
+        var ordered: [String] = []
+        for _ in 0..<4 {
+            guard case let .dispatch(_, deviceCode, _, nextStep) = departing(placed) else { break }
+            ordered.append(deviceCode)
+            placed.insert(deviceCode)
+            guard nextStep == EventRun.Step.departing.rawValue else { break }
+        }
+        #expect(ordered == ["CARRIER", "FREIGHT-1", "FREIGHT-2"])
+        #expect(departing(placed) == .advanceStep(nextStep: EventRun.Step.confirmingArrival.rawValue))
+    }
+
     /// A row written through the single-freighter mirror still leases its hull,
     /// so nothing that predates the list goes unreserved.
     @Test func theMirrorAloneStillLeases() {

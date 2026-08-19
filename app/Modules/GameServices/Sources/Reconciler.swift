@@ -284,8 +284,10 @@ public struct Reconciler: Sendable {
                 if let plan, var op = try Operation.where({
                     $0.entityCode.eq(deviceCode) && $0.status.in(OperationStatus.liveCases)
                 }).fetchOne(db),
-                   plan.allowedKinds.contains(op.kind),
-                   eventTime >= op.startedAt.addingTimeInterval(-Self.eventTimeSkewTolerance) {
+                   Self.completionMayClose(
+                       op, on: deviceCode, eventTime: eventTime,
+                       result: plan.result, allowedKinds: plan.allowedKinds
+                   ) {
                     if let result = plan.result {
                         var dict: [String: JSONValue] = {
                             if case .object(let existing) = op.detail { return existing }
@@ -422,21 +424,9 @@ public struct Reconciler: Sendable {
     /// Mark the single open operation on a device completed, recording any event
     /// result (e.g. a print's `new_device_code`) under `detail.result`.
     ///
-    /// Three guards keep a completion from closing the wrong op. The first two
-    /// matter on catch-up replay, where a device re-tasked while the app was
-    /// away has a *different* op open than the one the replayed event
-    /// completed; the third matters live, on a bench whose queue is deeper
-    /// than the one op this table can hold for it:
-    ///   • `allowedKinds`: the event's action family must match the open op's
-    ///     kind (a `site.depleted` can never close a travel op);
-    ///   • event time: a completion stamped before the op even started belongs
-    ///     to an earlier action;
-    ///   • device type: a result contradicting what the open op asked for is
-    ///     another job finishing on the same device.
-    /// None of them constrains the poll path (`allowedKinds` nil, `eventTime`
-    /// nil, `result` nil — the stamp falls back to `date.now`), where the
-    /// settled-device read is its own proof, and which is therefore the
-    /// backstop that clears a job whose event the third guard declined.
+    /// Which completions may close which op is `completionMayClose`. None of its
+    /// guards constrains the poll path (`allowedKinds`, `eventTime` and `result`
+    /// all nil), which is therefore the backstop for a declined event.
     ///
     /// Returns whether an open operation was found and closed.
     @discardableResult
@@ -458,21 +448,10 @@ public struct Reconciler: Sendable {
             }).fetchOne(db)
             else { return false }
 
-            if let allowedKinds, !allowedKinds.contains(op.kind) {
-                logger.notice("ignored completion on \(deviceCode, privacy: .public): open op is \(op.kind, privacy: .public), event closes \(allowedKinds.sorted().joined(separator: "/"), privacy: .public) — stale/replayed event")
-                return false
-            }
-            if let eventTime, eventTime < op.startedAt.addingTimeInterval(-Self.eventTimeSkewTolerance) {
-                logger.notice("ignored completion on \(deviceCode, privacy: .public): event time \(eventTime.ISO8601Format(), privacy: .public) predates op start \(op.startedAt.ISO8601Format(), privacy: .public) — stale/replayed event")
-                return false
-            }
-            if let wanted = op.detail["params"]?["device_type"]?.stringValue,
-               let produced = result?["device_type"]?.stringValue,
-               wanted != produced
-            {
-                logger.notice("ignored completion on \(deviceCode, privacy: .public): open op asked for \(wanted, privacy: .public), event produced \(produced, privacy: .public) — another job on this bench")
-                return false
-            }
+            guard Self.completionMayClose(
+                op, on: deviceCode, eventTime: eventTime,
+                result: result, allowedKinds: allowedKinds
+            ) else { return false }
 
             if let result {
                 var dict: [String: JSONValue] = {
@@ -490,5 +469,37 @@ public struct Reconciler: Sendable {
             return true
             }
         } ?? false
+    }
+
+    /// Whether this completion may close `op` — one copy for both closing paths.
+    /// `applyDeviceEvent` holds the other close, and `GameSync` routes almost
+    /// every event through it, so guarding this one alone guards nothing.
+    static func completionMayClose(
+        _ op: GameModels.Operation,
+        on deviceCode: String,
+        eventTime: Date?,
+        result: [String: JSONValue]?,
+        allowedKinds: Set<String>?
+    ) -> Bool {
+        // A `site.depleted` can never close a travel op.
+        if let allowedKinds, !allowedKinds.contains(op.kind) {
+            logger.notice("ignored completion on \(deviceCode, privacy: .public): open op is \(op.kind, privacy: .public), event closes \(allowedKinds.sorted().joined(separator: "/"), privacy: .public) — stale/replayed event")
+            return false
+        }
+        // A completion stamped before the op started belongs to an earlier action.
+        if let eventTime, eventTime < op.startedAt.addingTimeInterval(-Self.eventTimeSkewTolerance) {
+            logger.notice("ignored completion on \(deviceCode, privacy: .public): event time \(eventTime.ISO8601Format(), privacy: .public) predates op start \(op.startedAt.ISO8601Format(), privacy: .public) — stale/replayed event")
+            return false
+        }
+        // A bench runs a queue deeper than the one op this table holds for it, so
+        // a result of another type is another job of that queue finishing.
+        if let wanted = op.detail["params"]?["device_type"]?.stringValue,
+           let produced = result?["device_type"]?.stringValue,
+           wanted != produced
+        {
+            logger.notice("ignored completion on \(deviceCode, privacy: .public): open op asked for \(wanted, privacy: .public), event produced \(produced, privacy: .public) — another job on this bench")
+            return false
+        }
+        return true
     }
 }
