@@ -10,6 +10,9 @@ CREATE UNIQUE INDEX "directive_log_unique_event"
 CREATE INDEX "event_logs_by_received_at"
   ON "eventLogs" ("receivedAt");
 
+CREATE INDEX "haul_yields_by_collected_at"
+  ON "haulYields" ("collectedAt");
+
 CREATE INDEX "haul_yields_by_controller"
   ON "haulYields" ("controllerCode");
 

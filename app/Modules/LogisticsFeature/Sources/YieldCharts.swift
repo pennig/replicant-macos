@@ -23,7 +23,7 @@ struct YieldPoint: Identifiable, Equatable {
 /// `View` traps `swift test` (headless metadata realization), so this stays a
 /// plain top-level namespace the views delegate to.
 enum YieldChartMath {
-    static func points(byDay: [(day: Date, perType: ResourceCost)]) -> [YieldPoint] {
+    static func points(byDay: [YieldSummary.DayTotal]) -> [YieldPoint] {
         byDay.flatMap { entry in
             ResourceCost.displayOrder.compactMap { slot in
                 let units = entry.perType.amount(for: slot.key)
@@ -48,7 +48,7 @@ enum YieldChartMath {
     /// `cap + 1` or fewer, everything is kept and `hidden` is nil — an
     /// "All Others (1)" line is worse than the row it hides.
     static func foldedSources(
-        _ sources: [(designation: String, units: Int)], cap: Int = YieldChartMath.sourceCap
+        _ sources: [YieldSummary.SourceTotal], cap: Int = YieldChartMath.sourceCap
     ) -> (rows: [(label: String, units: Int)], hidden: (count: Int, units: Int)?) {
         let rows = sources.map { (label: $0.designation, units: $0.units) }
         guard sources.count > cap + 1 else { return (rows, nil) }
@@ -62,7 +62,7 @@ enum YieldChartMath {
     /// Keys of slices holding at least `minShare` of the total — the only ones
     /// direct-labelled; two palette slots need the label as their contrast relief.
     static func labelledResourceKeys(
-        _ rows: [(key: String, units: Int)], minShare: Double = 0.1
+        _ rows: [YieldSummary.ResourceTotal], minShare: Double = 0.1
     ) -> Set<String> {
         let total = rows.reduce(0) { $0 + $1.units }
         guard total > 0 else { return [] }
@@ -112,7 +112,7 @@ struct YieldOverTimeChart: View {
 struct YieldBreakdownChart: View {
     let title: String
     /// Sequential single hue: this compares magnitude, not identity.
-    let sources: [(designation: String, units: Int)]
+    let sources: [YieldSummary.SourceTotal]
     @Binding var showAll: Bool
 
     var body: some View {
@@ -179,7 +179,7 @@ struct YieldBreakdownChart: View {
 struct ResourceDonutChart: View {
     let title: String
     /// `ResourceCost.displayOrder` order — palette-validated for ring adjacency.
-    let rows: [(key: String, units: Int)]
+    let rows: [YieldSummary.ResourceTotal]
 
     var body: some View {
         let filtered = rows.filter { $0.units > 0 }

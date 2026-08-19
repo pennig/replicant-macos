@@ -18,6 +18,7 @@ private func seededDatabase(rows: [HaulYield] = HaulYield.previewRows) -> any Da
     var migrator = DatabaseMigrator()
     HaulYield.createHaulYields.register(in: &migrator)
     HaulYield.addControllerCodeIndex.register(in: &migrator)
+    HaulYield.addCollectedAtIndex.register(in: &migrator)
     try! migrator.migrate(database)
     if !rows.isEmpty {
         try! database.write { db in

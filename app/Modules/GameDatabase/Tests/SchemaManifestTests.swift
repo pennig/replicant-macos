@@ -71,6 +71,7 @@ import Testing
         "Add 'commandKind','targetDeviceCode','detail' to 'directiveLogEntries'",
         "Create 'theatres'",
         "Add 'freighterCodes' to 'directives'",
+        "Add index on 'haulYields.collectedAt'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

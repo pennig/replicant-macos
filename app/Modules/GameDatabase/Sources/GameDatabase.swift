@@ -93,6 +93,7 @@ public enum GameDatabase {
         DirectiveLogEntry.addCommandColumns,
         TheatreRecord.createTheatres,
         Directive.addFreighterCodes,
+        HaulYield.addCollectedAtIndex,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

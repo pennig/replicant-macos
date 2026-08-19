@@ -220,6 +220,8 @@ struct TheatresTabFeatureTests {
         let database = try GameDatabase.bootstrap()
         let store = withDependencies {
             $0.defaultDatabase = database
+            // `State.init` cuts the ledger's window against the clock.
+            $0.date = .constant(fixtureNow)
         } operation: {
             var initial = LogisticsFeature.State()
             initial.tab = .theatres
@@ -241,6 +243,8 @@ struct TheatresTabFeatureTests {
             LogisticsFeature()
         } withDependencies: {
             $0.defaultDatabase = database
+            // `State.init` cuts the ledger's window against the clock.
+            $0.date = .constant(fixtureNow)
         }
 
         await store.send(.establishTapped(system: "OMEROPE")) {
