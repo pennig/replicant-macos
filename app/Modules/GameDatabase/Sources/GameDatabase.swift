@@ -92,6 +92,7 @@ public enum GameDatabase {
         GameModels.Operation.addOwnerColumns,
         DirectiveLogEntry.addCommandColumns,
         TheatreRecord.createTheatres,
+        Directive.addFreighterCodes,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

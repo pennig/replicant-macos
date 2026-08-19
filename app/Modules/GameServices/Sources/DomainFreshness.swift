@@ -35,6 +35,7 @@ public enum FreshnessDomain: String, CaseIterable, Sendable {
     case locationEvents   // LocationEvent table — full accounts/events walk
     case ftlMesh          // FTLLinkRecord table — O(relays) network reads
     case account          // Account profile + Replicant roster — one accounts/me read
+    case blueprints       // Blueprint table — one full unlocked-catalog read
 }
 
 /// How a registered domain refreshes: the debounce window an `invalidate`

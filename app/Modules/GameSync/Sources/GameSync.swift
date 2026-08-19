@@ -337,10 +337,8 @@ extension GameSync {
 
     /// The stowage claim a device event makes, or nil when it makes none.
     ///
-    /// Only these two events speak to containment, and each names the far end in
-    /// its payload (docs event catalogue, checked 2026-07-26). `device.deployed`
-    /// needs no payload field at all — leaving the carrier IS the claim — so a
-    /// renamed `deployed_from_device_code` can't silently break the clear, while
+    /// Only these two events speak to containment. `device.deployed` needs no
+    /// payload field at all — leaving the carrier IS the claim — while
     /// `device.stowed` without a readable carrier code is treated as no claim
     /// rather than guessed at: the staleness mark still owns that repair.
     ///
@@ -349,10 +347,12 @@ extension GameSync {
     static func stowChange(for event: GameEventEnvelope) -> StowChange? {
         switch event.event {
         case "device.stowed":
-            guard let carrier = event.payload?["stowed_in_device_code"]?.stringValue,
-                  !carrier.isEmpty
-            else {
-                logger.notice("⚠️ device.stowed WITHOUT stowed_in_device_code — stowage left to the staleness mark")
+            // An `ftl_relay` names its carrier under the short key; every other
+            // type uses the long one. Both are read, longest first.
+            let named = event.payload?["stowed_in_device_code"]?.stringValue
+                ?? event.payload?["stowed_in"]?.stringValue
+            guard let carrier = named, !carrier.isEmpty else {
+                logger.notice("⚠️ device.stowed naming no carrier — stowage left to the staleness mark")
                 return nil
             }
             return .stowed(inDeviceCode: carrier)

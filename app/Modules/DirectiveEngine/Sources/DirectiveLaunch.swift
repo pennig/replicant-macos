@@ -24,6 +24,9 @@ extension Directive {
         public var originDesignation: String?
         public var controllerCode: String?
         public var freighterCode: String?
+        /// Every cargo freighter the convoy leases, in load order. Overrides
+        /// `freighterCode`, which stays for the kinds that lease exactly one.
+        public var freighterCodes: [String]?
         public var sourceRelayCode: String?
         /// A mine ferry's belt. Scopes the tag to that BELT rather than the
         /// theatre; every other `.haulRun` leaves it nil.
@@ -39,6 +42,7 @@ extension Directive {
             originDesignation: String? = nil,
             controllerCode: String? = nil,
             freighterCode: String? = nil,
+            freighterCodes: [String]? = nil,
             sourceRelayCode: String? = nil,
             belt: String? = nil
         ) {
@@ -51,6 +55,7 @@ extension Directive {
             self.originDesignation = originDesignation
             self.controllerCode = controllerCode
             self.freighterCode = freighterCode
+            self.freighterCodes = freighterCodes
             self.sourceRelayCode = sourceRelayCode
             self.belt = belt
         }
@@ -78,7 +83,8 @@ extension Directive {
             createdAt: now,
             updatedAt: now,
             theatreDepot: launch.theatre?.depot,
-            freighterCode: launch.freighterCode
+            freighterCode: launch.freighterCode,
+            freighterCodes: launch.freighterCodes
         )
     }
 

@@ -87,6 +87,7 @@ struct ReplicantApp: App {
         domainFreshness.register(.locationEvents, LocationEventsIngestion.domainRegistration)
         domainFreshness.register(.ftlMesh, FTLMeshRefresher.domainRegistration)
         domainFreshness.register(.account, AccountIngestion.domainRegistration)
+        domainFreshness.register(.blueprints, BlueprintsIngestion.domainRegistration)
 
         // The declared event routes. `locationsIngestion` is an instance: its
         // passive-scan debounce is mutable state with a teardown obligation
@@ -105,6 +106,10 @@ struct ReplicantApp: App {
         // `experience.gained` fires for nearly every action and moved nothing
         // until now: XP only advanced when something re-read `accounts/me`.
         gameSync.registerRoute(AccountIngestion.eventRoute)
+        // The catalog decides which of an event's options the account can
+        // print, so an unlock must reach it before the next brain tick rather
+        // than on the hourly sweep.
+        gameSync.registerRoute(BlueprintsIngestion.eventRoute)
         // `directive.*` had no route at all before Stage 3. It only writes a
         // `DirectiveLogEntry`; the engine observes that row rather than the
         // event, which is what keeps observe-reconciled-state intact.

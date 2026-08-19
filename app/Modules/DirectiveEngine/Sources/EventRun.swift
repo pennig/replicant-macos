@@ -74,8 +74,11 @@ public struct EventRun: MissionStepMachine {
     /// The three hulls, resolved off the row rather than re-derived.
     public struct Convoy: Equatable, Sendable {
         public let carrier: Device
-        public let freighter: Device?
+        /// Every leased freighter whose row the world holds, in load order.
+        public let freighters: [Device]
         public let courier: Device?
+        /// The lead hull, for the steps that speak to one freighter at a time.
+        public var freighter: Device? { freighters.first }
     }
 
     /// A container this capability printed. An untagged one hosts some other
@@ -109,7 +112,7 @@ public struct EventRun: MissionStepMachine {
     /// Sorted before `first`, so two containers cannot resolve differently per tick.
     public static func convoy(of directive: Directive, in world: WorldSnapshot) -> Convoy? {
         guard let carrier = world.device(directive.deviceCode) else { return nil }
-        let freighter = directive.freighterCode.flatMap { world.device($0) }
+        let freighters = directive.leasedFreighters.compactMap { world.device($0) }
         let courier = world.devices.values
             .filter {
                 guard isCourier($0, in: world) else { return false }
@@ -118,7 +121,7 @@ public struct EventRun: MissionStepMachine {
             }
             .sorted { $0.deviceCode < $1.deviceCode }
             .first
-        return Convoy(carrier: carrier, freighter: freighter, courier: courier)
+        return Convoy(carrier: carrier, freighters: freighters, courier: courier)
     }
 
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
@@ -174,6 +177,38 @@ public struct EventRun: MissionStepMachine {
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }
         return .advanceStep(nextStep: Step.printing.rawValue)
+    }
+
+    // MARK: - The option in force
+
+    /// The option every step works toward, or why no step can name one.
+    enum OptionVerdict: Equatable, Sendable {
+        case decided(EventPlan.Option)
+        case unresolved(DirectiveAttentionReason, detail: String)
+    }
+
+    /// The option `event` is being worked under, resolved on the SAME catalogue
+    /// `EventRanking` launched the run under. Resolving on an empty one widens
+    /// the printable set to every option, which no `chosenOption` then settles.
+    static func optionInForce(_ event: LocationEvent, in world: WorldSnapshot) -> OptionVerdict {
+        switch EventPlan.resolve(
+            event, chosenOption: event.chosenOption,
+            bills: world.blueprintBills, components: world.blueprintComponents
+        ) {
+        case .decided(let option):
+            return .decided(option)
+        case .needsChoice:
+            return .unresolved(.eventOptionNotChosen, detail: event.designation)
+        case .blocked(let offered):
+            let missing = offered.reduce(into: Set<String>()) { $0.formUnion($1.unprintable) }
+            return .unresolved(
+                .eventOptionBlueprintMissing,
+                detail: missing.sorted().map(BlueprintPresentation.displayName)
+                    .joined(separator: ", ")
+            )
+        case .undecodable:
+            return .unresolved(.unreachableDevice, detail: event.designation)
+        }
     }
 
     // MARK: - Printing
@@ -297,11 +332,14 @@ public struct EventRun: MissionStepMachine {
     private func printing(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let depot = world.theatreDepot(for: directive),
-              case .decided(let option) = EventPlan.resolve(
-                  event, chosenOption: event.chosenOption, bills: [:]
-              )
-        else { return .stall(.unreachableDevice) }
+        guard let depot = world.theatreDepot(for: directive) else {
+            return .stall(.unreachableDevice)
+        }
+        let option: EventPlan.Option
+        switch Self.optionInForce(event, in: world) {
+        case .decided(let decided): option = decided
+        case .unresolved(let reason, let detail): return .stall(reason, detail: detail)
+        }
 
         let tag = Self.fleetTag(forTheatre: depot)
         let outstanding = Self.missingTree(for: option, at: depot, in: world, tag: tag)
@@ -402,21 +440,61 @@ public struct EventRun: MissionStepMachine {
         return payload
     }
 
+    /// One freighter's share of the bill.
+    struct Berth: Equatable, Sendable {
+        let freighter: Device
+        let take: [String: Int]
+    }
+
+    /// How `bill` divides across `freighters`, filling each in order, or nil
+    /// when the convoy's holds cannot take it all.
+    ///
+    /// Shares are measured against each hold's TOTAL capacity rather than its
+    /// free space, so the answer does not move as the collections land — a plan
+    /// recomputed mid-load must name the same shares it named at the start. A
+    /// hold reporting no `cargo_capacity` is unbounded here rather than empty:
+    /// the field is absent, not zero, and the server judges what it takes.
+    static func loadPlan(bill: [String: Int], across freighters: [Device]) -> [Berth]? {
+        var remaining = bill
+        var berths: [Berth] = []
+        for freighter in freighters where !remaining.isEmpty {
+            var room = freighter.cargoCapacity > 0 ? freighter.cargoCapacity : Int.max
+            var take: [String: Int] = [:]
+            for type in remaining.keys.sorted() {
+                guard room > 0, let need = remaining[type] else { continue }
+                let units = min(need, room)
+                take[type] = units
+                room -= units
+                remaining[type] = units == need ? nil : need - units
+            }
+            if !take.isEmpty { berths.append(Berth(freighter: freighter, take: take)) }
+        }
+        return remaining.isEmpty ? berths : nil
+    }
+
+    /// Total units the convoy's holds can take, for the stall that says so.
+    static func convoyHold(_ freighters: [Device]) -> Int {
+        freighters.reduce(0) { $0 + $1.cargoCapacity }
+    }
+
     /// Attach the courier, the beacon and the option's devices one per round,
-    /// then fill the freighter. `attach` moves one row at a time.
+    /// then fill the freighters. `attach` moves one row at a time.
     private func loading(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let depot = world.theatreDepot(for: directive),
-              case .decided(let option) = EventPlan.resolve(
-                  event, chosenOption: event.chosenOption, bills: [:]
-              )
-        else { return .stall(.unreachableDevice) }
+        guard let depot = world.theatreDepot(for: directive) else {
+            return .stall(.unreachableDevice)
+        }
+        let option: EventPlan.Option
+        switch Self.optionInForce(event, in: world) {
+        case .decided(let decided): option = decided
+        case .unresolved(let reason, let detail): return .stall(reason, detail: detail)
+        }
 
         guard let courier = convoy.courier else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
-        guard let freighter = convoy.freighter else {
+        guard !convoy.freighters.isEmpty else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
 
@@ -438,12 +516,23 @@ public struct EventRun: MissionStepMachine {
         case .finished, .more: break
         }
 
-        if option.resources.isEmpty { return .advanceStep(nextStep: Step.departing.rawValue) }
-        if freighter.cargoUsed > 0 { return .advanceStep(nextStep: Step.departing.rawValue) }
-        if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
+        let bill = EventPlan.outstandingResources(option, in: event)
+        if bill.isEmpty { return .advanceStep(nextStep: Step.departing.rawValue) }
+        guard let plan = Self.loadPlan(bill: bill, across: convoy.freighters) else {
+            return .stall(
+                .eventLoadExceedsHold,
+                detail: "\(bill.values.reduce(0, +)) units, convoy holds \(Self.convoyHold(convoy.freighters))"
+            )
+        }
+        // A laden hull has already taken its share: `collect_resources` is the
+        // only thing that puts cargo aboard on this leg.
+        guard let berth = plan.first(where: { $0.freighter.cargoUsed == 0 }) else {
+            return .advanceStep(nextStep: Step.departing.rawValue)
+        }
+        if world.openOperation(for: berth.freighter.deviceCode) != nil { return .wait }
         return .dispatch(
-            kind: .collectResources, deviceCode: freighter.deviceCode,
-            params: CommandParams(resources: option.resources),
+            kind: .collectResources, deviceCode: berth.freighter.deviceCode,
+            params: CommandParams(resources: berth.take),
             nextStep: Step.confirmingLoad.rawValue
         )
     }
@@ -458,24 +547,29 @@ public struct EventRun: MissionStepMachine {
         var landed = world.devices.values
             .filter { $0.attachedToDeviceCode == carrier.deviceCode }
             .count
-        if let freighter = convoy.freighter, freighter.cargoUsed > 0 { landed += 1 }
+        landed += convoy.freighters.count { $0.cargoUsed > 0 }
         let rounds = MissionLogBudget.dispatchRounds(
             world, dispatch: Step.loading.rawValue, confirm: Step.confirmingLoad.rawValue
         )
         if landed >= rounds { return .advanceStep(nextStep: Step.loading.rawValue) }
 
-        guard let depot = world.theatreDepot(for: directive), let courier = convoy.courier,
-              case .decided(let option) = EventPlan.resolve(
-                  event, chosenOption: event.chosenOption, bills: [:]
-              )
+        guard let depot = world.theatreDepot(for: directive), let courier = convoy.courier
         else { return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice) }
+        let option: EventPlan.Option
+        switch Self.optionInForce(event, in: world) {
+        case .decided(let decided): option = decided
+        case .unresolved(let reason, let detail): return .stall(reason, detail: detail)
+        }
 
         let payload = Self.loadPayload(
             courier: courier, option: option, depot: depot,
             tag: Self.fleetTag(forTheatre: depot), in: world
         )
         let loose = payload.filter { $0.attachedToDeviceCode != carrier.deviceCode }
-        guard let next = loose.first ?? convoy.freighter else {
+        // The hull just ordered to collect is the empty one the plan is waiting
+        // on, so judge that row rather than whichever freighter leads the list.
+        let awaited = convoy.freighters.first { $0.cargoUsed == 0 } ?? convoy.freighter
+        guard let next = loose.first ?? awaited else {
             return .advanceStep(nextStep: Step.loading.rawValue)
         }
         let ctx = StepContext(directive: directive, world: world, step: directive.step)
@@ -506,26 +600,31 @@ public struct EventRun: MissionStepMachine {
         case .finished: break   // carrier placed — the freighter leg follows
         }
 
-        guard let freighter = convoy.freighter else {
+        guard !convoy.freighters.isEmpty else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
-        let freighterLeg = TravelTo(
-            deviceCode: freighter.deviceCode, destination: destination,
-            arrivalTest: .exactLocation, confirmStep: Step.confirmingArrival.rawValue
-        )
-        return switch freighterLeg.next(ctx) {
-        case let .action(action): action
-        case .finished: .advanceStep(nextStep: Step.confirmingArrival.rawValue)
-        case .more, .noSubject: .stall(.unreachableDevice)
+        // One leg per hull, in order: a freighter already placed falls through
+        // to the next, and the step ends only once every one of them stands
+        // at the event.
+        for freighter in convoy.freighters {
+            let leg = TravelTo(
+                deviceCode: freighter.deviceCode, destination: destination,
+                arrivalTest: .exactLocation, confirmStep: Step.confirmingArrival.rawValue
+            )
+            switch leg.next(ctx) {
+            case let .action(action): return action
+            case .finished: continue
+            case .more, .noSubject: return .stall(.unreachableDevice)
+            }
         }
+        return .advanceStep(nextStep: Step.confirmingArrival.rawValue)
     }
 
     /// Both hulls placed at the event, on rows read since the step began.
     private func confirmArrival(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        var rows = [convoy.carrier]
-        if let freighter = convoy.freighter { rows.append(freighter) }
+        let rows = [convoy.carrier] + convoy.freighters
         let placed = rows.allSatisfy {
             world.isFresh($0, since: directive.stepStartedAt) && $0.location == event.location
         }
@@ -563,9 +662,11 @@ public struct EventRun: MissionStepMachine {
     private func staging(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard case .decided(let option) = EventPlan.resolve(
-            event, chosenOption: event.chosenOption, bills: [:]
-        ) else { return .stall(.unreachableDevice) }
+        let option: EventPlan.Option
+        switch Self.optionInForce(event, in: world) {
+        case .decided(let decided): option = decided
+        case .unresolved(let reason, let detail): return .stall(reason, detail: detail)
+        }
 
         let aboard = Self.staged(convoy, in: world)
         if !aboard.isEmpty, Self.stageRounds(world, .detach) < 1 {
@@ -582,13 +683,24 @@ public struct EventRun: MissionStepMachine {
         }
 
         guard !option.resources.isEmpty else { return .advanceStep(nextStep: Step.confirmingProgress.rawValue) }
-        guard let freighter = convoy.freighter else {
+        guard !convoy.freighters.isEmpty else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
-        if Self.stageRounds(world, .depositResources) < 1 {
+        // The same shares the load was planned against: each hull sets down what
+        // it was filled with, so a hold carrying more than the option asked for
+        // keeps the rest. One round per laden hull bounds the loop.
+        // The shares the load was planned against, so each hull sets down what it
+        // was filled with and a hold carrying more keeps the rest. Round-counted
+        // rather than read off `cargoUsed`: the deposit is what proves the hold,
+        // and the row behind it lags.
+        let bill = EventPlan.outstandingResources(option, in: event)
+        let plan = Self.loadPlan(bill: bill, across: convoy.freighters)
+            ?? [Berth(freighter: convoy.freighters[0], take: option.resources)]
+        let rounds = Self.stageRounds(world, .depositResources)
+        if rounds < plan.count {
             return .dispatch(
-                kind: .depositResources, deviceCode: freighter.deviceCode,
-                params: CommandParams(resources: option.resources),
+                kind: .depositResources, deviceCode: plan[rounds].freighter.deviceCode,
+                params: CommandParams(resources: plan[rounds].take),
                 nextStep: Step.confirmingStage.rawValue
             )
         }
@@ -699,7 +811,11 @@ public struct EventRun: MissionStepMachine {
             }
             return .refreshEvents(thenStall: nil)
         }
-        guard let freighter = convoy.freighter else { return .advanceStep(nextStep: Step.recovering.rawValue) }
+        // The reward goes into whichever hull still has room; what will not fit
+        // anywhere stays on the ground for a Haul Run.
+        guard let freighter = convoy.freighters.first(where: { $0.cargoRemaining > 0 })
+            ?? convoy.freighter
+        else { return .advanceStep(nextStep: Step.recovering.rawValue) }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
         switch Self.sweep(event, into: freighter) {
         case .nothingPaid:
@@ -768,7 +884,7 @@ public struct EventRun: MissionStepMachine {
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
         let ctx = StepContext(directive: directive, world: world, step: directive.step)
-        let hulls = [convoy.carrier, convoy.freighter].compactMap { $0?.deviceCode }
+        let hulls = ([convoy.carrier] + convoy.freighters).map(\.deviceCode)
         let home = ReturnHome(deviceCodes: hulls, destination: .theatreDepot)
         // A statement switch, not an expression one: the `.noSubject` arm logs
         // before it answers, and an expression arm has nowhere to put that.
@@ -797,9 +913,10 @@ public struct EventRun: MissionStepMachine {
     private func depositing(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let freighter = convoy.freighter, freighter.cargoUsed > 0 else { return .done }
+        let laden = convoy.freighters.filter { $0.cargoUsed > 0 }
+        guard let freighter = laden.first else { return .done }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-        guard Self.depositRounds(world) < 1 else { return .done }
+        guard Self.depositRounds(world) < laden.count else { return .done }
         return .dispatch(
             kind: .depositResources, deviceCode: freighter.deviceCode,
             params: CommandParams(), nextStep: Step.confirmingDeposit.rawValue
@@ -811,13 +928,14 @@ public struct EventRun: MissionStepMachine {
     private func confirmDeposit(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        guard let freighter = convoy.freighter else { return .done }
-        if world.isFresh(freighter, since: directive.stepStartedAt), freighter.cargoUsed == 0 {
-            return .advanceStep(nextStep: Step.depositing.rawValue)
+        guard !convoy.freighters.isEmpty else { return .done }
+        let emptied = convoy.freighters.allSatisfy {
+            world.isFresh($0, since: directive.stepStartedAt) && $0.cargoUsed == 0
         }
+        if emptied { return .advanceStep(nextStep: Step.depositing.rawValue) }
         let ctx = StepContext(directive: directive, world: world, step: directive.step)
         let ladder = ConfirmRow(deadline: Self.depositConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
-        return switch ladder.verdict([freighter], ctx) {
+        return switch ladder.verdict(convoy.freighters, ctx) {
         case let .act(action): action
         case .judge: .wait
         }

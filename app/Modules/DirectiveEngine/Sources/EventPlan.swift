@@ -67,6 +67,23 @@ public enum EventPlan {
         return .needsChoice(printable)
     }
 
+    /// What `option` still needs delivered: each requirement less what the
+    /// ledger already counts against it. A type that is met drops out, so a
+    /// second delivery never re-sends the first one's units. Falls back to the
+    /// full requirement when the blob names no matching option, which is the
+    /// only reading that cannot under-deliver.
+    public static func outstandingResources(
+        _ option: Option, in event: LocationEvent
+    ) -> [String: Int] {
+        guard let live = LocationEventDetail(event.detail)?
+            .options.first(where: { $0.name == option.name })
+        else { return option.resources }
+        return live.resources.reduce(into: [:]) { bill, requirement in
+            let short = requirement.required - requirement.current
+            if short > 0 { bill[requirement.resourceType] = short }
+        }
+    }
+
     private static func price(
         _ option: LocationEventDetail.Option,
         _ bills: [String: ResourceCost],
