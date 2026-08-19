@@ -78,10 +78,10 @@ public struct CivilisationsFeature {
                         Civilisation
                             .where {
                                 if !search.isEmpty {
-                                    $0.name.contains(search)
-                                        || $0.trait.contains(search)
-                                        || $0.government.contains(search)
-                                        || $0.techAffinity.contains(search)
+                                    $0.name.like("%\(search)%")
+                                    || $0.trait.like("%\(search)%")
+                                    || $0.government.like("%\(search)%")
+                                    || $0.techAffinity.like("%\(search)%")
                                 }
                             }
                             .order { $0.name },
