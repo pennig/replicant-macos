@@ -142,3 +142,119 @@ struct PrintSchedulerBenchTests {
         #expect(PrintScheduler.benches(at: depot, in: world).isEmpty)
     }
 }
+
+@Suite("Print scheduler — choosing a bench")
+struct PrintSchedulerChoiceTests {
+    private func order(_ type: String = "ftl_relay", owner: String = "D-7") -> PrintOrder {
+        PrintOrder(deviceType: type, owner: owner)
+    }
+
+    @Test("a free bench takes the job, lowest code first")
+    func freeBenchLowestCode() {
+        let world = snapshot([bench("B2"), bench("B1"), bench("B3")])
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B1")
+    }
+
+    @Test("a busy bench is skipped for a free one")
+    func busyBenchSkipped() {
+        let world = snapshot(
+            [bench("B1", printing: "mining_drone"), bench("B2")],
+            open: ["B1": op(on: "B1", owner: "OTHER")]
+        )
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
+    }
+
+    /// C11. Today `PrintJob.bench` falls back to a busy bench, the caller's
+    /// owner-scoped guard misses a co-tenant's op, and the dispatch supersedes it.
+    @Test("no bench can take the job, so there is no choice")
+    func allBusyYieldsNil() {
+        let world = snapshot(
+            [bench("B1", printing: "mining_drone"), bench("B2", printing: "ftl_relay")],
+            open: ["B1": op(on: "B1", owner: "OTHER"), "B2": op(on: "B2", owner: "D-7")]
+        )
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world) == nil)
+    }
+
+    /// A queue snapshot with no matching op still occupies the bench. The
+    /// operator can enqueue by hand from the Print Queue screen.
+    @Test("a bench queued by hand is occupied even with no op row")
+    func queuedByHandOccupies() {
+        let world = snapshot([bench("B1", queued: ["ftl_relay"]), bench("B2")])
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
+    }
+
+    @Test("a depot with no benches yields no choice")
+    func noBenchesYieldsNil() {
+        let world = snapshot([bench("X1", commands: [])])
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world) == nil)
+    }
+}
+
+@Suite("Print scheduler — what is already on order")
+struct PrintSchedulerOnOrderTests {
+
+    @Test("an owner's open prints at the depot count, by type and quantity")
+    func ownOpenPrintsCount() {
+        let world = snapshot(
+            [bench("B1"), bench("B2"), bench("B3")],
+            open: [
+                "B1": op(on: "B1", owner: "D-7", deviceType: "mining_drone", quantity: 3),
+                "B2": op(on: "B2", owner: "D-7", deviceType: "ftl_relay", quantity: nil)
+            ]
+        )
+
+        #expect(
+            PrintScheduler.onOrder(for: "D-7", at: depot, in: world)
+                == ["mining_drone": 3, "ftl_relay": 1]
+        )
+    }
+
+    /// A job with no quantity is one unit. Written as a literal so that
+    /// changing the default reddens this test.
+    @Test("a print with no quantity counts as one")
+    func missingQuantityIsOne() {
+        let world = snapshot(
+            [bench("B1")],
+            open: ["B1": op(on: "B1", owner: "D-7", deviceType: "ftl_relay")]
+        )
+
+        #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world) == ["ftl_relay": 1])
+    }
+
+    @Test("another run's print is not ours to net against")
+    func coTenantDoesNotCount() {
+        let world = snapshot(
+            [bench("B1")],
+            open: ["B1": op(on: "B1", owner: "OTHER", deviceType: "ftl_relay", quantity: 2)]
+        )
+
+        #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world).isEmpty)
+    }
+
+    @Test("a print at another depot is not on order here")
+    func otherDepotDoesNotCount() {
+        let world = snapshot(
+            [bench("B1", location: elsewhere)],
+            open: ["B1": op(on: "B1", owner: "D-7", deviceType: "ftl_relay")]
+        )
+
+        #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world).isEmpty)
+    }
+
+    /// An op adopted from a device snapshot carries `detail: {}` — it names no
+    /// type. It cannot be netted and must not be counted as a zero.
+    @Test("an op that names no device type is not counted")
+    func typelessOpNotCounted() {
+        let world = snapshot(
+            [bench("B1")],
+            open: ["B1": op(on: "B1", owner: "D-7")]
+        )
+
+        #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world).isEmpty)
+    }
+}

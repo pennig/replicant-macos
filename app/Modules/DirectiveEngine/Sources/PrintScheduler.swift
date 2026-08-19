@@ -71,4 +71,28 @@ enum PrintScheduler {
     private static func depth(of device: Device) -> Int {
         device.queuedJobCount + (device.printingSnapshot != nil ? 1 : 0)
     }
+
+    /// The bench that should take `order` at `depot`, or nil when none can.
+    /// Phase A takes only an idle bench: dispatching onto an occupied one
+    /// supersedes whatever op it already holds, so Task 14 relaxes this to depth.
+    static func choose(_ order: PrintOrder, at depot: String, in world: WorldSnapshot) -> Bench? {
+        benches(at: depot, in: world).first { $0.queueDepth == 0 && $0.activeJob == nil }
+    }
+
+    /// What `owner` already has on order at `depot`, by device type. Ops only:
+    /// a `print_queue` entry carries no id, so it cannot be attributed to a
+    /// directive; an op that names no type cannot be netted.
+    static func onOrder(
+        for owner: String, at depot: String, in world: WorldSnapshot
+    ) -> [String: Int] {
+        let codes = Set(benches(at: depot, in: world).map(\.device.deviceCode))
+        return world.openOperations.values.reduce(into: [String: Int]()) { total, op in
+            guard op.kind == OperationKind.print.rawValue,
+                  op.directiveID == owner,
+                  codes.contains(op.entityCode),
+                  let type = op.printedDeviceType
+            else { return }
+            total[type, default: 0] += op.printedQuantity ?? 1
+        }
+    }
 }

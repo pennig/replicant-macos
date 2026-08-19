@@ -297,3 +297,17 @@ extension Operation {
         try #sql(#"CREATE INDEX "operation_by_directive" ON "operations" ("directiveID", "startedAt")"#).execute(db)
     }
 }
+
+extension Operation {
+    /// The device type a print op was asked for, when the app issued it.
+    ///
+    /// Absent on an op adopted from a device snapshot, which carries `{}`.
+    public var printedDeviceType: String? {
+        detail["params"]?["device_type"]?.stringValue
+    }
+
+    /// How many units the print op asked for; nil when it named none.
+    public var printedQuantity: Int? {
+        detail["params"]?["quantity"]?.intValue
+    }
+}

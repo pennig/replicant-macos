@@ -771,6 +771,13 @@ let package = Package(
             name: "Utils",
             path: "Utils/Sources",
         ),
+        .testTarget(
+            name: "UtilsTests",
+            dependencies: [
+                "Utils"
+            ],
+            path: "Utils/Tests"
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

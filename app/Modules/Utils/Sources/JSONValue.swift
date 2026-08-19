@@ -56,6 +56,11 @@ public enum JSONValue: Codable, Sendable, Equatable {
         return nil
     }
 
+    public var intValue: Int? {
+        if case .number(let value) = self { return Int(value) }
+        return nil
+    }
+
     public var boolValue: Bool? {
         if case .bool(let value) = self { return value }
         return nil
