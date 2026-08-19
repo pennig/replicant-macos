@@ -71,6 +71,22 @@ struct PrintQueueOwnersTests {
         #expect(owners == ["B1": ["Mine Fleet Print", "Relay Restock"]])
     }
 
+    @Test("two runs with the same startedAt break the tie by op id")
+    func sameStartedAtBreaksTieByID() {
+        let owners = PrintQueueOwners.merge(
+            operations: [
+                printOp(on: "B1", directive: "D-9", id: "B-5"),
+                printOp(on: "B1", directive: "D-7", id: "A-5")
+            ],
+            directives: [
+                directive(id: "D-7", kind: .mineFleetPrint),
+                directive(id: "D-9", kind: .restockRun)
+            ]
+        )
+
+        #expect(owners == ["B1": ["Mine Fleet Print", "Relay Restock"]])
+    }
+
     @Test("a completed print names nobody")
     func completedPrintNamesNobody() {
         let owners = PrintQueueOwners.merge(

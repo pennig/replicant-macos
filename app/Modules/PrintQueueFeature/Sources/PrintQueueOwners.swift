@@ -22,8 +22,6 @@ struct PrintQueueOwners: FetchKeyRequest {
         return Self.merge(operations: operations, directives: directives)
     }
 
-    /// Both sources are in hand here, which is why the cross-reference is made
-    /// in Swift rather than by a join this app has nowhere else.
     static func merge(operations: [GameModels.Operation], directives: [Directive]) -> Value {
         let byID = Dictionary(directives.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return operations

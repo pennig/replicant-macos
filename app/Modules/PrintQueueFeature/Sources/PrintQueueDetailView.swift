@@ -152,6 +152,12 @@ public struct PrintQueueDetailView: View {
                 }
                 .lineLimit(1)
 
+                if let running = store.owners[device.deviceCode], !running.isEmpty {
+                    Text("Ordered by \(running.joined(separator: ", "))")
+                        .font(.rcCaption)
+                        .foregroundStyle(Color.rcTextTertiary)
+                }
+
                 // Live interpolated bar when the job reports both endpoints; else
                 // fall back to the server's progress percent.
                 if let started = printing.startedAt, let completes = printing.completesAt {
@@ -233,12 +239,6 @@ public struct PrintQueueDetailView: View {
                     .buttonStyle(RCButtonStyle(.text))
                     .help("Clear all queued jobs")
                 }
-            }
-
-            if let running = store.owners[device.deviceCode], !running.isEmpty {
-                Text("Ordered by \(running.joined(separator: ", "))")
-                    .font(.rcCaption)
-                    .foregroundStyle(Color.rcTextTertiary)
             }
 
             if items.isEmpty {
