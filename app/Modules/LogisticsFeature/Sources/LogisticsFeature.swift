@@ -18,11 +18,6 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Logi
 
 @Reducer
 public struct LogisticsFeature {
-    /// How many rows the ledger observes at once, newest first — the same
-    /// bounded-`@FetchAll` precedent as `EventLogFeature.displayLimit`, guarding
-    /// against the same AttributeGraph "exhausted data space" failure mode.
-    public static let displayLimit = 1000
-
     public enum Tab: String, CaseIterable, Equatable, Sendable {
         case yields, theatres
         public var title: String {
@@ -35,10 +30,13 @@ public struct LogisticsFeature {
 
     @ObservableState
     public struct State: Equatable {
+        /// The window's figures, folded by SQLite rather than by Swift — see
+        /// `HaulYieldDigest`. Seeded with the request for `range`'s default so
+        /// the first render is already the window the segmented control claims,
+        /// and reloaded by the reducer whenever `range` changes.
         @ObservationStateIgnored
-        @FetchAll(HaulYield.order { $0.collectedAt.desc() }.limit(LogisticsFeature.displayLimit))
-        public var yields: [HaulYield]
-        public var range: TimeRange = .month
+        @Fetch var summary: YieldSummary
+        public var range: TimeRange = .defaultRange
         public var tab: Tab = .yields
         /// Recognised theatres, loaded explicitly rather than through
         /// `@FetchAll` — `Theatre` is derived, not a table. See `loadTheatres`.
@@ -46,18 +44,33 @@ public struct LogisticsFeature {
         /// The brain's ranked candidate sites, loaded alongside `theatres`.
         public var candidates: [TheatreSiteRanking.Candidate] = []
         @Presents public var establishTheatre: EstablishTheatreSheet.State?
-        public init() {}
 
-        // Not `public`: `YieldSummary` is internal, and this is read only by
-        // `LogisticsView` in the same module.
-        var summary: YieldSummary {
+        public init() {
             @Dependency(\.date.now) var now
-            return YieldSummary(yields: yields, range: range, now: now)
+            _summary = Fetch(
+                wrappedValue: YieldSummary(),
+                HaulYieldDigest(range: .defaultRange, now: now)
+            )
+        }
+
+        /// The digest request for the current selections. The cutoff is pinned
+        /// to a `now` taken when the request is built, not when it runs, so the
+        /// window is deterministic under a controlled clock — the view's `.task`
+        /// rebuilds it on appear so a long-running session's "24 hours" does not
+        /// drift into meaning "since whenever this screen first opened".
+        var digestRequest: HaulYieldDigest {
+            @Dependency(\.date.now) var now
+            return HaulYieldDigest(range: range, now: now)
         }
     }
 
     public enum TimeRange: String, CaseIterable, Equatable, Hashable, Sendable {
         case day, week, month, all
+
+        /// The window `State` opens on — and the one its `@Fetch` seed is cut
+        /// for, which a stored-property default cannot be read from in `init`.
+        public static let defaultRange = TimeRange.month
+
         public var title: String {
             switch self {
             case .day: "24 hours"
@@ -78,6 +91,7 @@ public struct LogisticsFeature {
 
     public enum Action: BindableAction {
         case binding(BindingAction<State>)
+        case task
         case theatresRefreshTapped
         case theatresLoaded(theatres: [TheatreRowModel], candidates: [TheatreSiteRanking.Candidate])
         case establishTapped(system: String?)
@@ -97,9 +111,20 @@ public struct LogisticsFeature {
         BindingReducer()
         Reduce { state, action in
             switch action {
+            case .task:
+                // Re-cut the window against the current clock. The `@Fetch` seed
+                // was built when `State` was, which for a screen left open is a
+                // different day.
+                return reloadSummary(state)
+
             case .binding(\.tab):
                 guard state.tab == .theatres else { return .none }
                 return loadTheatres()
+
+            case .binding(\.range):
+                // `.load` keeps the previous digest on screen until the new one
+                // is folded, so the charts change window without flashing empty.
+                return reloadSummary(state)
 
             case .binding:
                 return .none
@@ -125,6 +150,13 @@ public struct LogisticsFeature {
         }
         .ifLet(\.$establishTheatre, action: \.establishTheatre) {
             EstablishTheatreSheet()
+        }
+    }
+
+    /// Reloads the ledger digest for the state's current range and clock.
+    private func reloadSummary(_ state: State) -> Effect<Action> {
+        .run { [fetch = state.$summary, request = state.digestRequest] _ in
+            _ = try? await fetch.load(request)
         }
     }
 

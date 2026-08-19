@@ -10,7 +10,7 @@ import UI
 struct YieldKPIRow: View {
     let summary: YieldSummary
 
-    private var topResource: (key: String, units: Int)? {
+    private var topResource: YieldSummary.ResourceTotal? {
         summary.byResource.filter { $0.units > 0 }.max { $0.units < $1.units }
     }
 

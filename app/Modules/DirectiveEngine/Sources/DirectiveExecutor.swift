@@ -414,7 +414,7 @@ enum DirectiveExecutor {
                     $0.directiveID.eq(directive.id)
                         && $0.step.eq(directive.step)
                         && $0.status.eq(OperationStatus.failed)
-                        && $0.startedAt >= directive.stepStartedAt
+                        && $0.startedAt >= Date.FastISO8601Representation(queryOutput: directive.stepStartedAt)
                 }
                 .fetchCount(db)
         }) ?? 0

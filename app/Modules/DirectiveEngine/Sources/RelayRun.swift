@@ -227,6 +227,19 @@ public struct RelayRun: MissionStepMachine {
             .contains { $0.kind == OperationKind.print.rawValue && $0.status.isOpen }
     }
 
+    /// Whether the bench is still working a job ours is queued behind — an open
+    /// print op whose own `completesAt` is ahead, inside `queuedCeiling`. The hub's
+    /// queue is shared and unleased, so it routinely outruns `PrintJob.deadline`.
+    static func printStillQueued(_ directive: Directive, in world: WorldSnapshot) -> Bool {
+        guard world.now.timeIntervalSince(directive.stepStartedAt) <= PrintJob.queuedCeiling
+        else { return false }
+        return world.dispatchedOperations.values.contains { op in
+            guard op.kind == OperationKind.print.rawValue, op.status.isOpen else { return false }
+            guard let completesAt = op.completesAt else { return false }
+            return completesAt > world.now
+        }
+    }
+
     /// Why `printing` never got a relay, for the one log line the stall emits. The
     /// superseded case most needs naming: `.superseded` is neither `.completed` nor
     /// open, so both `printedRelayCode` and `printInFlight` go quiet and the run
@@ -372,7 +385,8 @@ public struct RelayRun: MissionStepMachine {
         // Deadline BEFORE the read (`confirm-steps-need-fresh-evidence`): the
         // read below only advances on success, so a staleness-first ordering
         // would never reach the backstop while reads keep failing.
-        if world.now.timeIntervalSince(directive.stepStartedAt) > PrintJob.deadline {
+        if world.now.timeIntervalSince(directive.stepStartedAt) > PrintJob.deadline,
+           !Self.printStillQueued(directive, in: world) {
             logger.notice("relay run \(directive.id, privacy: .public): print produced no relay — \(Self.printDiagnosis(in: world), privacy: .public)")
             return .stall(.noRelayCoLocated)
         }

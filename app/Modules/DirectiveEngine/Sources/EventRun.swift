@@ -589,13 +589,12 @@ public struct EventRun: MissionStepMachine {
         guard !convoy.freighters.isEmpty else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
-        // One leg per hull, in order: a freighter already placed falls through
-        // to the next, and the step ends only once every one of them stands
-        // at the event.
+        // One leg per hull, dispatched in-step like the carrier's: a confirm
+        // step here would end the loop on the first hull, stranding the rest.
         for freighter in convoy.freighters {
             let leg = TravelTo(
                 deviceCode: freighter.deviceCode, destination: destination,
-                arrivalTest: .exactLocation, confirmStep: Step.confirmingArrival.rawValue
+                arrivalTest: .exactLocation, confirmStep: nil
             )
             switch leg.next(ctx) {
             case let .action(action): return action

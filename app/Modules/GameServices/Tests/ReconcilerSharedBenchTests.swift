@@ -101,6 +101,43 @@ private typealias Operation = GameModels.Operation
         #expect(try await stored(database)?.status == OperationStatus.completed)
     }
 
+    /// **The path production takes.** `GameSync.deviceRoute` routes every event
+    /// carrying a parseable `createdAt` through `applyDeviceEvent`, which holds
+    /// its own copy of the close; `applyOperationEvent` is the malformed-date
+    /// fallback. Both copies must refuse the same completions.
+    @Test func theEventPathRefusesAForeignType() async throws {
+        let database = try await seed(printOp(wanting: "ftl_relay"))
+
+        let closed = await withDependencies { $0.defaultDatabase = database } operation: {
+            await Reconciler().applyDeviceEvent(
+                deviceCode: bench, event: completion("mining_drone", newCode: "2ADECE40"),
+                location: nil, stow: nil, eventTime: start.addingTimeInterval(600)
+            )
+        }
+
+        let op = try await stored(database)
+        #expect(closed == false)
+        #expect(op?.status == OperationStatus.active)
+        #expect(op?.detail["result"] == nil)
+    }
+
+    /// …and still closes the job that asked for what arrived.
+    @Test func theEventPathClosesTheRequestedType() async throws {
+        let database = try await seed(printOp(wanting: "ftl_relay"))
+
+        let closed = await withDependencies { $0.defaultDatabase = database } operation: {
+            await Reconciler().applyDeviceEvent(
+                deviceCode: bench, event: completion("ftl_relay", newCode: "8EC8A25D"),
+                location: nil, stow: nil, eventTime: start.addingTimeInterval(600)
+            )
+        }
+
+        let op = try await stored(database)
+        #expect(closed)
+        #expect(op?.status == OperationStatus.completed)
+        #expect(op?.detail["result"]?["new_device_code"]?.stringValue == "8EC8A25D")
+    }
+
     /// The poll path names no device type — its settled-device read is its own
     /// proof — so it remains the backstop that clears a job whose completion
     /// event the guard above declined.

@@ -40,11 +40,17 @@ public struct LogisticsView: View {
                     options: LogisticsFeature.TimeRange.allCases,
                     label: \.title
                 )
-                if store.yields.isEmpty {
+                if summary.tripCount == 0 {
+                    // The window is what is empty, and the range control above
+                    // is what fixes it — so say which, unless "All" is empty too.
                     RCContentUnavailableView(
-                        "No Yields Yet",
+                        store.range == .all ? "No Yields Yet" : "No Yields In This Range",
                         systemImage: "shippingbox",
-                        description: Text("A Haul Run's pickups appear here as they are observed.")
+                        description: Text(
+                            store.range == .all
+                                ? "A Haul Run's pickups appear here as they are observed."
+                                : "No pickups were observed in the last \(store.range.title.lowercased())."
+                        )
                     )
                 } else {
                     YieldOverTimeChart(summary: summary)
@@ -61,9 +67,17 @@ public struct LogisticsView: View {
                             HaulYieldRow(yield: yield)
                         }
                     }
+                    if summary.hiddenRowCount > 0 {
+                        // The charts above already counted these; only the
+                        // table stops at `HaulYieldDigest.tableRowLimit`.
+                        Text("+ \(summary.hiddenRowCount) more trips in this range")
+                            .font(.rcCaption)
+                            .foregroundStyle(.rcTextTertiary)
+                    }
                 }
             }
             .padding(Space.m)
         }
+        .task { await store.send(.task).finish() }
     }
 }

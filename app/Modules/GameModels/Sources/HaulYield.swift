@@ -94,6 +94,19 @@ extension HaulYield {
         .execute(db)
     }
 
+    /// The ledger screen folds a time window: every chart aggregates under
+    /// `WHERE "collectedAt" >= ?` and the table orders by it. Nothing prunes
+    /// this table, so without the index the window costs a full scan.
+    public static let addCollectedAtIndex = SchemaMigration("Add index on 'haulYields.collectedAt'") { db in
+        try #sql(
+            """
+            CREATE INDEX "haul_yields_by_collected_at"
+              ON "haulYields" ("collectedAt")
+            """
+        )
+        .execute(db)
+    }
+
     /// A separate migration, not an edit to the table above: the create has
     /// already shipped. Every digest reads this controller's open rows.
     public static let addControllerCodeIndex = SchemaMigration("Add index on 'haulYields.controllerCode'") { db in

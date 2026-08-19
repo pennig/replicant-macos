@@ -418,7 +418,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// relative rather than wall-clock relative, exactly like
     /// `Reconciler.completeOpenOperation` (design spec §5). Cannot be
     /// reconstructed from `DirectiveLogEntry` alone, hence its own column.
-    public var stepStartedAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var stepStartedAt: Date
     /// Append a final leg home when the queue empties. Default off — the common
     /// case is chaining onward, and an unwanted return leg costs fuel and time.
     public var returnToOrigin: Bool
@@ -429,11 +429,11 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// When the operator cleared this run from the Directives list. Nil means
     /// visible. Purely presentational — the row stays readable to every query
     /// that does not filter on it.
-    public var deletedAt: Date?
-    public var createdAt: Date
+    @Column(as: Date.FastISO8601Representation?.self) public var deletedAt: Date?
+    @Column(as: Date.FastISO8601Representation.self) public var createdAt: Date
     /// The last transition, and the retention purge's clock: a terminal row is
     /// destroyed a `purgeWindow` past this, so clearing must not re-stamp it.
-    public var updatedAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var updatedAt: Date
     /// The depot of the theatre this row serves. Nil on rows written before the
     /// column existed; `Brain.adoptTheatres` fills those in.
     public var theatreDepot: String?
@@ -573,7 +573,7 @@ public struct DirectiveLogEntry: Identifiable, Equatable, Sendable {
     /// The stall detail, for `.stalled`. The summary carries it too, prefixed
     /// by the reason, but only for the reader.
     public var detail: String?
-    public var occurredAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var occurredAt: Date
 
     public init(
         id: String,
@@ -617,7 +617,10 @@ extension Directive {
     /// terminal set is deliberately not a parameter: an open run owns devices.
     public static func purgeFinished(before cutoff: Date, in db: Database) throws -> Int {
         let doomed = try Directive
-            .where { $0.status.in(DirectiveStatus.finishedCases) && $0.updatedAt < cutoff }
+            .where {
+                $0.status.in(DirectiveStatus.finishedCases)
+                    && $0.updatedAt < Date.FastISO8601Representation(queryOutput: cutoff)
+            }
             .fetchAll(db)
             .map(\.id)
         guard !doomed.isEmpty else { return 0 }
@@ -807,6 +810,23 @@ extension DirectiveLogEntry {
         try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "commandKind" TEXT"#).execute(db)
         try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "targetDeviceCode" TEXT"#).execute(db)
         try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "detail" TEXT"#).execute(db)
+    }
+
+    /// Appended, never folded into `createDirectiveLogEntries`: that one has
+    /// shipped. The audit pass asks "which operations did this directive
+    /// dispatch?", which `directive_log_by_directive` can only answer by
+    /// reading every entry the directive ever wrote. This one covers the
+    /// question outright, so the lookup never touches the table.
+    public static let addDispatchLookupIndex = SchemaMigration(
+        "Add 'directive_log_by_directive_kind' index"
+    ) { db in
+        try #sql(
+            """
+            CREATE INDEX "directive_log_by_directive_kind"
+              ON "directiveLogEntries" ("directiveID", "kind", "operationID")
+            """
+        )
+        .execute(db)
     }
 }
 

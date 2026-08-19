@@ -34,7 +34,7 @@ enum DirectiveLogRetention {
                         .map(\.id)
                 )
                 let doomed = try DirectiveLogEntry
-                    .where { $0.occurredAt < cutoff }
+                    .where { $0.occurredAt < Date.FastISO8601Representation(queryOutput: cutoff) }
                     .fetchAll(db)
                     .filter { entry in
                         guard let owner = entry.directiveID else { return true }

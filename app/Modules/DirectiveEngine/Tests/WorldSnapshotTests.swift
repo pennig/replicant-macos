@@ -141,6 +141,62 @@ struct WorldSnapshotTests {
         #expect(world.system("NOPE") == nil)
     }
 
+    /// Only the CURRENT target's blob is decoded, never a later one on the
+    /// tour. A roaming run's target list grows without bound, and every reader
+    /// of `systems` asks about `currentTarget`.
+    @Test func decodesOnlyTheCurrentTargetsBlob() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for designation in ["SOL", "VEGA", "RIGEL"] {
+                let row = try SystemDetail(
+                    system: StarSystem(designation: designation, planetsScanned: 1, planetsTotal: 4),
+                    hydratedAt: Date(timeIntervalSince1970: 0)
+                )
+                try SystemDetail.upsert { row }.execute(db)
+            }
+        }
+
+        var touring = directive(targets: ["SOL", "VEGA", "RIGEL"])
+        touring.targetIndex = 1
+
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: touring
+        )
+
+        #expect(world.system("VEGA")?.planetsTotal == 4)
+        #expect(world.system("SOL") == nil)
+        #expect(world.system("RIGEL") == nil)
+        #expect(world.systems.count == 1)
+    }
+
+    /// The origin and the vessel's current system are decoded alongside the
+    /// current target — the return leg and the arrival check read them.
+    @Test func decodesTheOriginAndTheVesselsOwnSystem() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for designation in ["SOL", "VEGA", "RIGEL"] {
+                let row = try SystemDetail(
+                    system: StarSystem(designation: designation, planetsScanned: 1, planetsTotal: 4),
+                    hydratedAt: Date(timeIntervalSince1970: 0)
+                )
+                try SystemDetail.upsert { row }.execute(db)
+            }
+            try Device.upsert { device("VES1") }.execute(db)
+        }
+
+        var touring = directive(targets: ["VEGA", "ALTAIR"])
+        touring.originDesignation = "RIGEL"
+
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: touring
+        )
+
+        // `device(_:)` places VES1 at SOL-3, so SOL is the vessel's system.
+        #expect(world.system("VEGA") != nil)
+        #expect(world.system("RIGEL") != nil)
+        #expect(world.system("SOL") != nil)
+    }
+
     /// A system the directive doesn't name isn't decoded — the catalogue runs
     /// to thousands of bodies and decoding all of it per tick would be real cost.
     @Test func doesNotDecodeUnrelatedSystems() async throws {
@@ -214,6 +270,43 @@ struct WorldSnapshotTests {
         let fresh = device("D1", updatedAt: watermark)
         #expect(world.isFresh(stale, since: watermark) == false)
         #expect(world.isFresh(fresh, since: watermark) == true)
+    }
+
+    /// A dispatch carrying no `operationID` never reaches `auditLog`.
+    /// `recordCompletedOps` rejects one on its first guard — a `.simple` verb
+    /// creates no `Operation` — and on a long-lived roaming run those entries
+    /// outnumber the resolvable ones several times over.
+    @Test func auditLogDropsDispatchesThatNameNoOperation() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "L-SIMPLE", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
+                    summary: "stow", step: nil, operationID: nil, eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "L-TRACKED", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
+                    summary: "travel", step: nil, operationID: "OP1", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 2)
+                )
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "L-DONE", directiveID: "D1", deviceCode: nil, kind: .opCompleted,
+                    summary: "travel completed", step: nil, operationID: "OP1", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 3)
+                )
+            }.execute(db)
+        }
+
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: directive()
+        )
+
+        #expect(world.auditLog.map(\.id) == ["L-TRACKED", "L-DONE"])
     }
 
     /// `dispatchedOperations` reads `operations.directiveID` first, union the
@@ -344,6 +437,39 @@ struct WorldSnapshotFootprintTests {
             from: database, now: Date(timeIntervalSince1970: 1_000), directive: directive()
         )
         #expect(world.footprints.isEmpty)
+    }
+}
+
+@Suite("WorldSnapshot star positions")
+struct WorldSnapshotStarPositionTests {
+
+    private func directive() -> Directive {
+        Directive(
+            id: "D1", kind: .haulRun, status: .running, deviceCode: "CTRL1",
+            targets: [], targetIndex: 0, step: "preflight",
+            stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// Every axis distinct, so a transposed column mapping cannot read as
+    /// correct. `read` projects four columns rather than decoding the row, and
+    /// that projection is positional — a symmetric fixture defends nothing.
+    @Test func eachAxisIsCarriedSeparately() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedStar(db, designation: "ASYM", x: 1, y: 2, z: 3)
+            try seedStar(db, designation: "NEG", x: -7.5, y: 0.25, z: -0.5)
+        }
+
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 1_000), directive: directive()
+        )
+
+        #expect(world.starPositions["ASYM"] == Position(x: 1, y: 2, z: 3))
+        #expect(world.starPositions["NEG"] == Position(x: -7.5, y: 0.25, z: -0.5))
     }
 }
 
