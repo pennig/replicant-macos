@@ -32,12 +32,34 @@ decoded ~7 MB of JSON every five seconds. Every reader asks
 `world.system(directive.currentTarget)` and none looks ahead, so the current
 target is the real scope.
 
+## The audit log was mostly rows nothing could act on
+
+Most `.commandDispatched` entries name **no operation**: a `.simple` verb creates
+no `Operation`, so `operationID` is nil and `recordCompletedOps` rejects the row
+on its first guard. On the live fleet those were the majority — 3,594 of a
+salvage run's 7,794 audit rows, and *all* 2,214 of one haul run's. They are
+filtered in SQL now.
+
+Do not read a nil `operationID` as an unresolved dispatch. An anti-join on
+`operationID` counts them as unresolved (`NULL = NULL` is never true) and makes
+the audit pass look broken when it is working: every dispatch that names a real
+operation already had its `.opCompleted` entry.
+
+`dispatchedOperations` used to read those ids into Swift and bind them as an `IN`
+list — 2,100 host parameters, growing for the directive's whole life, against
+SQLite's 32,766 ceiling. It is one query with a subquery now, which needs
+`directive_log_by_directive_kind` to be a covering index; without that index the
+one-query form is *slower* than the old two-query shape on a directive with
+nothing dispatched.
+
+The legacy fallback is still live — 1,669 operations carry no `directiveID` and
+are findable only through their own dispatch entry. Do not delete that arm
+without backfilling the column first.
+
 ## Still unbounded
 
-`auditLog` is the one query in the read with no `LIMIT`, and its dispatched ids
-feed an `IN` clause that grows with it — together ~130 ms on a long-lived
-directive, rising for as long as the directive runs. `peers` is `O(D²)` across
-the fleet, invisible at 19 open directives and around 1.8 s/tick at 300.
+`peers` is `O(D²)` across the fleet, invisible at 19 open directives and around
+1.8 s/tick at 300.
 
 `LocationFootprint` is read whole (26,070 rows) and 16 ms of its 21.7 ms is
 materializing `fetchedAt`. No consumer needs 26,070 dates — `HaulRun.survey` and
