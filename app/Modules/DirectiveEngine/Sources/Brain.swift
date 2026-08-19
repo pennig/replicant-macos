@@ -448,9 +448,9 @@ struct Brain: Sendable {
                     )
                     return
                 }
-                // The second, independently-mobile lease — in here beside the
-                // carrier, since a snapshot check predates this tick's launches.
-                if let freighter = directive.freighterCode, reserved.contains(freighter) {
+                // The independently-mobile leases — in here beside the carrier,
+                // since a snapshot check predates this tick's launches.
+                if let freighter = directive.leasedFreighters.first(where: reserved.contains) {
                     logger.notice(
                         """
                         \(kind.rawValue, privacy: .public) declined: \
@@ -621,7 +621,7 @@ struct Brain: Sendable {
     private func ensureEvent(snapshot: Snapshot, database: any DatabaseWriter) async {
         @Dependency(\.uuid) var uuid
         for theatre in snapshot.view.theatres.filter(\.isOperational) {
-            guard case let .launch(carrier, freighter, candidate) = Self.eventReadiness(
+            guard case let .launch(carrier, freighters, candidate) = Self.eventReadiness(
                 view: snapshot.view, directives: snapshot.directives, theatre: theatre
             ) else { continue }
             await ensureOne(.eventRun, theatre: theatre, snapshot: snapshot, database: database) {
@@ -633,7 +633,7 @@ struct Brain: Sendable {
                         targets: [candidate.designation],
                         returnToOrigin: true,
                         originDesignation: theatre.system,
-                        freighterCode: freighter
+                        freighterCodes: freighters
                     ),
                     id: uuid().uuidString, now: now
                 )
@@ -1975,7 +1975,7 @@ struct Brain: Sendable {
     /// stall case: a missing courier or an empty backlog is idle, so this goal
     /// can never escalate a condition only a print or a replication clears.
     enum EventReadiness: Equatable, Sendable {
-        case launch(carrier: String, freighter: String, candidate: EventCandidate)
+        case launch(carrier: String, freighters: [String], candidate: EventCandidate)
         case idle(reason: String)
     }
 
@@ -2034,14 +2034,33 @@ struct Brain: Sendable {
         }
         // An empty hold is what makes `EventRun`'s own `cargoUsed > 0` read as
         // "this run loaded it" rather than "someone's haul is still aboard".
-        guard let freighter = freeHull(
-            type: EventRun.freighterDeviceType, tag: nil, emptyHold: true,
-            theatre: theatre, view: view, reserved: reserved
-        ) else {
+        // One hull per hold-full: a payload wider than one freighter is not a
+        // run that can finish, so the shortfall is an idle reason, not a launch.
+        let payload = candidate.option.resourceUnits
+        var leased: [Device] = []
+        var claimed = reserved
+        var hold = 0
+        while leased.isEmpty || hold < payload {
+            guard let hull = freeHull(
+                type: EventRun.freighterDeviceType, tag: nil, emptyHold: true,
+                theatre: theatre, view: view, reserved: claimed
+            ) else { break }
+            leased.append(hull)
+            claimed.insert(hull.deviceCode)
+            // An unreported capacity is unknown, not zero; take it as sufficient
+            // and let the load itself find out.
+            hold += hull.cargoCapacity > 0 ? hull.cargoCapacity : payload
+        }
+        guard !leased.isEmpty else {
             return .idle(reason: "no free cargo freighter with an empty hold at \(theatre.depot)")
         }
+        guard hold >= payload else {
+            return .idle(
+                reason: "\(payload) units needs more hold than \(theatre.depot) has free (\(hold))"
+            )
+        }
         return .launch(
-            carrier: carrier.deviceCode, freighter: freighter.deviceCode, candidate: candidate
+            carrier: carrier.deviceCode, freighters: leased.map(\.deviceCode), candidate: candidate
         )
     }
 

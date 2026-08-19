@@ -70,6 +70,7 @@ import Testing
         "Add 'directiveID','step','paramsDigest' to 'operations'",
         "Add 'commandKind','targetDeviceCode','detail' to 'directiveLogEntries'",
         "Create 'theatres'",
+        "Add 'freighterCodes' to 'directives'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

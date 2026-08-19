@@ -194,10 +194,10 @@ struct BrainEventReadinessTests {
             view: eventView(devices: devices, events: [eventFixture("X-1-EVT-001", location: "X-1")]),
             directives: [], theatre: eventTheatre
         )
-        guard case .launch(_, let freighter, _) = readiness else {
+        guard case .launch(_, let freighters, _) = readiness else {
             Issue.record("expected .launch"); return
         }
-        #expect(freighter == "FREIGHT-B")
+        #expect(freighters == ["FREIGHT-B"])
     }
 
     @Test("every freighter at the depot carrying cargo is idle, not a skipped collect")
@@ -221,11 +221,11 @@ struct BrainEventReadinessTests {
             ),
             directives: [], theatre: eventTheatre
         )
-        guard case .launch(let carrier, let freighter, let candidate) = readiness else {
+        guard case .launch(let carrier, let freighters, let candidate) = readiness else {
             Issue.record("expected .launch"); return
         }
         #expect(carrier == "CARRIER-A")
-        #expect(freighter == "FREIGHT-A")
+        #expect(freighters == ["FREIGHT-A"])
         #expect(candidate.designation == "X-1-EVT-001")
         #expect(candidate.option.name == "default")
     }
@@ -255,10 +255,10 @@ struct BrainEventReadinessTests {
         let readiness = Brain.eventReadiness(
             view: view, directives: [elsewhere], theatre: eventTheatre
         )
-        guard case .launch(_, let freighter, _) = readiness else {
+        guard case .launch(_, let freighters, _) = readiness else {
             Issue.record("expected .launch, got \(readiness)"); return
         }
-        #expect(freighter == "FREIGHT-A")
+        #expect(freighters == ["FREIGHT-A"])
     }
 
     @Test("an untagged surge carrier is never spent")
@@ -269,11 +269,11 @@ struct BrainEventReadinessTests {
             view: eventView(devices: devices, events: [eventFixture("X-1-EVT-001", location: "X-1")]),
             directives: [], theatre: eventTheatre
         )
-        guard case .launch(let carrier, let freighter, _) = readiness else {
+        guard case .launch(let carrier, let freighters, _) = readiness else {
             Issue.record("expected .launch"); return
         }
         #expect(carrier == "CARRIER-B")
-        #expect(freighter == "FREIGHT-A")
+        #expect(freighters == ["FREIGHT-A"])
     }
 
     @Test("a hull standing somewhere else is never spent")
@@ -285,11 +285,11 @@ struct BrainEventReadinessTests {
             view: eventView(devices: devices, events: [eventFixture("X-1-EVT-001", location: "X-1")]),
             directives: [], theatre: eventTheatre
         )
-        guard case .launch(let carrier, let freighter, _) = readiness else {
+        guard case .launch(let carrier, let freighters, _) = readiness else {
             Issue.record("expected .launch"); return
         }
         #expect(carrier == "CARRIER-B")
-        #expect(freighter == "FREIGHT-B")
+        #expect(freighters == ["FREIGHT-B"])
     }
 
     @Test("a hull mid-activity is never spent")
@@ -301,11 +301,11 @@ struct BrainEventReadinessTests {
             view: eventView(devices: devices, events: [eventFixture("X-1-EVT-001", location: "X-1")]),
             directives: [], theatre: eventTheatre
         )
-        guard case .launch(let carrier, let freighter, _) = readiness else {
+        guard case .launch(let carrier, let freighters, _) = readiness else {
             Issue.record("expected .launch"); return
         }
         #expect(carrier == "CARRIER-B")
-        #expect(freighter == "FREIGHT-B")
+        #expect(freighters == ["FREIGHT-B"])
     }
 
     @Test("a live run's event, carrier and freighter are all excluded at once")
@@ -323,11 +323,11 @@ struct BrainEventReadinessTests {
             ),
             directives: [live], theatre: eventTheatre
         )
-        guard case .launch(let carrier, let freighter, let candidate) = readiness else {
+        guard case .launch(let carrier, let freighters, let candidate) = readiness else {
             Issue.record("expected .launch"); return
         }
         #expect(carrier == "CARRIER-B")
-        #expect(freighter == "FREIGHT-B")
+        #expect(freighters == ["FREIGHT-B"])
         #expect(candidate.designation == "Y-1-EVT-002")
     }
 
@@ -362,11 +362,11 @@ struct BrainEventReadinessTests {
             ),
             directives: [live], theatre: eventTheatre
         )
-        guard case .launch(let carrier, let freighter, _) = readiness else {
+        guard case .launch(let carrier, let freighters, _) = readiness else {
             Issue.record("expected .launch"); return
         }
         #expect(carrier == "CARRIER-B")
-        #expect(freighter == "FREIGHT-B")
+        #expect(freighters == ["FREIGHT-B"])
     }
 
     @Test("every carrier held is idle, naming the carrier")
@@ -707,5 +707,53 @@ struct BrainEnsureOneFreighterTests {
 
         let rows = try await eventDirectives(database)
         #expect(rows.map(\.id).sorted() == ["h1", "new"])
+    }
+}
+
+/// A payload wider than one hold: the brain leases a freighter per hold, and
+/// idles rather than launching a convoy that could never finish the delivery.
+@Suite("Brain — leasing enough hold")
+struct BrainEventHoldTests {
+    /// 800 units against the 500-unit holds every cargo freighter reports.
+    private func megaproject() -> LocationEvent {
+        LocationEvent(
+            designation: "X-1-EVT-001", location: "X-1", tier: 3, status: "active",
+            detail: .object([
+                "criteria": .array([.object([
+                    "name": .string("default"), "devices": .array([]),
+                    "resources": .object(["carbon": .number(600), "conductive": .number(200)]),
+                ])]),
+                "rewards": .object(["xp": .number(500)]),
+            ]),
+            firstSeenAt: .distantPast, updatedAt: .distantPast
+        )
+    }
+
+    private func emptyHold(_ code: String) -> Device { laden(freighter(code), units: 0) }
+
+    @Test("an 800-unit payload leases two 500-unit holds")
+    func leasesTwoHolds() {
+        let devices = [courier("BOX"), carrier("CARRIER-A"), emptyHold("FREIGHT-A"), emptyHold("FREIGHT-B")]
+        let readiness = Brain.eventReadiness(
+            view: eventView(devices: devices, events: [megaproject()]),
+            directives: [], theatre: eventTheatre
+        )
+        guard case .launch(_, let freighters, _) = readiness else {
+            Issue.record("expected .launch, got \(readiness)"); return
+        }
+        #expect(freighters == ["FREIGHT-A", "FREIGHT-B"])
+    }
+
+    @Test("one hold short of the payload idles rather than launching")
+    func idlesWhenTheHoldIsShort() {
+        let devices = [courier("BOX"), carrier("CARRIER-A"), emptyHold("FREIGHT-A")]
+        let readiness = Brain.eventReadiness(
+            view: eventView(devices: devices, events: [megaproject()]),
+            directives: [], theatre: eventTheatre
+        )
+        guard case .idle(let reason) = readiness else {
+            Issue.record("expected .idle, got \(readiness)"); return
+        }
+        #expect(reason.contains("800 units"))
     }
 }

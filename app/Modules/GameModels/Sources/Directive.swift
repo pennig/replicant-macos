@@ -389,9 +389,13 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// in the carrier's hold. Resolution reads it ahead of every derived lookup,
     /// so what the run is carrying cannot be re-decided by a later print.
     public var claimedRelayCode: String?
-    /// The cargo freighter carrying this convoy's resources. A second lease:
-    /// the freighter flies itself, so no containment edge holds it.
+    /// The first of `freighterCodes`, mirrored for rows written before the
+    /// convoy could carry more than one. `freighterCodes` is the lease.
     public var freighterCode: String?
+    /// Every cargo freighter this convoy leases, in load order. A payload wider
+    /// than one hold takes one freighter per hold; each flies itself, so no
+    /// containment edge holds any of them.
+    @Column(as: [String].JSONRepresentation.self) public var freighterCodes: [String]
     /// The ordered queue of star-system designations still to visit.
     ///
     /// For a continuous run this is append-only HISTORY rather than a plan: the
@@ -455,7 +459,8 @@ public struct Directive: Identifiable, Equatable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         theatreDepot: String? = nil,
-        freighterCode: String? = nil
+        freighterCode: String? = nil,
+        freighterCodes: [String]? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -477,7 +482,16 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.theatreDepot = theatreDepot
-        self.freighterCode = freighterCode
+        let leased = freighterCodes ?? freighterCode.map { [$0] } ?? []
+        self.freighterCode = freighterCode ?? leased.first
+        self.freighterCodes = leased
+    }
+
+    /// Every freighter this row leases. Reads `freighterCodes`, falling back to
+    /// the `freighterCode` mirror — the one accessor, so a row written through
+    /// either field can never lease a hull that nothing then reserves.
+    public var leasedFreighters: [String] {
+        freighterCodes.isEmpty ? [freighterCode].compactMap { $0 } : freighterCodes
     }
 
     /// Progress through the queue, for the list row's "m/n" readout. Counts
@@ -793,5 +807,26 @@ extension DirectiveLogEntry {
         try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "commandKind" TEXT"#).execute(db)
         try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "targetDeviceCode" TEXT"#).execute(db)
         try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "detail" TEXT"#).execute(db)
+    }
+}
+
+public extension Directive {
+    /// Appended, never folded into `addFreighterCode`: that one has shipped. A
+    /// payload wider than one hold needs one freighter per hold, so the lease
+    /// becomes a list. The backfill carries every in-flight run's freighter
+    /// across, and leaves `freighterCode` mirroring the first.
+    static let addFreighterCodes = SchemaMigration("Add 'freighterCodes' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "freighterCodes" TEXT NOT NULL DEFAULT '[]'
+            """
+        ).execute(db)
+        try #sql(
+            """
+            UPDATE "directives"
+               SET "freighterCodes" = json_array("freighterCode")
+             WHERE "freighterCode" IS NOT NULL AND "freighterCode" <> ''
+            """
+        ).execute(db)
     }
 }

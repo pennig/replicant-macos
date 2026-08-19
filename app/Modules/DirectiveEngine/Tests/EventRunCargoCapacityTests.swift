@@ -16,7 +16,7 @@ import Utils
 
 /// `SKUT-3-EVT-003`'s chosen option: 600 carbon + 200 conductive against a
 /// 500-unit hold, which the server refused as "requesting 800.0, capacity 500".
-private enum Megaproject {
+enum Megaproject {
     static let option = "tether_fabrication"
 
     static func event(carbonDelivered: Int = 0, conductiveDelivered: Int = 0) -> LocationEvent {
@@ -85,7 +85,7 @@ struct EventRunCargoCapacityTests {
     /// go into a 500-unit hold, and the server saying so is not a diagnosis.
     @Test func aLoadBiggerThanTheHoldStallsInsteadOfDispatching() {
         let action = loadingAction(Megaproject.convoy(hold: 500), Megaproject.event())
-        #expect(action == .stall(.eventLoadExceedsHold, detail: "800 units for a hold of 500"))
+        #expect(action == .stall(.eventLoadExceedsHold, detail: "800 units, convoy holds 500"))
     }
 
     /// A hold big enough collects the whole outstanding bill in one order.

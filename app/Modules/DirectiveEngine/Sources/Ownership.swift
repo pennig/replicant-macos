@@ -184,9 +184,9 @@ extension Ownership {
         }
         claim(directive.deviceCode, .deviceCode)
         if let controller = directive.controllerCode { claim(controller, .controllerCode) }
-        // Seeded, never dragged: an event convoy's freighter flies its own
-        // leg, so no stow or attach edge reaches it from the carrier.
-        if let freighter = directive.freighterCode { claim(freighter, .freighterCode) }
+        // Seeded, never dragged: an event convoy's freighters each fly their own
+        // leg, so no stow or attach edge reaches them from the carrier.
+        for freighter in directive.leasedFreighters { claim(freighter, .freighterCode) }
         if let tag = directive.fleetTag.flatMap(FleetTag.init(parsing:)) {
             for device in fleet where device.carries(tag, policy: .exact) {
                 claim(device.deviceCode, .fleetTag)
