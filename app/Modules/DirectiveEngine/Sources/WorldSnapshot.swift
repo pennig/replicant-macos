@@ -309,9 +309,17 @@ public struct WorldSnapshot: Equatable, Sendable {
 
             // Same geometry `WorldView.read` computes: a haul candidate must
             // sit in the delivering theatre's own mesh COMPONENT, not merely be meshed.
-            let stars = try Star.all.fetchAll(db)
+            // Four columns, never the whole row: this is a `[String: Position]`
+            // and nothing here reads the rest. `Star` carries three `Date`
+            // columns, and decoding a Date means an ISO-8601 parse per row —
+            // at catalogue scale that parse cost dominated this whole read
+            // while its result was discarded on the next line.
+            let starRows = try Star.all
+                .select { ($0.designation, $0.positionX, $0.positionY, $0.positionZ) }
+                .fetchAll(db)
             let starPositions = Dictionary(
-                stars.map { ($0.designation, $0.position) }, uniquingKeysWith: { _, last in last }
+                starRows.map { ($0.0, Position(x: $0.1, y: $0.2, z: $0.3)) },
+                uniquingKeysWith: { _, last in last }
             )
             let mesh = SalvageTargetPlanner.meshSystems(in: devices)
             let components = MeshGraph(positions: starPositions).components(of: mesh)

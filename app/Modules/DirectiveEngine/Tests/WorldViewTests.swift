@@ -39,6 +39,20 @@ struct WorldViewTests {
         #expect(view.now == now)
     }
 
+    /// Every axis distinct, so a transposed column mapping cannot read as
+    /// correct. `read` projects four columns rather than decoding the row, and
+    /// that projection is positional — a symmetric fixture defends nothing.
+    @Test func starPositionsCarryEachAxisSeparately() async throws {
+        let db = try GameDatabase.bootstrap()
+        try await db.write { db in
+            try seedStar(db, designation: "ASYM", x: 1, y: 2, z: 3)
+            try seedStar(db, designation: "NEG", x: -7.5, y: 0.25, z: -0.5)
+        }
+        let view = try await db.read { try WorldView.read(from: $0, now: Date()) }
+        #expect(view.starPositions["ASYM"] == Position(x: 1, y: 2, z: 3))
+        #expect(view.starPositions["NEG"] == Position(x: -7.5, y: 0.25, z: -0.5))
+    }
+
     /// A depleted site's units never count — `SalvageTargetPlanner`'s target
     /// ranking excludes them for the same reason (a drained site's `totals`
     /// only ever go up, so `depleted` is the sole signal a site is spent).

@@ -162,9 +162,14 @@ public struct WorldView: Equatable, Sendable {
 
         let mesh = SalvageTargetPlanner.meshSystems(in: allDevices)
 
-        let stars = try Star.all.fetchAll(db)
+        // Four columns, never the whole row — same reason as
+        // `WorldSnapshot.read`: `Star`'s three `Date` columns cost an ISO-8601
+        // parse each and nothing here reads them.
+        let starRows = try Star.all
+            .select { ($0.designation, $0.positionX, $0.positionY, $0.positionZ) }
+            .fetchAll(db)
         var positions: [String: Position] = [:]
-        for star in stars { positions[star.designation] = star.position }
+        for row in starRows { positions[row.0] = Position(x: row.1, y: row.2, z: row.3) }
 
         // Sum non-depleted salvage assay units per system. A depleted site's
         // totals are excluded even though `totals` only ever rises —

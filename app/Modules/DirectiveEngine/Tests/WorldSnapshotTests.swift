@@ -347,6 +347,39 @@ struct WorldSnapshotFootprintTests {
     }
 }
 
+@Suite("WorldSnapshot star positions")
+struct WorldSnapshotStarPositionTests {
+
+    private func directive() -> Directive {
+        Directive(
+            id: "D1", kind: .haulRun, status: .running, deviceCode: "CTRL1",
+            targets: [], targetIndex: 0, step: "preflight",
+            stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
+            originDesignation: nil, attentionReason: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    /// Every axis distinct, so a transposed column mapping cannot read as
+    /// correct. `read` projects four columns rather than decoding the row, and
+    /// that projection is positional — a symmetric fixture defends nothing.
+    @Test func eachAxisIsCarriedSeparately() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedStar(db, designation: "ASYM", x: 1, y: 2, z: 3)
+            try seedStar(db, designation: "NEG", x: -7.5, y: 0.25, z: -0.5)
+        }
+
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 1_000), directive: directive()
+        )
+
+        #expect(world.starPositions["ASYM"] == Position(x: 1, y: 2, z: 3))
+        #expect(world.starPositions["NEG"] == Position(x: -7.5, y: 0.25, z: -0.5))
+    }
+}
+
 @Suite("WorldSnapshot events")
 struct WorldSnapshotEventTests {
     @Test("the snapshot reads the whole event ledger")
