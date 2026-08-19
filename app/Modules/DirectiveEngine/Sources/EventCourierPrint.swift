@@ -70,6 +70,8 @@ public struct EventCourierPrint: MissionStepMachine {
             .min { $0.deviceCode < $1.deviceCode }
     }
 
+    /// A busy bench waits; no bench at all stalls — the same split every
+    /// print site makes.
     private func printing(
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {
@@ -77,10 +79,12 @@ public struct EventCourierPrint: MissionStepMachine {
             return .advanceStep(nextStep: Step.replicating.rawValue)
         }
         let ctx = StepContext(directive: directive, world: world, step: directive.step)
-        guard let printer = PrintJob(depot: depot).bench(ctx) else {
-            return .stall(.unreachableDevice)
-        }
-        if world.openOperation(for: printer.deviceCode, owner: directive.id) != nil { return .wait }
+        guard PrintJob(depot: depot).hasBench(ctx) else { return .stall(.unreachableDevice) }
+        let order = PrintOrder(
+            deviceType: EventRun.courierDeviceType, quantity: 1, tags: [EventRun.rootTag],
+            owner: directive.id
+        )
+        guard let printer = PrintJob(depot: depot).bench(ctx, for: order) else { return .wait }
         let rail = PrintRail(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.printing.rawValue, thenStall: nil)
@@ -96,7 +100,7 @@ public struct EventCourierPrint: MissionStepMachine {
             """
         )
         return .dispatch(
-            kind: .print, deviceCode: printer.deviceCode,
+            kind: .print, deviceCode: printer.device.deviceCode,
             params: CommandParams(
                 deviceType: EventRun.courierDeviceType, quantity: 1, printTags: [EventRun.rootTag.string]
             ),

@@ -206,22 +206,44 @@ struct MineFleetPrintTests {
         #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .wait)
     }
 
-    /// Owner-scoped: a bench is one serial queue shared by every run that uses
-    /// it, so another run's print there is not this one's to wait on.
-    @Test("a co-tenant's print at the hub does not block starting our own")
-    func aCoTenantsPrintDoesNotBlock() {
+    /// With the depot's only bench busy — even on a co-tenant's job the
+    /// owner-scoped guard cannot see — there is no free bench to dispatch
+    /// onto, so the run waits rather than superseding it.
+    @Test("a co-tenant's print at the hub waits rather than dispatching onto it")
+    func aCoTenantsPrintWaitsRatherThanDispatching() {
         let snapshot = world(
             devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
             openOperations: openPrint(on: "AF1", directiveID: "OTHER")
         )
 
-        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .dispatch(
-            kind: .print, deviceCode: "AF1",
-            params: CommandParams(
-                deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]
-            ),
-            nextStep: MineFleetPrint.Step.printing.rawValue
-        ))
+        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .wait)
+    }
+
+    /// Every bench busy is the system working, not a fault — two hubs, each
+    /// holding another run's print, must wait rather than being treated as
+    /// unreachable.
+    @Test("an all-busy depot waits, it does not stall")
+    func allBusyWaits() {
+        let busy = openPrint(on: "AF1", directiveID: "OTHER")
+            .merging(openPrint(on: "AF2", directiveID: "OTHER")) { _, last in last }
+        let snapshot = world(
+            devices: printedFleet(omitting: "mining_drone") + [hub(), hub("AF2"), carrier()],
+            openOperations: busy
+        )
+
+        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot) == .wait)
+    }
+
+    /// A depot with no print-capable device at all is still a fault: printing
+    /// somewhere else would be a fabrication. Distinct from `missingHubStalls`
+    /// above — here the pin resolves to a real row, it just cannot print.
+    @Test("a depot with no bench stalls")
+    func noBenchStalls() {
+        let notAPrinter = mineDevice("AF1", type: "autofactory", location: hubLocation)
+        let snapshot = world(devices: printedFleet(omitting: "mining_drone") + [notAPrinter, carrier()])
+
+        #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot)
+                == .stall(.unreachableDevice))
     }
 
     /// Our own print still holds the step — owner-scoping must not make the

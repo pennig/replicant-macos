@@ -128,13 +128,13 @@ struct MineFleetPrintSubstituteTests {
         #expect(target(of: MineFleetPrint().nextAction(directive: run(hub: "AF1"), world: snapshot)) == "AF2")
     }
 
-    /// Substitution is a repair, not a preference — an able hub keeps its own job
-    /// even when a lower-coded sibling stands beside it.
-    @Test("an able hub is never traded for a lower-coded sibling")
-    func ableHubKeepsTheJob() {
+    /// The pin carries no stickiness: with two free benches, the lowest code
+    /// wins, whichever one launched the row.
+    @Test("a lower-coded free sibling wins over the pin")
+    func lowerCodedSiblingWinsOverThePin() {
         let snapshot = world(shortFleet() + [bench("AF0", status: "idle"), bench("AF9", status: "idle")])
 
-        #expect(target(of: MineFleetPrint().nextAction(directive: run(hub: "AF9"), world: snapshot)) == "AF9")
+        #expect(target(of: MineFleetPrint().nextAction(directive: run(hub: "AF9"), world: snapshot)) == "AF0")
     }
 
     /// Jobs queue, so a hub mid-print is still the right hub — `isBusy` would have
@@ -163,11 +163,10 @@ struct MineFleetPrintSubstituteTests {
         #expect(target(of: MineFleetPrint().nextAction(directive: run(hub: "AF1"), world: snapshot)) == "AF7")
     }
 
-    /// With every bench queued there is no free one to prefer, so the lowest code
-    /// still decides and two ticks cannot alternate between them. Asserted on the
-    /// selector, since `stocking` waits out a queued hub rather than dispatching.
-    @Test("with every hub queued the lowest-coded one is still chosen")
-    func allHubsQueuedFallsBackToLowestCode() {
+    /// With every bench at the depot occupied there is no bench to choose —
+    /// never the lowest-coded busy one.
+    @Test("with every hub queued there is no bench to choose")
+    func allHubsQueuedYieldsNoBench() {
         var busy = openPrint(on: "AF2")
         busy.merge(openPrint(on: "AF7")) { _, last in last }
         let snapshot = world(
@@ -181,8 +180,9 @@ struct MineFleetPrintSubstituteTests {
 
         let directive = run(hub: "AF1")
         let ctx = StepContext(directive: directive, world: snapshot, step: directive.step)
+        let order = PrintOrder(deviceType: "mining_drone", owner: directive.id)
 
-        #expect(PrintJob(depot: depot).bench(ctx)?.deviceCode == "AF2")
+        #expect(PrintJob(depot: depot).bench(ctx, for: order) == nil)
     }
 
     /// With the bench empty of anything able there is nothing to substitute, and

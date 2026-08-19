@@ -55,44 +55,41 @@ public struct RestockRun: MissionStepMachine {
 
     /// Route `directive`'s current step against `world`.
     ///
-    /// Stalls when no hub at the run's depot can take a job: printing somewhere
-    /// else would be a fabrication, while handing the job to the bench's own free
-    /// hub is the same run carrying on.
+    /// Stalls only when no hub stands at the run's depot at all: printing
+    /// somewhere else would be a fabrication. Every bench busy is a wait.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
-        guard let depot = PrintJob.depot(for: directive, in: world),
-              let hub = PrintJob(depot: depot).bench(
-                  StepContext(directive: directive, world: world, step: directive.step)
-              )
-        else { return .stall(.unreachableDevice) }
+        guard let depot = PrintJob.depot(for: directive, in: world) else {
+            return .stall(.unreachableDevice)
+        }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        guard PrintJob(depot: depot).hasBench(ctx) else { return .stall(.unreachableDevice) }
         guard let step = Step(rawValue: directive.step) else {
             logger.notice("\(kind.rawValue, privacy: .public) \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
         }
         switch step {
-        case .printing: return printing(directive, hub, world)
-        case .stocking: return stocking(directive, hub, world)
+        case .printing: return printing(directive, depot, world)
+        case .stocking: return stocking(directive, depot, world)
         }
     }
 
     // MARK: - Deciding
 
-    /// Print one relay at `hub`'s location, or wait, judging `directive`'s demand
-    /// against `world`'s idle pool and census.
+    /// Print one relay at `depot`, or wait, judging `directive`'s demand against
+    /// `world`'s idle pool and census.
     ///
     /// **Every branch that declines is a `.wait`, never a `.stall`** — demand
-    /// met, cap reached, or the reserve saying not yet are all the system
-    /// working, and dressing idle calm up as a halt spends an operator's
-    /// attention on nothing. The one stall is a hub with no location.
-    private func stocking(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let location = hub.location else { return .stall(.unreachableDevice) }
-
-        let idle = RelayRun.idleRelays(at: location, in: world).count
+    /// met, cap reached, a busy bench, or the reserve saying not yet are all the
+    /// system working, and dressing idle calm up as a halt spends an operator's
+    /// attention on nothing. `nextAction` already proved `depot` has a printer.
+    private func stocking(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
+        let idle = RelayRun.idleRelays(at: depot, in: world).count
         let desired = Self.desiredIdle(for: directive)
         guard idle < desired else { return .wait }
 
-        // A correctness guard against orphaning our own open op, not a
-        // throttle — owner-scoped, so a co-tenant's job here is never ours to wait on.
-        if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let order = PrintOrder(deviceType: RelayRun.relayDeviceType, owner: directive.id)
+        guard let hub = PrintJob(depot: depot).bench(ctx, for: order) else { return .wait }
 
         // The rail, held once in `PrintRail` so no print site can drift from it.
         //
@@ -113,17 +110,17 @@ public struct RestockRun: MissionStepMachine {
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }
-        if rail.printStockIsShort(at: location, world) { return .wait }
+        if rail.printStockIsShort(at: depot, world) { return .wait }
 
         logger.info(
             """
             restock \(directive.id, privacy: .public): printing a relay at \
-            \(location, privacy: .public) — \(idle, privacy: .public) idle of \
+            \(depot, privacy: .public) — \(idle, privacy: .public) idle of \
             \(desired, privacy: .public) wanted
             """
         )
         return .dispatch(
-            kind: .print, deviceCode: hub.deviceCode,
+            kind: .print, deviceCode: hub.device.deviceCode,
             params: CommandParams(deviceType: RelayRun.relayDeviceType),
             nextStep: Step.printing.rawValue
         )
@@ -147,16 +144,16 @@ public struct RestockRun: MissionStepMachine {
     /// Wait for a printed relay to reach `world`'s idle pool, then hand back to
     /// `stocking`. Doesn't care WHICH relay arrived, unlike `RelayRun.printing`
     /// — any relay topping the pool up survives a superseded print op.
-    private func printing(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let location = hub.location else { return .stall(.unreachableDevice) }
-        if RelayRun.idleRelays(at: location, in: world).count >= Self.desiredIdle(for: directive) {
+    private func printing(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
+        if RelayRun.idleRelays(at: depot, in: world).count >= Self.desiredIdle(for: directive) {
             return .advanceStep(nextStep: Step.stocking.rawValue)
         }
         if world.now.timeIntervalSince(directive.stepStartedAt) > PrintJob.deadline {
             logger.notice("restock \(directive.id, privacy: .public): print produced no relay within the deadline — re-deciding")
             return .advanceStep(nextStep: Step.stocking.rawValue)
         }
-        if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        if PrintJob(depot: depot).stillPrinting(ctx) { return .wait }
         return .advanceStep(nextStep: Step.stocking.rawValue)
     }
 

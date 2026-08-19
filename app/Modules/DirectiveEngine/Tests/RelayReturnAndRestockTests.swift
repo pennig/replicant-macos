@@ -590,21 +590,47 @@ struct RestockRunTests {
                 == .advanceStep(nextStep: RestockRun.Step.stocking.rawValue))
     }
 
-    /// Owner-scoped: a co-tenant's print at the hub is invisible to this
-    /// guard, so it must never block starting this run's own.
-    @Test("a co-tenant's print at the hub does not block starting our own")
-    func coTenantPrintDoesNotBlockDispatch() {
+    /// With the depot's only bench busy — even on a co-tenant's job the
+    /// owner-scoped guard cannot see — there is no free bench to dispatch
+    /// onto, so the run waits rather than superseding it.
+    @Test("a co-tenant's print at the hub waits rather than dispatching onto it")
+    func coTenantPrintWaitsRatherThanDispatching() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
             openOperations: openOp("AF1", kind: .print, directiveID: "OTHER")
         )
 
-        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .dispatch(
-            kind: .print, deviceCode: "AF1",
-            params: CommandParams(deviceType: RelayRun.relayDeviceType),
-            nextStep: RestockRun.Step.printing.rawValue
-        ))
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
+    /// Every bench busy is the system working, not a fault — two hubs, each
+    /// holding another run's print, must wait rather than being treated as
+    /// unreachable.
+    @Test("an all-busy depot waits, it does not stall")
+    func allBusyWaits() {
+        let directive = restockRun(targets: ["VEGA", "ALTAIR"])
+        let busy = openOp("AF1", kind: .print, directiveID: "OTHER")
+            .merging(openOp("AF2", kind: .print, directiveID: "OTHER")) { _, last in last }
+        let snapshot = world(
+            devices: [hub(), hub("AF2"), liveRelay("REL0", at: hubLocation)],
+            openOperations: busy
+        )
+
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
+    }
+
+    /// A depot with no print-capable device at all is still a fault: printing
+    /// somewhere else would be a fabrication. Distinct from `missingHubStalls`
+    /// below — here the depot resolves, it just has nothing that can print.
+    @Test("a depot with no bench stalls")
+    func noBenchStalls() {
+        let directive = restockRun(targets: ["VEGA"])
+        let notAPrinter = device("AF1", type: "autofactory", location: hubLocation)
+        let snapshot = world(devices: [notAPrinter, liveRelay("REL0", at: hubLocation)])
+
+        #expect(RestockRun().nextAction(directive: directive, world: snapshot)
+                == .stall(.unreachableDevice))
     }
 
     /// Our own print, correctly identified as ours through the owner scope,

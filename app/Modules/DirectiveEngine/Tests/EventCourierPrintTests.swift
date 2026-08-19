@@ -189,10 +189,11 @@ struct EventCourierPrintTests {
         #expect(action == .wait)
     }
 
-    /// Owner-scoped, mirroring `RestockRun`'s guard: a print another directive
-    /// queued at the printer must not block starting this run's own.
-    @Test("a co-tenant's print at the printer does not block starting our own")
-    func coTenantPrintDoesNotBlockDispatch() {
+    /// With the depot's only bench busy — even on another directive's job
+    /// the owner-scoped guard cannot see — there is no free bench to
+    /// dispatch onto, so the run waits rather than superseding it.
+    @Test("a co-tenant's print at the printer waits rather than dispatching onto it")
+    func coTenantPrintWaitsRatherThanDispatching() {
         let openOperations = ["PRINTER": GameModels.Operation(
             id: "OP-OTHER", entityCode: "PRINTER", kind: OperationKind.print.rawValue,
             status: .active, source: .poll, startedAt: now, completesAt: nil,
@@ -205,13 +206,47 @@ struct EventCourierPrintTests {
                 openOperations: openOperations
             )
         )
-        #expect(action == .dispatch(
-            kind: .print, deviceCode: "PRINTER",
-            params: CommandParams(
-                deviceType: "matrix_container", quantity: 1, printTags: [EventRun.rootTag.string]
+        #expect(action == .wait)
+    }
+
+    /// Every bench busy is the system working, not a fault — two printers,
+    /// each holding another directive's job, must wait.
+    @Test("an all-busy depot waits, it does not stall")
+    func allBusyWaits() {
+        let openOperations: [String: GameModels.Operation] = [
+            "PRINTER": GameModels.Operation(
+                id: "OP-1", entityCode: "PRINTER", kind: OperationKind.print.rawValue,
+                status: .active, source: .poll, startedAt: now, completesAt: nil,
+                lastConfirmedAt: now, detail: .object([:]), directiveID: "OTHER"
             ),
-            nextStep: EventCourierPrint.Step.awaitingClone.rawValue
-        ))
+            "PRINTER2": GameModels.Operation(
+                id: "OP-2", entityCode: "PRINTER2", kind: OperationKind.print.rawValue,
+                status: .active, source: .poll, startedAt: now, completesAt: nil,
+                lastConfirmedAt: now, detail: .object([:]), directiveID: "OTHER"
+            ),
+        ]
+        let action = EventCourierPrint().nextAction(
+            directive: directive(step: EventCourierPrint.Step.printing.rawValue),
+            world: world(
+                [
+                    EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
+                    EventRunFixtures.device("PRINTER2", type: "autofactory", updatedAt: now),
+                ],
+                openOperations: openOperations
+            )
+        )
+        #expect(action == .wait)
+    }
+
+    /// A depot with no print-capable device at all is still a fault, distinct
+    /// from `noSpareMatrix` above — this is the printing step, not replicating.
+    @Test("a depot with no bench stalls")
+    func noBenchStalls() {
+        let action = EventCourierPrint().nextAction(
+            directive: directive(step: EventCourierPrint.Step.printing.rawValue),
+            world: world([EventRunFixtures.device("X1", type: "generic_device", updatedAt: now)])
+        )
+        #expect(action == .stall(.unreachableDevice))
     }
 
     /// Our own print, still open, holds the step.

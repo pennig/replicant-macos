@@ -33,6 +33,10 @@ private func bench(
     )
 }
 
+private func order(_ type: String = "ftl_relay", owner: String = "P1") -> PrintOrder {
+    PrintOrder(deviceType: type, owner: owner)
+}
+
 private func op(
     on entity: String, owner: String?, status: OperationStatus = .active,
     kind: String = OperationKind.print.rawValue
@@ -98,7 +102,7 @@ struct PrintJobTests {
 
         #expect(job.stillPrinting(frame))
         // The whole point: the chooser has already moved on to the free bench.
-        #expect(job.bench(frame)?.deviceCode == "B3")
+        #expect(job.bench(frame, for: order())?.device.deviceCode == "B3")
     }
 
     @Test("no operations anywhere is not printing")
@@ -165,30 +169,36 @@ struct PrintJobTests {
 
     // MARK: - The bench
 
-    @Test("a pinned bench that accepts jobs at the depot keeps them")
-    func pinnedBenchKeepsTheJob() {
-        #expect(job.bench(ctx([bench("B9"), bench("B0")], pin: "B9"))?.deviceCode == "B9")
+    /// `bench(_:for:)` is a bare delegation to `PrintScheduler.choose`, so a
+    /// lower-coded free bench always wins over whichever device the row
+    /// happens to name.
+    @Test("the pin has no claim; the lowest-coded free bench wins")
+    func pinHasNoClaimOverALowerCodedFreeBench() {
+        #expect(job.bench(ctx([bench("B9"), bench("B0")], pin: "B9"), for: order())?.device.deviceCode == "B0")
     }
 
-    @Test("a pin that cannot take the job hands it to the lowest-coded free bench")
-    func substituteIsTheLowestCodedFreeBench() {
+    @Test("a busy bench is skipped for the lowest-coded free one")
+    func busyBenchIsSkippedForTheLowestCodedFreeOne() {
         let queued = op(on: "B2", owner: "OTHER")
         let frame = ctx(
             [bench("B1", status: "compacted"), bench("B2"), bench("B7")],
             open: ["B2": queued]
         )
 
-        #expect(job.bench(frame)?.deviceCode == "B7")
+        #expect(job.bench(frame, for: order())?.device.deviceCode == "B7")
     }
 
-    @Test("with every bench queued the lowest code is still chosen")
-    func allBusyFallsBackToTheLowestCode() {
+    /// A co-tenant's op is invisible to the caller's owner-scoped guard, so
+    /// `bench` must never return an occupied bench — that would dispatch onto
+    /// someone else's job.
+    @Test("with every bench occupied there is no bench to choose")
+    func allBusyYieldsNoBench() {
         let frame = ctx(
             [bench("B1", status: "compacted"), bench("B2"), bench("B7")],
             open: ["B2": op(on: "B2", owner: "OTHER"), "B7": op(on: "B7", owner: "OTHER")]
         )
 
-        #expect(job.bench(frame)?.deviceCode == "B2")
+        #expect(job.bench(frame, for: order()) == nil)
     }
 
     /// A carrier hull advertises `enqueue_print`; printing the fleet into the
@@ -198,14 +208,26 @@ struct PrintJobTests {
         let hull = bench("B2", features: ["cradle", "surge"])
         let frame = ctx([bench("B1", status: "compacted"), hull])
 
-        #expect(job.bench(frame) == nil)
+        #expect(job.bench(frame, for: order()) == nil)
     }
 
     @Test("a bench standing away from the depot is not a substitute")
     func aBenchAwayFromTheDepotIsNotASubstitute() {
         let frame = ctx([bench("B1", status: "compacted"), bench("B2", location: elsewhere)])
 
-        #expect(job.bench(frame) == nil)
+        #expect(job.bench(frame, for: order()) == nil)
+    }
+
+    @Test("a depot with a bench has one, however occupied")
+    func hasBenchIsTrueEvenWhenOccupied() {
+        let frame = ctx([bench("B1")], open: ["B1": op(on: "B1", owner: "OTHER")])
+
+        #expect(job.hasBench(frame))
+    }
+
+    @Test("a depot with no print-capable device has none")
+    func hasBenchIsFalseWithNoCapableDevice() {
+        #expect(!job.hasBench(ctx([bench("B1", location: elsewhere)])))
     }
 
     // MARK: - The depot

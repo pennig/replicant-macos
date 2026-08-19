@@ -31,19 +31,17 @@ struct PrintJob: Equatable, Sendable {
         directive.theatreDepot ?? world.device(directive.deviceCode)?.location
     }
 
-    /// The bench to print with: the row's own while it still accepts jobs, else
-    /// a free able bench at the depot, lowest code first. A hub keeps advertising
-    /// `enqueue_print` while packed or under way, so only status separates them.
-    func bench(_ ctx: StepContext) -> Device? {
-        let pinned = ctx.world.device(ctx.directive.deviceCode)
-        if let pinned, pinned.acceptsPrintJobs, pinned.location == depot { return pinned }
-        let able = ctx.world.devices.values
-            .filter { $0.acceptsPrintJobs && $0.location == depot && !$0.isCarrierHull }
-        // Substituting opens a queue either way, so a bench standing free beats one
-        // already serving another run. Lowest code breaks both ties.
-        return able.filter { ctx.openOperation(for: $0.deviceCode) == nil }
-            .min { $0.deviceCode < $1.deviceCode }
-            ?? able.min { $0.deviceCode < $1.deviceCode }
+    /// The bench that should take `order`, or nil when none at this depot can.
+    ///
+    /// Nil means every bench is occupied, which is a wait — never a stall, and
+    /// never a dispatch onto someone else's job.
+    func bench(_ ctx: StepContext, for order: PrintOrder) -> Bench? {
+        PrintScheduler.choose(order, at: depot, in: ctx.world)
+    }
+
+    /// Whether this depot has any print-capable device at all.
+    func hasBench(_ ctx: StepContext) -> Bool {
+        !PrintScheduler.benches(at: depot, in: ctx.world).isEmpty
     }
 
     /// Whether this run's own print is still open, wherever substitution put it.

@@ -35,22 +35,22 @@ public struct MineFleetPrint: MissionStepMachine {
 
     public var firstStep: String { Step.stocking.rawValue }
 
-    /// Route `directive`'s current step against `world`. Stalls when no printer at
-    /// the run's depot can take a job — printing somewhere else would be a
-    /// fabrication, but printing at the same bench with a free hub is not.
+    /// Route `directive`'s current step against `world`. Stalls only when no
+    /// printer stands at the run's depot at all — every bench busy is the
+    /// system working, and `stocking`/`printing` wait on it instead.
     public func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
-        guard let depot = PrintJob.depot(for: directive, in: world),
-              let hub = PrintJob(depot: depot).bench(
-                  StepContext(directive: directive, world: world, step: directive.step)
-              )
-        else { return .stall(.unreachableDevice) }
+        guard let depot = PrintJob.depot(for: directive, in: world) else {
+            return .stall(.unreachableDevice)
+        }
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        guard PrintJob(depot: depot).hasBench(ctx) else { return .stall(.unreachableDevice) }
         guard let step = Step(rawValue: directive.step) else {
             logger.notice("\(kind.rawValue, privacy: .public) \(directive.id, privacy: .public): unknown step \(directive.step, privacy: .public) — waiting")
             return .wait
         }
         switch step {
-        case .printing: return printing(directive, hub, world)
-        case .stocking: return stocking(directive, hub, world)
+        case .printing: return printing(directive, depot, world)
+        case .stocking: return stocking(directive, depot, world)
         }
     }
 
@@ -72,18 +72,21 @@ public struct MineFleetPrint: MissionStepMachine {
         MineRecipe.all.map(\.deviceType) + [MineRecipe.carrierDeviceType]
     }
 
-    /// Start one print at `hub`'s location, or decline. Short stock idles against a
-    /// hub buffer that refills from salvage; only an unreadable hub — gone from the
-    /// fleet, without a location, or a sweep that will not land — escalates.
-    private func stocking(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let location = hub.location else { return .stall(.unreachableDevice) }
-
-        let missing = Self.remaining(at: location, in: world)
+    /// Start one print at `depot`, or decline. Short stock idles against a hub
+    /// buffer that refills from salvage; a busy bench waits rather than stalling,
+    /// since `nextAction` already proved `depot` has a printer to wait on.
+    private func stocking(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
+        let missing = Self.remaining(at: depot, in: world)
         if missing.isEmpty { return .done }
 
-        // A correctness guard against orphaning our own open op, not a
-        // throttle — owner-scoped, so a co-tenant's job here is never ours to wait on.
-        if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
+        guard let type = Self.jobOrder.first(where: { missing[$0] != nil }),
+              let quantity = missing[type]
+        else { return .wait }
+        let tag = type == MineRecipe.carrierDeviceType ? MineRecipe.carrierTag : MineRecipe.fleetTag
+
+        let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        let order = PrintOrder(deviceType: type, quantity: quantity, tags: [tag], owner: directive.id)
+        guard let bench = PrintJob(depot: depot).bench(ctx, for: order) else { return .wait }
 
         // The rail, held once in `PrintRail` so no print site can drift from it.
         // Nothing polls `LocationFootprint`, so a stale census buys its own read.
@@ -91,28 +94,23 @@ public struct MineFleetPrint: MissionStepMachine {
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }
-        if rail.printStockIsShort(at: location, world) { return .wait }
+        if rail.printStockIsShort(at: depot, world) { return .wait }
 
         // Last moment before an irreversible spend, and the one read that can
         // settle it: a clone is PRESENT at the hub, so one scoped sweep sees it.
-        if PrintJob.fleetEvidenceIsStale(directive, at: location, in: world) {
-            return .refreshDevicesInSystem(designation: location, thenStall: .unreachableDevice)
+        if PrintJob.fleetEvidenceIsStale(directive, at: depot, in: world) {
+            return .refreshDevicesInSystem(designation: depot, thenStall: .unreachableDevice)
         }
 
-        guard let type = Self.jobOrder.first(where: { missing[$0] != nil }),
-              let quantity = missing[type]
-        else { return .wait }
-
-        let tag = type == MineRecipe.carrierDeviceType ? MineRecipe.carrierTag : MineRecipe.fleetTag
         logger.info(
             """
             mine fleet print \(directive.id, privacy: .public): printing \
             \(quantity, privacy: .public) × \(type, privacy: .public) at \
-            \(location, privacy: .public)
+            \(depot, privacy: .public)
             """
         )
         return .dispatch(
-            kind: .print, deviceCode: hub.deviceCode,
+            kind: .print, deviceCode: bench.device.deviceCode,
             params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag.string]),
             nextStep: Step.printing.rawValue
         )
@@ -120,12 +118,11 @@ public struct MineFleetPrint: MissionStepMachine {
 
     // MARK: - Waiting on the clones
 
-    /// Wait for the printed rows to appear at `hub`'s location. A multi-quantity
-    /// job may settle one op per clone, so only a full fleet or the deadline hands
-    /// back to `stocking` — an op-close proves nothing about the rows.
-    private func printing(_ directive: Directive, _ hub: Device, _ world: WorldSnapshot) -> MissionAction {
-        guard let location = hub.location else { return .stall(.unreachableDevice) }
-        if Self.remaining(at: location, in: world).isEmpty {
+    /// Wait for the printed rows to appear at `depot`. A multi-quantity job may
+    /// settle one op per clone, so only a full fleet or the deadline hands back
+    /// to `stocking` — an op-close proves nothing about the rows.
+    private func printing(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
+        if Self.remaining(at: depot, in: world).isEmpty {
             return .advanceStep(nextStep: Step.stocking.rawValue)
         }
         // A bench is shared and `openOperation` is keyed by device alone, so gating
