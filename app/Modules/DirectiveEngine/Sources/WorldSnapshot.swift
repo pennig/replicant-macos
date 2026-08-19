@@ -31,9 +31,9 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// Completion detection reads the `directive.completed` ROW here rather
     /// than the event, which is what keeps missions replay-immune.
     public let log: [DirectiveLogEntry]
-    /// This directive's FULL `.commandDispatched`/`.opCompleted` history —
-    /// unlike `log`, never windowed, so an op dispatched long before `log`'s
-    /// cutoff can still be resolved by `DirectiveExecutor`'s audit pass.
+    /// Every `.opCompleted` entry and every `.commandDispatched` entry that
+    /// NAMES an operation — unlike `log`, never windowed, so an op dispatched
+    /// long before `log`'s cutoff still resolves in the audit pass.
     public let auditLog: [DirectiveLogEntry]
     /// The operations this directive dispatched, by operation id — **including
     /// closed ones**, so the audit pass can notice a dispatched op reaching a
@@ -251,25 +251,39 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .fetchAll(db)
                 .reversed())
 
-            // Unbounded and kind-scoped, unlike `log`: an old-enough dispatch
-            // must stay resolvable after `log`'s window rolls past it.
+            // Unbounded and kind-scoped, unlike `log`. A dispatch naming no
+            // operation is excluded: `recordCompletedOps` rejects one anyway.
             let auditLog = try DirectiveLogEntry
-                .where { $0.directiveID.eq(directiveID) && $0.kind.in([DirectiveLogKind.commandDispatched, .opCompleted]) }
+                .where {
+                    $0.directiveID.eq(directiveID)
+                        && ($0.kind.eq(DirectiveLogKind.opCompleted)
+                            || ($0.kind.eq(DirectiveLogKind.commandDispatched)
+                                && $0.operationID.isNot(nil)))
+                }
                 .order { $0.occurredAt }
                 .fetchAll(db)
-            let dispatchedIDs = Array(Set(auditLog.compactMap { entry in
-                entry.kind == .commandDispatched ? entry.operationID : nil
-            }))
-            // The owner column is the source of truth; the log join is a
-            // fallback for rows written before it existed.
-            let ownedDispatched = try GameModels.Operation
-                .where { $0.directiveID.eq(directiveID) }
-                .fetchAll(db)
-            let legacyDispatched = dispatchedIDs.isEmpty ? [] : try GameModels.Operation
-                .where { $0.id.in(dispatchedIDs) }
-                .fetchAll(db)
+
+            // The owner column is the source of truth; the log is a fallback
+            // for rows written before it existed. One query, so the ids never
+            // cross into Swift to come back as a host-parameter list.
             let dispatched = Dictionary(
-                (ownedDispatched + legacyDispatched).map { ($0.id, $0) },
+                try GameModels.Operation
+                    .where { operation in
+                        operation.directiveID.eq(directiveID)
+                            || operation.id.in(
+                                DirectiveLogEntry
+                                    .where {
+                                        $0.directiveID.eq(directiveID)
+                                            && $0.kind.eq(DirectiveLogKind.commandDispatched)
+                                            && $0.operationID.isNot(nil)
+                                    }
+                                    // Coalesced only to drop the optional;
+                                    // the filter above excludes the nulls.
+                                    .select { $0.operationID ?? "" }
+                            )
+                    }
+                    .fetchAll(db)
+                    .map { ($0.id, $0) },
                 uniquingKeysWith: { first, _ in first }
             )
 

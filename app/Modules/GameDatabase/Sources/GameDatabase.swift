@@ -94,6 +94,7 @@ public enum GameDatabase {
         TheatreRecord.createTheatres,
         Directive.addFreighterCodes,
         HaulYield.addCollectedAtIndex,
+        DirectiveLogEntry.addDispatchLookupIndex,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

@@ -4,6 +4,9 @@ CREATE INDEX "directive_log_by_device"
 CREATE INDEX "directive_log_by_directive"
   ON "directiveLogEntries" ("directiveID", "occurredAt");
 
+CREATE INDEX "directive_log_by_directive_kind"
+  ON "directiveLogEntries" ("directiveID", "kind", "operationID");
+
 CREATE UNIQUE INDEX "directive_log_unique_event"
   ON "directiveLogEntries" ("eventID") WHERE "eventID" IS NOT NULL;
 

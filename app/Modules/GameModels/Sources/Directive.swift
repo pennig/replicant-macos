@@ -811,6 +811,23 @@ extension DirectiveLogEntry {
         try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "targetDeviceCode" TEXT"#).execute(db)
         try #sql(#"ALTER TABLE "directiveLogEntries" ADD COLUMN "detail" TEXT"#).execute(db)
     }
+
+    /// Appended, never folded into `createDirectiveLogEntries`: that one has
+    /// shipped. The audit pass asks "which operations did this directive
+    /// dispatch?", which `directive_log_by_directive` can only answer by
+    /// reading every entry the directive ever wrote. This one covers the
+    /// question outright, so the lookup never touches the table.
+    public static let addDispatchLookupIndex = SchemaMigration(
+        "Add 'directive_log_by_directive_kind' index"
+    ) { db in
+        try #sql(
+            """
+            CREATE INDEX "directive_log_by_directive_kind"
+              ON "directiveLogEntries" ("directiveID", "kind", "operationID")
+            """
+        )
+        .execute(db)
+    }
 }
 
 public extension Directive {

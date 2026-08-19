@@ -272,6 +272,43 @@ struct WorldSnapshotTests {
         #expect(world.isFresh(fresh, since: watermark) == true)
     }
 
+    /// A dispatch carrying no `operationID` never reaches `auditLog`.
+    /// `recordCompletedOps` rejects one on its first guard — a `.simple` verb
+    /// creates no `Operation` — and on a long-lived roaming run those entries
+    /// outnumber the resolvable ones several times over.
+    @Test func auditLogDropsDispatchesThatNameNoOperation() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "L-SIMPLE", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
+                    summary: "stow", step: nil, operationID: nil, eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "L-TRACKED", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
+                    summary: "travel", step: nil, operationID: "OP1", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 2)
+                )
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "L-DONE", directiveID: "D1", deviceCode: nil, kind: .opCompleted,
+                    summary: "travel completed", step: nil, operationID: "OP1", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 3)
+                )
+            }.execute(db)
+        }
+
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: directive()
+        )
+
+        #expect(world.auditLog.map(\.id) == ["L-TRACKED", "L-DONE"])
+    }
+
     /// `dispatchedOperations` reads `operations.directiveID` first, union the
     /// legacy log join — a row from before that column existed is found only
     /// through its own `.commandDispatched` entry.

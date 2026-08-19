@@ -72,6 +72,7 @@ import Testing
         "Create 'theatres'",
         "Add 'freighterCodes' to 'directives'",
         "Add index on 'haulYields.collectedAt'",
+        "Add 'directive_log_by_directive_kind' index",
     ]
 
     @Test func manifestMatchesTheFrozenList() {
