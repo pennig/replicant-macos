@@ -422,17 +422,21 @@ public struct Reconciler: Sendable {
     /// Mark the single open operation on a device completed, recording any event
     /// result (e.g. a print's `new_device_code`) under `detail.result`.
     ///
-    /// Two guards keep a stale/replayed completion from closing the wrong op
-    /// (V3.3-S4) — both matter on catch-up replay, where a device that was
-    /// re-tasked while the app was away has a *different* op open than the one
-    /// the replayed event completed:
+    /// Three guards keep a completion from closing the wrong op. The first two
+    /// matter on catch-up replay, where a device re-tasked while the app was
+    /// away has a *different* op open than the one the replayed event
+    /// completed; the third matters live, on a bench whose queue is deeper
+    /// than the one op this table can hold for it:
     ///   • `allowedKinds`: the event's action family must match the open op's
     ///     kind (a `site.depleted` can never close a travel op);
     ///   • event time: a completion stamped before the op even started belongs
-    ///     to an earlier action.
-    /// Neither guard constrains the poll path (`allowedKinds` nil, `eventTime`
-    /// nil — the stamp falls back to `date.now`), where the settled-device
-    /// read is its own proof.
+    ///     to an earlier action;
+    ///   • device type: a result contradicting what the open op asked for is
+    ///     another job finishing on the same device.
+    /// None of them constrains the poll path (`allowedKinds` nil, `eventTime`
+    /// nil, `result` nil — the stamp falls back to `date.now`), where the
+    /// settled-device read is its own proof, and which is therefore the
+    /// backstop that clears a job whose event the third guard declined.
     ///
     /// Returns whether an open operation was found and closed.
     @discardableResult
@@ -460,6 +464,13 @@ public struct Reconciler: Sendable {
             }
             if let eventTime, eventTime < op.startedAt.addingTimeInterval(-Self.eventTimeSkewTolerance) {
                 logger.notice("ignored completion on \(deviceCode, privacy: .public): event time \(eventTime.ISO8601Format(), privacy: .public) predates op start \(op.startedAt.ISO8601Format(), privacy: .public) — stale/replayed event")
+                return false
+            }
+            if let wanted = op.detail["params"]?["device_type"]?.stringValue,
+               let produced = result?["device_type"]?.stringValue,
+               wanted != produced
+            {
+                logger.notice("ignored completion on \(deviceCode, privacy: .public): open op asked for \(wanted, privacy: .public), event produced \(produced, privacy: .public) — another job on this bench")
                 return false
             }
 
