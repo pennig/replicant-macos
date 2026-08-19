@@ -349,10 +349,12 @@ extension GameSync {
     static func stowChange(for event: GameEventEnvelope) -> StowChange? {
         switch event.event {
         case "device.stowed":
-            guard let carrier = event.payload?["stowed_in_device_code"]?.stringValue,
-                  !carrier.isEmpty
-            else {
-                logger.notice("⚠️ device.stowed WITHOUT stowed_in_device_code — stowage left to the staleness mark")
+            // An `ftl_relay` names its carrier under the short key; every other
+            // type uses the long one. Both are read, longest first.
+            let named = event.payload?["stowed_in_device_code"]?.stringValue
+                ?? event.payload?["stowed_in"]?.stringValue
+            guard let carrier = named, !carrier.isEmpty else {
+                logger.notice("⚠️ device.stowed naming no carrier — stowage left to the staleness mark")
                 return nil
             }
             return .stowed(inDeviceCode: carrier)

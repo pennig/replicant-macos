@@ -701,6 +701,27 @@ struct StowChangeTests {
         #expect(GameSync.stowChange(for: event("device.deployed")) == .deployed)
     }
 
+    /// Captured verbatim from `eventLogs`: every `device.stowed` an `ftl_relay`
+    /// emits names the carrier under `stowed_in`, not `stowed_in_device_code`
+    /// (221 of 2038 stow events; `ftl_relay` is the only type on the short key).
+    @Test func stowedNamesTheCarrierUnderTheShortKey() {
+        #expect(
+            GameSync.stowChange(for: event(
+                "device.stowed", payload: ["stowed_in": .string("3E88D441")]
+            )) == .stowed(inDeviceCode: "3E88D441")
+        )
+    }
+
+    /// The long key wins when both are present, so a server that starts sending
+    /// both cannot flip which one the column follows.
+    @Test func theLongKeyWinsWhenBothArePresent() {
+        #expect(
+            GameSync.stowChange(for: event("device.stowed", payload: [
+                "stowed_in_device_code": .string("VES1"), "stowed_in": .string("VES2"),
+            ])) == .stowed(inDeviceCode: "VES1")
+        )
+    }
+
     /// A stow event we can't read the carrier out of makes NO claim rather than
     /// a guessed one; the staleness mark still owns that repair.
     @Test func stowedWithoutACarrierMakesNoClaim() {
@@ -708,6 +729,11 @@ struct StowChangeTests {
         #expect(
             GameSync.stowChange(for: event(
                 "device.stowed", payload: ["stowed_in_device_code": .string("")]
+            )) == nil
+        )
+        #expect(
+            GameSync.stowChange(for: event(
+                "device.stowed", payload: ["stowed_in": .string("")]
             )) == nil
         )
     }
