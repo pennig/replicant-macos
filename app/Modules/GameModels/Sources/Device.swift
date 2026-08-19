@@ -31,7 +31,7 @@ public struct Device: Identifiable, Equatable, Sendable {
     public var stowedInDeviceCode: String?
     public var controllerDeviceCode: String?
     public var attachedToDeviceCode: String?
-    public var createdAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var createdAt: Date
     @Column(as: [String].JSONRepresentation.self) public var availableCommands: [String]
     @Column(as: [String].JSONRepresentation.self) public var features: [String]
     @Column(as: [String].JSONRepresentation.self) public var tags: [String]
@@ -41,9 +41,9 @@ public struct Device: Identifiable, Equatable, Sendable {
     /// The read's *request-issue* time, not the server's — the payload carries no
     /// modified-time. Captured before the round-trip, so snapshots order by when
     /// each read began and a slow earlier read cannot clobber a newer one.
-    public var updatedAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var updatedAt: Date
     /// Local-only provenance, preserved across upserts.
-    public var firstSeenAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var firstSeenAt: Date
 
     public var id: String { deviceCode }
 

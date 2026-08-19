@@ -46,14 +46,14 @@ public struct LocationEvent: Identifiable, Equatable, Sendable {
     public var chosenOption: String?
     public var broadcastMessage: String?
     public var eventDescription: String?
-    public var discoveredAt: Date?
-    public var completedAt: Date?
+    @Column(as: Date.FastISO8601Representation?.self) public var discoveredAt: Date?
+    @Column(as: Date.FastISO8601Representation?.self) public var completedAt: Date?
     /// The full event payload (criteria, progress, rewards), verbatim as JSON —
     /// decoded on demand by the quest sheet via `quest`.
     @Column(as: JSONValue.JSONRepresentation.self) public var detail: JSONValue
     /// Local-only provenance — when this event was first discovered locally.
-    public var firstSeenAt: Date
-    public var updatedAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var firstSeenAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var updatedAt: Date
 
     public var id: String { designation }
 

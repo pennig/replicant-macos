@@ -93,7 +93,7 @@ actor CommandGovernor {
                             && $0.entityCode.eq(deviceCode)
                             && $0.kind.eq(kind.rawValue)
                             && $0.paramsDigest.eq(digest)
-                            && $0.startedAt >= owner.since
+                            && $0.startedAt >= Date.FastISO8601Representation(queryOutput: owner.since)
                             // A `.failed` attempt didn't land, so a repeat is
                             // a retry rather than a duplicate to refuse.
                             && $0.status.neq(OperationStatus.failed)

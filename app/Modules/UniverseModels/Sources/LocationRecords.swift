@@ -36,7 +36,7 @@ public struct SystemDetail: Identifiable, Equatable, Sendable {
     public var recon: String
     public var systemScanned: Bool
     /// When this detail was last hydrated from the API.
-    public var hydratedAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var hydratedAt: Date
     /// `SystemSummary`, JSON-encoded — what a collapsed catalog row needs, so the
     /// list never decodes `systemJSON`. Nil on a row written before the column
     /// existed; readers fall back to decoding the blob, so correctness never
@@ -105,7 +105,7 @@ public struct LocationFootprint: Identifiable, Equatable, Sendable {
     public var resourceSites: Int
     public var locationEvents: Int
     public var replicants: Int
-    public var fetchedAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var fetchedAt: Date
 
     public var id: String { location }
 
@@ -186,7 +186,7 @@ public struct SiteAssay: Identifiable, Equatable, Sendable {
     /// Resource name → original unit count.
     @Column(as: [String: Double].JSONRepresentation.self) public var totals: [String: Double]
     /// When `totals` was last raised.
-    public var assayedAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var assayedAt: Date
     /// Whether this site's salvage is fully spent. Sticky — a salvage site never
     /// replenishes, so once set nothing clears it. Set by every depletion-
     /// observation path (the `salvage.depleted` event and a location re-fetch that

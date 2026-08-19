@@ -53,7 +53,10 @@ enum OperationRetention {
         do {
             let deleted = try await database.write { db in
                 let doomed = try Operation
-                    .where { !$0.status.in(OperationStatus.openCases) && $0.startedAt < cutoff }
+                    .where {
+                        !$0.status.in(OperationStatus.openCases)
+                            && $0.startedAt < Date.FastISO8601Representation(queryOutput: cutoff)
+                    }
                     .fetchAll(db)
                     .map(\.id)
                 guard !doomed.isEmpty else { return 0 }

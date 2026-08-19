@@ -29,9 +29,9 @@ public struct Star: Identifiable, Equatable, Sendable {
     public var explored: Bool
     public var hasLife: Bool?
     public var entryPoint: String?
-    public var createdAt: Date
-    public var firstVisitedAt: Date?
-    public var fullyScannedAt: Date?
+    @Column(as: Date.FastISO8601Representation.self) public var createdAt: Date
+    @Column(as: Date.FastISO8601Representation?.self) public var firstVisitedAt: Date?
+    @Column(as: Date.FastISO8601Representation?.self) public var fullyScannedAt: Date?
     public var region: String?
     public var hasHub: Bool
 

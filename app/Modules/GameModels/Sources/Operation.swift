@@ -33,12 +33,12 @@ public struct Operation: Identifiable, Equatable, Sendable {
     /// Which writer last touched this row, stored as its `rawValue` in a `TEXT`
     /// column.
     public var source: OperationSource
-    public var startedAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var startedAt: Date
     /// When the action completes; nil for enqueued ops with no deadline yet.
     /// Drives the Phase-4 deadline scheduler and the progress bar.
-    public var completesAt: Date?
+    @Column(as: Date.FastISO8601Representation?.self) public var completesAt: Date?
     /// Freshness — when a writer last confirmed this row against the server.
-    public var lastConfirmedAt: Date
+    @Column(as: Date.FastISO8601Representation.self) public var lastConfirmedAt: Date
     /// Command params and result (e.g. travel `destination`, print
     /// `new_device_code`), kept loosely typed since they vary by kind.
     @Column(as: JSONValue.JSONRepresentation.self) public var detail: JSONValue
