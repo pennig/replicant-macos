@@ -141,21 +141,6 @@ public struct RelayRun: MissionStepMachine {
 
     // MARK: - Fleet queries
 
-    /// A print-capable device at `carrier`'s OWN location, or nil. Co-location is
-    /// the whole composition — the clone materialises at the printer, and only a
-    /// carrier standing there can take it aboard. **The carrier is considered
-    /// last**: a HEAVEN vessel advertises `enqueue_print` too and must never
-    /// shadow a dedicated printer beside it.
-    static func hub(near carrier: Device, in world: WorldSnapshot) -> Device? {
-        guard let location = carrier.location else { return nil }
-        let printers = world.devices.values
-            .filter { $0.acceptsPrintJobs && $0.location == location }
-        return printers
-            .filter { $0.deviceCode != carrier.deviceCode }
-            .min { $0.deviceCode < $1.deviceCode }
-            ?? printers.min { $0.deviceCode < $1.deviceCode }
-    }
-
     /// The clone's device code, read off the completed `enqueue_print` operation.
     /// Detected by OPERATION RESULT, never by "a relay appeared near the hub" — a
     /// hub holding idle spares would have one of those read as this run's clone.
@@ -318,16 +303,15 @@ public struct RelayRun: MissionStepMachine {
             logger.notice("relay run \(directive.id, privacy: .public): claiming idle relay \(spare.deviceCode, privacy: .public) at \(location, privacy: .public) — no print needed")
             return .advanceStep(nextStep: Step.stowing.rawValue)
         }
-        guard let hub = Self.hub(near: carrier, in: world) else {
-            // Guessing at another location would be a fabrication.
-            logger.notice("relay run \(directive.id, privacy: .public): no print hub at \(carrier.location ?? "nowhere", privacy: .public)")
+        guard let depot = PrintJob.depot(for: directive, in: world) else {
+            logger.notice("relay run \(directive.id, privacy: .public): no depot stamped")
             return .stall(.unreachableDevice)
         }
-        // Last moment before a real resource spend, so the rows behind the stock
-        // reading get one authoritative read.
-        if world.now.timeIntervalSince(hub.updatedAt) > Self.hubFreshness {
-            return .refreshDevices(deviceCodes: [hub.deviceCode], thenStall: .unreachableDevice)
+        guard !PrintScheduler.benches(at: depot, in: world).isEmpty else {
+            logger.notice("relay run \(directive.id, privacy: .public): no print hub at \(depot, privacy: .public)")
+            return .stall(.unreachableDevice)
         }
+
         // A VETO sits BEFORE the command it vetoes; checking after would stall
         // about resources already committed. `.printStockShort` rather than nil
         // because this gates an irreversible spend, so a persistently-unreadable
@@ -336,17 +320,34 @@ public struct RelayRun: MissionStepMachine {
         if reserveFloor != nil, rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.acquire.rawValue, thenStall: .printStockShort)
         }
-        if let location = hub.location, rail.printStockIsShort(at: location, world) {
+        if rail.printStockIsShort(at: depot, world) {
             // The most safety-relevant veto here, so it names the condition that
             // fired. No flood risk — the stall halts the run.
-            let why = rail.printStockShortDiagnosis(at: location, world)
-            logger.notice("relay run \(directive.id, privacy: .public): print stock short at \(location, privacy: .public) — \(why, privacy: .public)")
+            let why = rail.printStockShortDiagnosis(at: depot, world)
+            logger.notice("relay run \(directive.id, privacy: .public): print stock short at \(depot, privacy: .public) — \(why, privacy: .public)")
             return .stall(.printStockShort)
         }
+
+        if PrintJob(depot: depot).stillPrinting(
+            StepContext(directive: directive, world: world, step: directive.step)
+        ) { return .wait }
+
+        let job = PrintOrder(
+            deviceType: Self.relayDeviceType, owner: directive.id,
+            onRailShort: .stall(.printStockShort)
+        )
+        guard let chosen = PrintScheduler.choose(job, at: depot, in: world) else { return .wait }
+
+        // Last moment before a real resource spend, so the rows behind the fleet
+        // read get one authoritative confirmation.
+        if PrintJob.fleetEvidenceIsStale(directive, at: depot, in: world) {
+            return .refreshDevicesInSystem(designation: depot, thenStall: .unreachableDevice)
+        }
+
         // `enqueue_print` takes a device type and nothing else. The hub's queue is
         // shared and never leased, so this simply queues behind whatever is in it.
         return .dispatch(
-            kind: .print, deviceCode: hub.deviceCode,
+            kind: .print, deviceCode: chosen.device.deviceCode,
             params: CommandParams(deviceType: Self.relayDeviceType),
             nextStep: Step.printing.rawValue
         )

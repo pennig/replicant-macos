@@ -164,6 +164,128 @@ private func running(
     )
 }
 
+// MARK: - Acquire, scheduler fixtures
+
+/// Where the scheduler-based tests anchor the theatre — distinct from
+/// `hubLocation`, so nothing here can pass by coincidentally reusing it.
+private let depot = "DEPOT-BELT-1"
+private let elsewhere = "ELSEWHERE-BELT-1"
+
+/// A print-capable device at `location` (default `depot`), ready to take an
+/// order. `printing` seeds a `printing` block, as a bench mid-job reports one.
+private func bench(
+    _ code: String, location: String? = depot, features: [String] = [], printing: String? = nil
+) -> Device {
+    var device = device(
+        code, type: "autofactory", location: location, features: features,
+        availableCommands: ["enqueue_print"]
+    )
+    if let printing {
+        device.detail = .object(["printing": .object(["device_type": .string(printing)])])
+    }
+    return device
+}
+
+/// An open print op on `entity`, owned by `owner` — nil reads as no owner.
+private func op(on entity: String, owner: String?, deviceType: String? = nil) -> GameModels.Operation {
+    var params: [String: JSONValue] = [:]
+    if let deviceType { params["device_type"] = .string(deviceType) }
+    return GameModels.Operation(
+        id: "OP-\(entity)", entityCode: entity, kind: OperationKind.print.rawValue,
+        status: .active, source: .poll, startedAt: fixtureNow, completesAt: nil,
+        lastConfirmedAt: fixtureNow, detail: .object(["params": .object(params)]), directiveID: owner
+    )
+}
+
+/// A world for the scheduler tail: `devices`, plus a default carrier at
+/// `depot` (overridden when a test's own device shares its code), and an
+/// abundant fresh footprint at every location a device stands.
+private func snapshot(_ devices: [Device], open: [String: GameModels.Operation] = [:]) -> WorldSnapshot {
+    let locations = Set(devices.compactMap(\.location)).union([depot])
+    let footprints = Dictionary(uniqueKeysWithValues: locations.map { ($0, footprint($0, resources: 999_999)) })
+    return world(
+        devices: [device("C1", location: depot)] + devices,
+        openOperations: open, footprints: footprints
+    )
+}
+
+/// A running Relay Run at `Step.acquire`, its theatre stamped at `depot`.
+private func acquiring(carrier: String = "C1", depot: String = depot, id: String = "D1") -> Directive {
+    Directive(
+        id: id, kind: .relayRun, status: .running, deviceCode: carrier,
+        controllerCode: nil, roamCentre: nil, fleetTag: nil,
+        sourceRelayCode: nil, targets: ["VEGA"], targetIndex: 0,
+        step: RelayRun.Step.acquire.rawValue, stepStartedAt: Date(timeIntervalSince1970: 900),
+        returnToOrigin: false, originDesignation: nil, attentionReason: nil,
+        createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0),
+        theatreDepot: depot
+    )
+}
+
+// MARK: - Acquire, adopts the scheduler
+
+@Suite("Relay Run — acquire adopts the scheduler")
+struct RelayRunAcquireSchedulerTests {
+    /// C5. `hub(near:in:)` anchored on `carrier.location` — a device location,
+    /// which `PrintJob.swift:20-21` warns against: a hub that unfurls elsewhere
+    /// must not drag the run with it.
+    @Test("acquire prints at the theatre depot, not where the carrier stands")
+    func acquirePrintsAtTheDepot() {
+        let carrier = device("C1", location: elsewhere)
+        let atDepot = bench("B1", location: depot)
+        let world = snapshot([carrier, atDepot, bench("B9", location: elsewhere)])
+
+        guard case let .dispatch(_, deviceCode, _, _) =
+            RelayRun().nextAction(directive: acquiring(carrier: "C1", depot: depot), world: world)
+        else { return #expect(Bool(false), "expected a dispatch") }
+        #expect(deviceCode == "B1")
+    }
+
+    /// C6. `hub` preferred "anything but our own carrier", then lowest code —
+    /// never a free bench, and a carrier hull was a legal pick.
+    @Test("acquire skips a busy bench and a carrier hull")
+    func acquireSkipsBusyAndHulls() {
+        let world = snapshot(
+            [
+                bench("B1", printing: "mining_drone"),
+                bench("B2", features: ["cradle", "surge"]),
+                bench("B3")
+            ],
+            open: ["B1": op(on: "B1", owner: "OTHER")]
+        )
+
+        guard case let .dispatch(_, deviceCode, _, _) =
+            RelayRun().nextAction(directive: acquiring(), world: world)
+        else { return #expect(Bool(false), "expected a dispatch") }
+        #expect(deviceCode == "B3")
+    }
+
+    /// C7. `acquire` had no open-op guard at all — alone among the five sites.
+    @Test("acquire does not order twice while its own print is open")
+    func acquireDoesNotOrderTwice() {
+        let world = snapshot(
+            [bench("B1", printing: "ftl_relay")],
+            open: ["B1": op(on: "B1", owner: "R-1", deviceType: "ftl_relay")]
+        )
+
+        #expect(RelayRun().nextAction(directive: acquiring(id: "R-1"), world: world) == .wait)
+    }
+
+    /// C7 isolated from C6: a FREE bench (B2) stands ready, so only the
+    /// owner-scoped guard, not the busy-bench skip, can be stopping this.
+    @Test("acquire does not order at a free bench while its own print is open elsewhere")
+    func acquireDoesNotDoubleOrderAtAFreeBench() {
+        let world = snapshot(
+            [bench("B1", printing: "ftl_relay"), bench("B2")],
+            open: ["B1": op(on: "B1", owner: "R-1", deviceType: "ftl_relay")]
+        )
+
+        #expect(
+            RelayRun().nextAction(directive: acquiring(carrier: "B1", id: "R-1"), world: world) == .wait
+        )
+    }
+}
+
 // MARK: - Registration
 
 @Suite("Relay Run — registration")
@@ -450,14 +572,19 @@ struct RelayRunAcquireTests {
         }
     }
 
-    /// A positive stock finding is only worth as much as the row behind it. A
-    /// hub row nobody has looked at in a while buys one authoritative read
-    /// first, carrying a stall so a read that keeps failing surfaces instead of
-    /// re-firing forever.
-    @Test func refreshesAStaleHubRowBeforePrinting() {
-        let stale = world(devices: [carrier(), hub(updatedAt: fixtureNow.addingTimeInterval(-600))])
+    /// A positive stock finding is only worth as much as the fleet evidence
+    /// behind it. Rows unread since the step began buy one authoritative read,
+    /// carrying a stall so a read that keeps failing surfaces, not loops.
+    @Test func refreshesStaleFleetEvidenceBeforePrinting() {
+        let stale = world(
+            devices: [
+                carrier(updatedAt: fixtureNow.addingTimeInterval(-600)),
+                hub(updatedAt: fixtureNow.addingTimeInterval(-600)),
+            ],
+            footprints: [hubLocation: footprint(hubLocation, resources: 999_999)]
+        )
         #expect(RelayRun().nextAction(directive: running(), world: stale)
-                == .refreshDevices(deviceCodes: ["AF1"], thenStall: .unreachableDevice))
+                == .refreshDevicesInSystem(designation: hubLocation, thenStall: .unreachableDevice))
     }
 
     /// A relay already aboard the carrier is a relay this run does not have to

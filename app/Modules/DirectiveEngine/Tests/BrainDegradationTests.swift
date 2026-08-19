@@ -343,21 +343,11 @@ struct BrainReserveRailDegradationTests {
         )
         #expect(resolutions.cancelled.value.isEmpty, "a resource shortage is not a reason to cancel a run")
 
-        // 3. NO BUDGET BURN. Three authoritative reads and two census refreshes
-        //    for fifty virtual minutes; a rail re-judging per tick shows six
-        //    hundred of each. LIST equalities over the WHOLE run, not ceilings, so
-        //    the ~450 escalated ticks at the tail are pinned to zero too — that
-        //    tail is the proof the cost tracks the retry budget, not the clock.
-        //    The reads are one carrier confirm at launch plus one hub read for the
-        //    2nd and 3rd retries; the 1st fires the moment the run stalls, inside
-        //    both freshness windows, so it re-judges the rows it has for free.
+        // 3. NO BUDGET BURN over fifty virtual minutes. The fleet-evidence
+        //    re-read now sits AFTER the stock veto, so a short stock never reaches it.
         #expect(
-            reads.value == [ConfirmRead(deviceCode: "VDEG1", isHigh: true)]
-                + Array(
-                    repeating: ConfirmRead(deviceCode: "HUBDEG", isHigh: true),
-                    count: Brain.retryBudget - 1
-                ),
-            "one confirm-read for the launch, one hub read per SPACED retry — and nothing per-tick"
+            reads.value == [ConfirmRead(deviceCode: "VDEG1", isHigh: true)],
+            "one confirm-read for the launch, and nothing per retry once the rail vetoes first"
         )
         #expect(
             censusReads.value == Brain.retryBudget - 1,

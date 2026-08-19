@@ -24,11 +24,19 @@ The second hand-rolled site, and the largest behaviour change in Stage 3.
 
 ---
 
-- [ ] **Step 1:** Write the three failing tests — depot anchor, free-bench-and-no-hulls, and no-double-order.
-- [ ] **Step 2:** Confirm all three fail.
-- [ ] **Step 3:** Rewrite `acquire`'s tail. Keep the rail stall.
-- [ ] **Step 4:** Delete `hub(near:in:)` (`:149-157`). Confirm with LSP, then with a build — an empty `findReferences` is a cold index, not proof.
-- [ ] **Step 5:** All six targets green. `RelayRunTests` is the largest suite in the module; read failures individually.
-- [ ] **Step 6:** Record the borrow count; `check-comments.sh`; commit.
+- [x] **Step 1:** Write the three failing tests — depot anchor, free-bench-and-no-hulls, and no-double-order.
+- [x] **Step 2:** Confirm all three fail.
+- [x] **Step 3:** Rewrite `acquire`'s tail. Keep the rail stall.
+- [x] **Step 4:** Delete `hub(near:in:)` (`:149-157`). Confirm with LSP, then with a build — an empty `findReferences` is a cold index, not proof.
+- [x] **Step 5:** All six targets green. `RelayRunTests` is the largest suite in the module; read failures individually.
+- [x] **Step 6:** Record the borrow count; `check-comments.sh`; commit.
 
 **Done when:** a carrier standing away from its theatre depot still prints at the depot, with a test.
+
+## Comments
+
+**C7's brief-literal test is vacuous alone.** `acquireDoesNotOrderTwice` (a single busy bench, our own print) still passes with the `stillPrinting` guard deleted, because `PrintScheduler.choose`'s busy-bench skip (C6) already produces `.wait` for a lone busy bench regardless of ownership. Added `acquireDoesNotDoubleOrderAtAFreeBench` (a busy bench holding our print PLUS a free bench) to isolate C7 — deleting `stillPrinting` alone reddens only that test, confirmed by mutation. `acquireDoesNotOrderTwice` stays, still real (it reddens against the pre-change `hub(near:)`, which had no busy check at all) but its coverage is of C6, not C7 specifically.
+
+**Three pre-existing tests needed rewriting**, all a direct consequence of moving the per-device hub-freshness gate to the depot-wide `PrintJob.fleetEvidenceIsStale` placed last, before the dispatch, per the brief: `RelayRunTests.refreshesAStaleHubRowBeforePrinting` (now `refreshesStaleFleetEvidenceBeforePrinting`), `DirectiveEngineTests.RelayRunEngineTests.aStaleHubRowThenAStaleCensusReachesTheReserveRail`, and `BrainDegradationTests.theReserveRailVetoesThePrintAndTheBrainIdlesInsteadOfThrashing`. The last one is a genuine, favourable behaviour change beyond C5/C6/C7: a persistently short-stock world no longer re-reads the hub device row on every spaced retry, since the fleet-evidence gate sits after the stock veto and is never reached while stock stays short — reads dropped from 3 to 1 over the fifty-virtual-minute run, with the census-read count unaffected.
+
+Borrow count (`grep -c "SalvageRun\.\|RelayRun\.\|RestockRun\.\|MineFleetPrint\.\|HaulRun\.\|EventRun\.\|SurveyRun\.\|MineRun\." *.swift | grep -v ":0$"` in `DirectiveEngine/Sources`), measured after this task's commit: **71** (Brain.swift 31, RelayRun.swift 11, RestockRun.swift 7, EventCourierPrint.swift 5, MineRun.swift 4, BrainReport.swift 3, SalvageRun.swift 2, one each in DirectiveEngine.swift, DirectiveExecutor.swift, EventRun.swift, HaulRun.swift, MineFleetPrint.swift, MineRecipe.swift, SurveyRun.swift, WorldSnapshot.swift) — unchanged from the 71 recorded after ticket 35 (task 4). `hub(near:in:)`'s deletion removed a borrow-free helper, so it does not move this number.

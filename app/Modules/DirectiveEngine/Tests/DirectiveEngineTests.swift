@@ -2634,49 +2634,33 @@ struct RelayRunEngineTests {
         Directive(
             id: "D1", kind: .relayRun, status: .running, deviceCode: "V1",
             targets: ["VEGA"], targetIndex: 0, step: "acquire",
-            stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
+            stepStartedAt: Self.now.addingTimeInterval(-300), returnToOrigin: false,
             originDesignation: nil, attentionReason: nil,
             createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
         )
     }
 
-    /// **The regression test for the round-3 wrong-stall defect.**
-    ///
-    /// The exact ordinary sequence `acquire` walks on a healthy run whose local
-    /// rows have simply gone quiet:
-    ///
-    /// 1. the hub DEVICE row is older than `hubFreshness`, so the machine asks
-    ///    for `.refreshDevices([AF1], thenStall: .unreachableDevice)`;
-    /// 2. that read succeeds and the hub row goes fresh — nothing is
-    ///    unreachable;
-    /// 3. the re-ask gets past the device gate and finds the stockpile CENSUS
-    ///    stale (empty here), so the machine asks for
-    ///    `.refreshFootprint(thenStall: .printStockShort)` — a different
-    ///    question, not a repeat of the one just answered.
-    ///
-    /// The engine must pay for that second question and let the reserve rail
-    /// run. Before this fix it collapsed step 3 onto step 1's carried reason and
-    /// stalled `.unreachableDevice` — halting the run, blaming a device that
-    /// was fine, and never reaching the rail at all; a human Retry re-entered
-    /// the same state and stalled again until the retry budget escalated.
+    /// The regression test for the round-3 wrong-stall defect, re-pointed at
+    /// `PrintScheduler`'s gate order: the missing census fires first, the
+    /// stale fleet evidence second — never collapsed onto the first reason.
     @Test func aStaleHubRowThenAStaleCensusReachesTheReserveRail() async throws {
         let database = try GameDatabase.bootstrap()
         let now = Self.now
         try await database.write { db in
             try Directive.insert { relayDirective() }.execute(db)
-            // The carrier is fresh; only the HUB row has gone stale, which is
-            // what makes step 1 fire and step 3 reachable.
-            try Device.insert { device("V1", type: "heaven_vessel", updatedAt: now) }.execute(db)
+            // Both rows predate `stepStartedAt` — the fleet evidence the LAST
+            // gate reads is stale, not merely old in wall-clock terms.
+            try Device.insert { device("V1", type: "heaven_vessel", updatedAt: now.addingTimeInterval(-600)) }.execute(db)
             try Device.insert {
                 device(
                     "AF1", type: "autofactory", availableCommands: ["enqueue_print"],
                     updatedAt: now.addingTimeInterval(-600)
                 )
             }.execute(db)
-            // No `LocationFootprint` rows at all — the census is stale by
-            // `PrintRail.footprintCensusIsStale`'s "never read" branch.
+            // No `LocationFootprint` rows at all — stale by the "never read"
+            // branch, and this gate now runs BEFORE the fleet-evidence one.
         }
-        let deviceReads = LockIsolated<[String]>([])
+        let systemReads = LockIsolated<[String]>([])
         let footprintReads = LockIsolated(0)
         let dispatched = LockIsolated<[OperationKind]>([])
 
@@ -2684,16 +2668,14 @@ struct RelayRunEngineTests {
             $0.defaultDatabase = database
             $0.date = .constant(now)
             $0.uuid = .incrementing
-            $0.deviceRefresher.refresh = { code, _ in
-                deviceReads.withValue { $0.append(code) }
-                guard code == "AF1" else { return nil }
-                // A genuinely successful authoritative read: the row lands
-                // fresh, so the device gate is satisfied on the re-ask.
-                let fresh = self.device(
-                    "AF1", type: "autofactory", availableCommands: ["enqueue_print"], updatedAt: now
-                )
-                try? await database.write { db in try Device.upsert { fresh }.execute(db) }
-                return fresh
+            $0.devicesClient.fetchAtLocation = { designation in
+                systemReads.withValue { $0.append(designation) }
+                // A genuinely successful authoritative read: both rows land
+                // fresh, so the fleet-evidence gate is satisfied on the re-ask.
+                return [
+                    self.device("V1", type: "heaven_vessel", updatedAt: now),
+                    self.device("AF1", type: "autofactory", availableCommands: ["enqueue_print"], updatedAt: now),
+                ]
             }
             $0.locationsClient.footprint = {
                 footprintReads.withValue { $0 += 1 }
@@ -2714,8 +2696,8 @@ struct RelayRunEngineTests {
             await core.evaluateOnce(directiveID: "D1")
         }
 
-        #expect(deviceReads.value == ["AF1"], "the stale hub row is what step 1 reads")
-        #expect(footprintReads.value == 1, "the census refresh step 3 asked for must actually be paid for")
+        #expect(footprintReads.value == 1, "the missing census is what the first gate reads")
+        #expect(systemReads.value == [Self.hubLocation], "the stale fleet evidence the last gate asked for must actually be paid for")
         #expect(dispatched.value == [.print], "the reserve rail ran and permitted the print")
 
         let row = try await database.read { db in
