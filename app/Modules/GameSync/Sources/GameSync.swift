@@ -337,10 +337,8 @@ extension GameSync {
 
     /// The stowage claim a device event makes, or nil when it makes none.
     ///
-    /// Only these two events speak to containment, and each names the far end in
-    /// its payload (docs event catalogue, checked 2026-07-26). `device.deployed`
-    /// needs no payload field at all — leaving the carrier IS the claim — so a
-    /// renamed `deployed_from_device_code` can't silently break the clear, while
+    /// Only these two events speak to containment. `device.deployed` needs no
+    /// payload field at all — leaving the carrier IS the claim — while
     /// `device.stowed` without a readable carrier code is treated as no claim
     /// rather than guessed at: the staleness mark still owns that repair.
     ///
