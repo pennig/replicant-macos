@@ -145,15 +145,16 @@ short, until the per-type stockpile record (ticket 06) lands and
 `printStockIsShort` can call `printPermitted(hubStock:)` directly instead of
 this proxy.
 
-## Arming `RelayRun`
+## Arming the print rail
 
-`RelayRun.reserveFloor: Int?` defaults to `BrainCeiling.aggregateSpendFloor`
-instead of `nil` — the rail is live in production. The injection seam (`Int?`)
+`PrintRail.reserveFloor: Int?` — and the `reserveFloor` each of the six print
+sites injects into it — defaults to `BrainCeiling.aggregateSpendFloor`
+instead of `nil`, so the rail is live in production. The injection seam (`Int?`)
 is unchanged, so an explicit `nil` still disarms the rail entirely for tests
 that need to isolate a different code path — see
 `unarmedRailNeverVetoesEvenOnUnknownStock`.
 
-`RelayRun.printStockIsShort` fails closed on a MISSING footprint row for the
+`PrintRail.printStockIsShort` fails closed on a MISSING footprint row for the
 hub's location, once armed (previously: absence read as "not short" and
 permitted the print) — but **in practice `acquire` no longer reaches that
 branch as silence, only as positive evidence**: it gates on
@@ -315,6 +316,6 @@ floor <f>` on all three of `printStockIsShort`'s branches, which is false on two
 of them — most damagingly on the stale-row branch, where it printed an abundant
 reading (999,999) as though it sat beneath the floor (35,078), pointing an
 operator at an imaginary shortage instead of at a census that had stopped
-listing the hub. `RelayRun.printStockShortDiagnosis(at:_:)` now names the
+listing the hub. `PrintRail.printStockShortDiagnosis(at:_:)` now names the
 condition that actually fired, in the same branch order `printStockIsShort`
 tests them.

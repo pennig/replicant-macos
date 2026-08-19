@@ -53,7 +53,7 @@ public struct BrainLimits: Equatable, Sendable {
     public let hubStock: Int?
     /// WHEN that reading was taken. It must be carried beside the figure, never
     /// dropped: a reading's AGE is one of the three conditions that veto a print
-    /// (`RelayRun.printStockIsShort`), so an old row sitting well above the
+    /// (`PrintRail.printStockIsShort`), so an old row sitting well above the
     /// floor reads as comfortable headroom while the rail refuses every print.
     /// See `hubStockStanding(at:)`.
     public let hubStockFetchedAt: Date?
@@ -94,7 +94,7 @@ public struct BrainLimits: Equatable, Sendable {
     /// `now` — ALL THREE of the rail's veto conditions, not just the two a bare
     /// figure can express.
     ///
-    /// A mirror of `RelayRun.printStockIsShort`, in the same branch order and
+    /// A mirror of `PrintRail.printStockIsShort`, in the same branch order and
     /// against the same `RelayRun.hubFreshness` bound, so the why-view cannot
     /// report headroom on a reading the rail already refuses to believe. The two
     /// read different shapes — a `WorldSnapshot`'s footprint table against this
@@ -102,7 +102,7 @@ public struct BrainLimits: Equatable, Sendable {
     /// either branch order and `hubStockStandingAgreesWithTheRailItMirrors`
     /// fails.
     ///
-    /// Reports, never gates. `RelayRun` owns the actual veto.
+    /// Reports, never gates. `PrintRail` owns the actual veto.
     public func hubStockStanding(at now: Date) -> HubStockStanding {
         // `hubStock` and `hubStockFetchedAt` are set together or not at all —
         // both come from the same optional `LocationFootprint` — but the

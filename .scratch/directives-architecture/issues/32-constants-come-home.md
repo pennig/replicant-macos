@@ -127,3 +127,27 @@ the `323ae56` baseline: `DirectiveEngineTests` 1774/1774/0, `GameServicesTests` 
 `check-comments.sh` exit 1 on three files, every hit pre-existing and verified identical against
 `HEAD`'s version of each file. No behaviour changed; no existing assertion edited. Two `#expect`
 lines pinning the now-deleted `printDeadline` aliases were removed with them.
+
+### Review round
+
+Review verdict on `fc2f21f`/`7186bf2`/`eed6d95`/`4e4de67`: **Spec pass, Quality needs fixes**. Six
+fixes landed; full record in `.superpowers/sdd/plan-stage-2/task-13-fixround.md`.
+
+The two that mattered were coverage holes this ticket's own moves created or concentrated. Four
+constants it moved or re-rooted could be changed with the whole 1774-case target green — every
+reader writes its fixture RELATIVE to the constant — and `PrintRail.pollInterval` was the worst of
+them: the census bound six print sites gate an irreversible spend behind had zero value defenders,
+so a retune reddened only three tests about relays polling relay rows and the obvious repair would
+have hidden it. Both closed, and each pin proved by re-running the review's own mutation set and
+watching exactly the new pins go red at their own `file:line`.
+
+Also: `Tests/Steps/PrintRailTests.swift` created (`PrintRail` was the only `Steps/` type without a
+test file); sixteen doc pointers renamed off `RelayRun.printStockIsShort` /
+`footprintCensusIsStale` / `relayPollInterval` across ten `.swift` sites and six memory notes;
+`PrintRail.swift`'s four over-budget doc blocks trimmed to three lines each, now that
+`brain-relay-reserve-floor` names the right type to point at.
+
+All five targets green: `DirectiveEngineTests` 1782/1782/0 (226 suites + 1556 cases — 7 new pins,
+1 new suite), `GameServicesTests` 324/324/0, `GameSyncTests` 81/81/0, `GameModelsTests` 153/153/0,
+`DirectivesFeatureTests` 297/297/0. The borrow count is unchanged at 20 — this round added tests and
+renamed comments, and touched no cross-mission reference.

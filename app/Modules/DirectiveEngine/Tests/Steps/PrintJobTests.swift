@@ -148,11 +148,19 @@ struct PrintJobTests {
 
     // MARK: - The deadline
 
-    /// The engine's one 1800. Every print site reads it directly, so a wrong
-    /// value here would move every print deadline together and unseen.
-    @Test("the print deadline is the single root every print site reads")
+    /// The engine's one 1800. Every print site but `EventRun` reads it directly,
+    /// so a wrong value here would move every print deadline together and unseen.
+    @Test("the print deadline is the single root every print site but EventRun reads")
     func theDeadlineIsTheOneRoot() {
         #expect(PrintJob.deadline == 30 * 60)
+    }
+
+    /// `EventRun` keeps its own name for the variable part it adds, so this is
+    /// the one surviving alias. Its four readers all write `printSlack + n`, so
+    /// nothing else can notice it drifting off the root.
+    @Test("EventRun's print slack is the same root under another name")
+    func printSlackIsTheRootUnderAnotherName() {
+        #expect(EventRun.printSlack == PrintJob.deadline)
     }
 
     // MARK: - The bench

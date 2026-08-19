@@ -263,7 +263,8 @@ source; only the numbers' justification is here. Sibling of [[brain-tunable-cali
   `LocationsIngestion`'s passive rescan, not a read this mission controls.
 
 Two smaller floors need no note because their consequence is stated in source and is not arithmetic:
-`arrivalReadInterval` (30 s) and `relayPollInterval` (60 s) exist only because their steps are
-evaluated on the engine's 5 s tick, so without a floor each would read every tick;
+the arrival read floor (30 s, now `TravelTo.arrivalReadInterval`) and the relay poll floor (60 s,
+now `PrintRail.pollInterval`, read through `RelayRun.pollInterval`) exist only because their steps
+are evaluated on the engine's 5 s tick, so without a floor each would read every tick;
 `systemRefreshAttempts` / `bodyProgressAttempts` are both 1 because the read they bound is
 authoritative, so a second one answers nothing a first did not.

@@ -37,7 +37,7 @@ cannot drift apart.
 
 ## Restock buys its own census read, and it HAS to
 
-`RestockRun.stocking` gates on `RelayRun.footprintCensusIsStale` — the
+`RestockRun.stocking` gates on `PrintRail.footprintCensusIsStale` — the
 table-wide `LocationFootprint.fetchedAt` gate, bound at `pollInterval` (60s).
 
 The first cut WAITED there, reasoning that no carrier is standing by for the
@@ -95,7 +95,7 @@ Two other limits bind first, in this order:
 1. **Demand** — `desiredIdle = min(idleCap, directive.targets.count)`, and the
    brain writes `targets` from live grow demand, so on today's world the target
    count is the binding term and the cap is slack.
-2. **The reserve floor** — `RelayRun.printStockIsShort` vetoes against
+2. **The reserve floor** — `PrintRail.printStockIsShort` vetoes against
    `BrainCeiling.aggregateSpendFloor` (35,078, ~47% of live hub stock), which
    fires long before 3,700 units of parked stock is the fleet's problem.
 

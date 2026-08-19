@@ -66,6 +66,15 @@ struct TravelToTests {
         deviceCode: "V1", destination: "SOL", arrivalTest: .system, confirmStep: nil
     )
 
+    /// The two arrival roots. Every reader — five mission test sites and
+    /// `SalvageRun`'s recall ladder — writes its fixture RELATIVE to these, so
+    /// without this nothing in the engine notices either value change.
+    @Test("the arrival bounds are the roots the missions were repointed onto")
+    func theArrivalBoundsAreTheRoots() {
+        #expect(TravelTo.arrivalConfirmDeadline == 5 * 60)
+        #expect(TravelTo.arrivalReadInterval == 30)
+    }
+
     /// A location is a SITE, not a system: `SOL-3` is in `SOL`.
     @Test("the system test accepts any site in the destination system")
     func systemTestAcceptsASiteInTheSystem() {

@@ -1445,6 +1445,13 @@ struct RelayRunConfirmRelayTests {
                 == .refreshDevices(deviceCodes: ["RLY1"], thenStall: nil))
     }
 
+    /// The deadline's own value. Its only other reader states its fixture as
+    /// `-RelayRun.activationDeadline - 1`, so it tracks whatever the constant
+    /// says and cannot notice a retune.
+    @Test func theActivationDeadlineIsTenMinutes() {
+        #expect(RelayRun.activationDeadline == 10 * 60)
+    }
+
     @Test func confirmRelayStallsAtTheActivationDeadline() {
         let snapshot = world(devices: [carrier(location: "VEGA-1-L4"), relay(location: "VEGA-1-L4")])
         let overdue = running(

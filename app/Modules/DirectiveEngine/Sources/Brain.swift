@@ -727,7 +727,7 @@ struct Brain: Sendable {
     }
 
     /// The rails as they stand at this tick. Reports, never gates — the budget is
-    /// enforced by `CommandGovernor` and the floor by `RelayRun.printStockIsShort`.
+    /// enforced by `CommandGovernor` and the floor by `PrintRail.printStockIsShort`.
     /// Read through `@Dependency(\.gameClient)` so this is the figure every dispatch
     /// throttles on, not a second copy.
     private static func limits(hubFootprint: LocationFootprint?) async -> BrainLimits {

@@ -28,10 +28,11 @@ table, no new poller.
 
 **The plan said to delete `SalvageRun`'s relay helpers. That would have broken
 `tendMesh`.** `RelayRun` consumes six of them — `relay(aboard:)`,
-`deployedRelay(near:)`, `lagrangePoint`, `relayDeviceType`, `relayPollInterval`,
-`activationDeadline`. The steps came out; the queries stayed. They now belong to
-`RelayRun` in everything but file location, and moving them is a clean follow-up
-that should not ride along with a behavioural change.
+`deployedRelay(near:)`, `lagrangePoint`, `relayDeviceType`, and two constants.
+The steps came out; the queries stayed. The four queries and `relayDeviceType`
+still belong to `RelayRun` in everything but file location; the two constants
+have since moved — `activationDeadline` to `RelayRun`, the 60 s relay poll floor
+to `PrintRail.pollInterval`.
 
 **The planned planner regression was vacuous as written.** The plan proposed "a
 rich unmeshed system loses to a poor meshed one" — but the shipped `RankKey`
