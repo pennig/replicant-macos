@@ -141,6 +141,62 @@ struct WorldSnapshotTests {
         #expect(world.system("NOPE") == nil)
     }
 
+    /// Only the CURRENT target's blob is decoded, never a later one on the
+    /// tour. A roaming run's target list grows without bound, and every reader
+    /// of `systems` asks about `currentTarget`.
+    @Test func decodesOnlyTheCurrentTargetsBlob() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for designation in ["SOL", "VEGA", "RIGEL"] {
+                let row = try SystemDetail(
+                    system: StarSystem(designation: designation, planetsScanned: 1, planetsTotal: 4),
+                    hydratedAt: Date(timeIntervalSince1970: 0)
+                )
+                try SystemDetail.upsert { row }.execute(db)
+            }
+        }
+
+        var touring = directive(targets: ["SOL", "VEGA", "RIGEL"])
+        touring.targetIndex = 1
+
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: touring
+        )
+
+        #expect(world.system("VEGA")?.planetsTotal == 4)
+        #expect(world.system("SOL") == nil)
+        #expect(world.system("RIGEL") == nil)
+        #expect(world.systems.count == 1)
+    }
+
+    /// The origin and the vessel's current system are decoded alongside the
+    /// current target — the return leg and the arrival check read them.
+    @Test func decodesTheOriginAndTheVesselsOwnSystem() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for designation in ["SOL", "VEGA", "RIGEL"] {
+                let row = try SystemDetail(
+                    system: StarSystem(designation: designation, planetsScanned: 1, planetsTotal: 4),
+                    hydratedAt: Date(timeIntervalSince1970: 0)
+                )
+                try SystemDetail.upsert { row }.execute(db)
+            }
+            try Device.upsert { device("VES1") }.execute(db)
+        }
+
+        var touring = directive(targets: ["VEGA", "ALTAIR"])
+        touring.originDesignation = "RIGEL"
+
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: touring
+        )
+
+        // `device(_:)` places VES1 at SOL-3, so SOL is the vessel's system.
+        #expect(world.system("VEGA") != nil)
+        #expect(world.system("RIGEL") != nil)
+        #expect(world.system("SOL") != nil)
+    }
+
     /// A system the directive doesn't name isn't decoded — the catalogue runs
     /// to thousands of bodies and decoding all of it per tick would be real cost.
     @Test func doesNotDecodeUnrelatedSystems() async throws {

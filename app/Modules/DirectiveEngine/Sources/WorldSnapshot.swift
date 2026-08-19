@@ -44,10 +44,9 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// Never fold these into `openOperations`: a mission asking "is this device
     /// busy?" reads that lookup, and a closed op inside it reads as in-flight.
     public let dispatchedOperations: [String: GameModels.Operation]
-    /// Cached `StarSystem` blobs for the systems this directive cares about, by
-    /// star designation. Only the directive's own targets (plus its origin and
-    /// the vessel's current system) are decoded: decoding the whole catalogue
-    /// costs real time at thousands of bodies.
+    /// Cached `StarSystem` blobs, by star designation. Only the CURRENT target,
+    /// the origin and the vessel's own system are decoded — never the rest of
+    /// the tour, whose blobs no reader asks for and whose count is unbounded.
     public let systems: [String: StarSystem]
     /// Stored assay totals for the salvage sites in this directive's systems,
     /// keyed by SITE designation (`TOSLIT-3-2-SAL-1`) — the shape
@@ -225,9 +224,15 @@ public struct WorldSnapshot: Equatable, Sendable {
         now: Date,
         directive: Directive
     ) async throws -> WorldSnapshot {
-        // The systems worth decoding: every target, the origin, and whatever
-        // system the vessel is in right now (the arrival check needs it).
+        // Assays are scoped to every target — one small row each, and a roam
+        // planner ranks across the whole tour.
         let baseWanted = Set(directive.targets)
+            .union(directive.originDesignation.map { [$0] } ?? [])
+        // Blobs are scoped to the CURRENT target only. Every reader of
+        // `systems` asks about `directive.currentTarget`, never a later one,
+        // and a roaming run's target list grows without bound — at a few
+        // hundred targets, decoding one blob each dominated the whole read.
+        let baseDecoded = Set(directive.currentTarget.map { [$0] } ?? [])
             .union(directive.originDesignation.map { [$0] } ?? [])
         let directiveID = directive.id
         let vesselCode = directive.deviceCode
@@ -277,12 +282,15 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .fetchAll(db)
 
             var wanted = baseWanted
+            var decoded = baseDecoded
             if let vessel = devices.first(where: { $0.deviceCode == vesselCode }),
                let location = vessel.location {
+                // The arrival check reads the system the vessel is in now.
                 wanted.insert(SiteAssay.system(of: location))
+                decoded.insert(SiteAssay.system(of: location))
             }
             let details = try SystemDetail
-                .where { $0.designation.in(Array(wanted)) }
+                .where { $0.designation.in(Array(decoded)) }
                 .fetchAll(db)
             let systems = details.reduce(into: [String: StarSystem]()) { systems, detail in
                 // A blob that fails to decode is treated as absent: the mission
