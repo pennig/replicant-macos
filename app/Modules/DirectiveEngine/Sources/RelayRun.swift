@@ -88,8 +88,9 @@ public struct RelayRun: MissionStepMachine {
     /// A `stow` is immediate server-side, so this only covers the confirm-read.
     public static let stowDeadline: TimeInterval = 5 * 60
 
-    /// How old the hub's row may be and still be believed.
-    public static let hubFreshness: TimeInterval = 5 * 60
+    /// How old the hub's row may be and still be believed. The print rail's
+    /// bound, so the hub-row read and the stock veto cannot drift apart.
+    public static let hubFreshness: TimeInterval = PrintRail.hubFreshness
 
     public static let reclaimDeadline: TimeInterval = stowDeadline
 
@@ -99,7 +100,7 @@ public struct RelayRun: MissionStepMachine {
     public static let reclaimFreshness: TimeInterval = hubFreshness
 
     /// Floor between confirm-reads while a poll step waits.
-    public static let pollInterval: TimeInterval = SalvageRun.relayPollInterval
+    public static let pollInterval: TimeInterval = PrintRail.pollInterval
 
     // MARK: - Entry
 
@@ -293,55 +294,6 @@ public struct RelayRun: MissionStepMachine {
         return SalvageRun.deployedRelay(near: carrier, in: world)
     }
 
-    /// Whether the stockpile census is too old to trust. **The whole
-    /// `LocationFootprint` table, never the hub row alone** — one request upserts
-    /// every location, so gating on the table's max turns "refreshed and still no
-    /// hub row" into positive evidence that falls through to a veto. A per-location
-    /// gate self-loops instead, re-requesting every tick forever.
-    func footprintCensusIsStale(_ world: WorldSnapshot) -> Bool {
-        guard let newest = world.footprints.values.map(\.fetchedAt).max() else { return true }
-        return world.now.timeIntervalSince(newest) > Self.pollInterval
-    }
-
-    /// Whether the reserve rail vetoes a print at `location`. **Fails CLOSED on
-    /// unreadable stock once armed** — a missing census row is evidence nobody told
-    /// us, not evidence the stock is fine, and a print is irreversible. A
-    /// present-but-old row is caught separately on `hubFreshness`, because the
-    /// table-wide gate proves the census refreshed SOMEWHERE, never that this
-    /// location did. Reads TOTAL holdings; the rail is specified per resource type.
-    func printStockIsShort(at location: String, _ world: WorldSnapshot) -> Bool {
-        guard let floor = reserveFloor else { return false }
-        guard let footprint = world.footprints[location] else { return true }
-        if world.now.timeIntervalSince(footprint.fetchedAt) > Self.hubFreshness { return true }
-        return footprint.resources < floor
-    }
-
-    /// WHICH of `printStockIsShort`'s three conditions vetoed a print at
-    /// `location` in `world`, for the one log line the stall emits — in the same
-    /// branch order that function tests them, so the two can only ever agree.
-    ///
-    /// A single "stock below floor" line would be FALSE on two of the three
-    /// branches: a missing census row has no reading to be below anything, and a
-    /// stale row's reading may sit comfortably ABOVE the floor and still veto on
-    /// its AGE alone — sending an operator after a shortage that does not exist
-    /// instead of at a census that stopped listing the hub.
-    func printStockShortDiagnosis(at location: String, _ world: WorldSnapshot) -> String {
-        let floorText = reserveFloor.map(String.init) ?? "unarmed"
-        guard let footprint = world.footprints[location] else {
-            return "no census row for it at all (floor \(floorText))"
-        }
-        // Unrounded, matching `printStockIsShort` — rounding first would disagree
-        // with it inside the half-second either side of the bound.
-        let age = world.now.timeIntervalSince(footprint.fetchedAt)
-        if age > Self.hubFreshness {
-            return """
-                its census row is \(Int(age.rounded()))s old, past the \(Int(Self.hubFreshness))s freshness bound \
-                — the reading it carries (\(footprint.resources)) is not trusted, whatever it says
-                """
-        }
-        return "stock \(footprint.resources) below floor \(floorText)"
-    }
-
     // MARK: - Acquire
 
     /// Where `directive`'s relay comes from, and the command that starts it coming.
@@ -379,13 +331,14 @@ public struct RelayRun: MissionStepMachine {
         // about resources already committed. `.printStockShort` rather than nil
         // because this gates an irreversible spend, so a persistently-unreadable
         // census must reach bounded-retry-then-escalate instead of retrying forever.
-        if reserveFloor != nil, footprintCensusIsStale(world) {
+        let rail = PrintRail(reserveFloor: reserveFloor)
+        if reserveFloor != nil, rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.acquire.rawValue, thenStall: .printStockShort)
         }
-        if let location = hub.location, printStockIsShort(at: location, world) {
+        if let location = hub.location, rail.printStockIsShort(at: location, world) {
             // The most safety-relevant veto here, so it names the condition that
             // fired. No flood risk — the stall halts the run.
-            let why = printStockShortDiagnosis(at: location, world)
+            let why = rail.printStockShortDiagnosis(at: location, world)
             logger.notice("relay run \(directive.id, privacy: .public): print stock short at \(location, privacy: .public) — \(why, privacy: .public)")
             return .stall(.printStockShort)
         }

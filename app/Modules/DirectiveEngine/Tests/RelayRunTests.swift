@@ -331,7 +331,7 @@ struct RelayRunAcquireTests {
     /// here (bypassing `nextAction` entirely) so that guarantee stays covered
     /// even though `acquire` no longer reaches it in practice.
     @Test func printStockIsShortFailsClosedOnAMissingFootprintDirectly() {
-        let armed = RelayRun(reserveFloor: 500)
+        let armed = PrintRail(reserveFloor: 500)
         #expect(armed.printStockIsShort(at: hubLocation, world(devices: [carrier(), hub()])))
     }
 
@@ -348,7 +348,7 @@ struct RelayRunAcquireTests {
     /// selection — the part that was wrong — is entirely in this function, and
     /// it shares its branch order with `printStockIsShort` by construction.
     @Test func theVetoLogNamesWhichConditionFired() {
-        let armed = RelayRun(reserveFloor: 500)
+        let armed = PrintRail(reserveFloor: 500)
 
         // Branch 1: no row at all — there is no reading to be "below" anything.
         let missing = armed.printStockShortDiagnosis(at: hubLocation, world(devices: [carrier(), hub()]))

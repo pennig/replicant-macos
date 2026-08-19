@@ -218,7 +218,7 @@ struct HubStockStandingTests {
             3600,
         ]
         let stocks: [Int?] = [nil, 0, Self.floor - 1, Self.floor, Self.floor + 1, 500_000]
-        let run = RelayRun()
+        let run = PrintRail()
 
         for stock in stocks {
             for age in ages {

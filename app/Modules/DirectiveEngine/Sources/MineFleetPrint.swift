@@ -85,9 +85,9 @@ public struct MineFleetPrint: MissionStepMachine {
         // throttle — owner-scoped, so a co-tenant's job here is never ours to wait on.
         if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
 
-        // The rail, read through `RelayRun`'s own veto so the two cannot drift.
+        // The rail, held once in `PrintRail` so no print site can drift from it.
         // Nothing polls `LocationFootprint`, so a stale census buys its own read.
-        let rail = RelayRun(reserveFloor: reserveFloor)
+        let rail = PrintRail(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }

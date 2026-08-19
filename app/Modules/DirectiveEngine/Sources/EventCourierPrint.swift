@@ -81,7 +81,7 @@ public struct EventCourierPrint: MissionStepMachine {
             return .stall(.unreachableDevice)
         }
         if world.openOperation(for: printer.deviceCode, owner: directive.id) != nil { return .wait }
-        let rail = RelayRun(reserveFloor: reserveFloor)
+        let rail = PrintRail(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.printing.rawValue, thenStall: nil)
         }

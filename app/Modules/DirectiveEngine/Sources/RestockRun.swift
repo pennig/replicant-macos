@@ -98,7 +98,7 @@ public struct RestockRun: MissionStepMachine {
         // throttle — owner-scoped, so a co-tenant's job here is never ours to wait on.
         if world.openOperation(for: hub.deviceCode, owner: directive.id) != nil { return .wait }
 
-        // The rail, read through `RelayRun`'s own veto so the two cannot drift.
+        // The rail, held once in `PrintRail` so no print site can drift from it.
         //
         // A stale census buys a refresh rather than waiting it out, because
         // **nothing polls `LocationFootprint`** — `refreshFootprint()`'s only
@@ -113,7 +113,7 @@ public struct RestockRun: MissionStepMachine {
         // through to the fail-closed `printStockIsShort`. `thenStall: nil`
         // because restock must never escalate a top-up nobody is waiting on —
         // the price is one census read per tick while demand is unmet.
-        let rail = RelayRun(reserveFloor: reserveFloor)
+        let rail = PrintRail(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }

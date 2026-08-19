@@ -168,7 +168,7 @@ public struct EventRun: MissionStepMachine {
         }
         // The rail is the ceiling on the WHOLE run, resources included, so it
         // sits ahead of the first spend rather than only ahead of the prints.
-        let rail = RelayRun(reserveFloor: reserveFloor)
+        let rail = PrintRail(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.preflight.rawValue, thenStall: nil)
         }
@@ -342,7 +342,7 @@ public struct EventRun: MissionStepMachine {
         if wanted.isEmpty { return .advanceStep(nextStep: Step.loading.rawValue) }
         let deadline = Self.printDeadline(for: wanted, in: world)
 
-        let rail = RelayRun(reserveFloor: reserveFloor)
+        let rail = PrintRail(reserveFloor: reserveFloor)
         if rail.footprintCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.printing.rawValue, thenStall: nil)
         }
