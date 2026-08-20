@@ -128,6 +128,14 @@ enum DirectiveExecutor {
             await move(directive, to: nextStep, controllerCode: deviceCode, deviceCode: deviceCode)
             return true
 
+        case let .enrolBots(deviceCodes, nextStep):
+            logger.info("directive \(directive.id, privacy: .public) enrols bots \(deviceCodes.joined(separator: ","), privacy: .public)")
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                botCodes: deviceCodes
+            )
+            return true
+
         case let .claimRelay(deviceCode, nextStep):
             logger.info("directive \(directive.id, privacy: .public) claims relay \(deviceCode, privacy: .public)")
             await move(
@@ -379,6 +387,7 @@ enum DirectiveExecutor {
         controllerCode: String?,
         deviceCode: String? = nil,
         claimedRelayCode: String? = nil,
+        botCodes: [String]? = nil,
         restamp: Bool = true
     ) async {
         @Dependency(\.date) var date
@@ -389,6 +398,9 @@ enum DirectiveExecutor {
         // Nil leaves an existing claim standing: every other transition passes
         // nil, and none of them means "the run has let go of its relay".
         if let claimedRelayCode { updated.claimedRelayCode = claimedRelayCode }
+        // Same contract as the relay claim: nil means "unchanged". Enrolment is
+        // the only writer, and it never shrinks the roster.
+        if let botCodes { updated.botCodes = botCodes }
         if restamp { updated.stepStartedAt = date.now }
         updated.updatedAt = date.now
         let entries = restamp || nextStep != directive.step

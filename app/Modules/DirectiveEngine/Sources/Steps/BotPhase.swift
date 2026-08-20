@@ -10,6 +10,7 @@ import Foundation
 import GameModels
 import GameServices
 import OSLog
+import UniverseModels
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "DirectiveEngine")
 
@@ -108,6 +109,14 @@ struct BotPhase: Equatable, Sendable {
 
     private func deploy(_ vessel: Device, _ ctx: StepContext) -> StepResult {
         let aboard = RepairFleet.bots(aboard: vessel, in: ctx.world, owner: owner)
+        // Enrol BEFORE the first deploy, and only ever add: re-deriving from what
+        // is aboard now would drop the one bot that failed to come home.
+        let fresh = aboard.map(\.deviceCode).filter { !ctx.directive.botCodes.contains($0) }
+        if !fresh.isEmpty {
+            return .action(.enrolBots(
+                deviceCodes: ctx.directive.botCodes + fresh, nextStep: dispatchStep
+            ))
+        }
         guard let next = aboard.first else { return .finished }
         if rounds(ctx) > Self.dispatchRounds {
             logger.notice("\(runNoun, privacy: .public) \(ctx.directive.id, privacy: .public): \(next.deviceCode, privacy: .public) will not deploy — proceeding unrepaired")
@@ -194,18 +203,68 @@ struct BotPhase: Equatable, Sendable {
         return .action(.refreshDevices(deviceCodes: bots.map(\.deviceCode), thenStall: nil))
     }
 
+    // MARK: - The roster
+
+    /// Roster members not aboard `vessel`, selected on stow state ONLY. The
+    /// absent location term is the point: neither a bot mid-hop nor a bot left
+    /// behind can be matched by an in-system query.
+    private func owed(_ vessel: Device, _ ctx: StepContext) -> [Device] {
+        ctx.directive.botCodes
+            .compactMap { ctx.world.device($0) }
+            .filter { $0.stowedInDeviceCode != vessel.deviceCode }
+            .sorted { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// The roster plus whatever the location query finds standing here. A UNION,
+    /// never a replacement — the location query is what still reaches a bot an
+    /// operator deployed by hand, which is enrolled nowhere.
+    private func outstanding(_ vessel: Device, _ location: String, _ ctx: StepContext) -> [Device] {
+        var seen = Set<String>()
+        return (owed(vessel, ctx) + RepairFleet.botsOut(near: location, in: ctx.world, owner: owner))
+            .filter { seen.insert($0.deviceCode).inserted }
+            .sorted { $0.deviceCode < $1.deviceCode }
+    }
+
+    /// An owed bot in a system the vessel has left, which no recall reaches. A
+    /// nil location is a bot in FLIGHT and must never read as stranded — that
+    /// would stall every ordinary hop.
+    private func stranded(_ owed: [Device], _ vessel: Device) -> Device? {
+        guard let here = vessel.location.map(SiteAssay.system(of:)) else { return nil }
+        return owed.first { bot in
+            guard let there = bot.location.map(SiteAssay.system(of:)) else { return false }
+            return there != here
+        }
+    }
+
+    private func strandStall(_ lost: Device) -> StepResult {
+        logger.notice("\(runNoun, privacy: .public): \(lost.deviceCode, privacy: .public) left in \(lost.location ?? "?", privacy: .public)")
+        return .action(.stall(
+            .serviceBotStranded, detail: "\(lost.deviceCode) at \(lost.location ?? "unknown")"
+        ))
+    }
+
     /// `recall`, not `stow`: `stow` needs the bot beside the vessel, and one
     /// that cruised off to repair a drone is not.
     private func recall(_ vessel: Device, _ ctx: StepContext) -> StepResult {
+        let owed = owed(vessel, ctx)
+        if let lost = stranded(owed, vessel) { return strandStall(lost) }
         guard let location = vessel.location else {
             return withoutLocation(
                 vessel, ctx,
-                anyOut: RepairFleet.anyBotOut(in: ctx.world, system: system, owner: owner),
+                anyOut: !owed.isEmpty
+                    || RepairFleet.anyBotOut(in: ctx.world, system: system, owner: owner),
                 deadline: Self.recallDeadline, thenStall: .serviceBotNotRecovered
             )
         }
-        let out = RepairFleet.botsOut(near: location, in: ctx.world, owner: owner)
+        let out = outstanding(vessel, location, ctx)
         guard let next = out.first else { return .finished }
+        // Wait a hop out rather than commanding a device in transit
+        // ([[salvage-controller-recall-race]]); the deadline bounds the wait.
+        if out.contains(where: { $0.location == nil && $0.stowedInDeviceCode == nil }) {
+            if ctx.elapsed > Self.recallDeadline { return .action(.stall(.serviceBotNotRecovered)) }
+            if let probe = probe(out, ctx) { return .action(probe) }
+            return .action(.wait)
+        }
         if rounds(ctx) > Self.dispatchRounds { return .action(.stall(.serviceBotNotRecovered)) }
         if RepairFleet.openRecall(for: next.deviceCode, in: ctx.world) != nil {
             if ctx.elapsed > Self.recallDeadline { return .action(.stall(.serviceBotNotRecovered)) }
@@ -220,14 +279,17 @@ struct BotPhase: Equatable, Sendable {
     private func confirmRecall(_ vessel: Device, _ ctx: StepContext) -> StepResult {
         if ctx.elapsed < Self.probeDelay { return .action(.wait) }
         if ctx.elapsed > Self.recallDeadline { return .action(.stall(.serviceBotNotRecovered)) }
+        let owed = owed(vessel, ctx)
+        if let lost = stranded(owed, vessel) { return strandStall(lost) }
         guard let location = vessel.location else {
             return withoutLocation(
                 vessel, ctx,
-                anyOut: RepairFleet.anyBotOut(in: ctx.world, system: system, owner: owner),
+                anyOut: !owed.isEmpty
+                    || RepairFleet.anyBotOut(in: ctx.world, system: system, owner: owner),
                 deadline: Self.recallDeadline, thenStall: .serviceBotNotRecovered
             )
         }
-        let out = RepairFleet.botsOut(near: location, in: ctx.world, owner: owner)
+        let out = outstanding(vessel, location, ctx)
         if out.isEmpty { return .finished }
         // A recall cruises the bot home, so wait out its own arrival time.
         if let arrival = Self.recallArrival(out), arrival > ctx.now { return .action(.wait) }

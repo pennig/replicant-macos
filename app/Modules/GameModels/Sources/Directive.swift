@@ -157,6 +157,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// deadline — distinct from `dronesNotRecovered`, which is the survey
     /// drones' own recall.
     case serviceBotNotRecovered
+    /// A service bot the run enrolled is standing in a system the vessel has
+    /// already left, where no recall reaches it. Distinct from
+    /// `serviceBotNotRecovered` because Skip abandons it rather than helping.
+    case serviceBotStranded
     /// The mining controller's `gather_salvage` reads paused while its drones
     /// are still deployed. A paused directive mines nothing and never emits the
     /// completion the run waits on, so the wait would otherwise never end.
@@ -214,6 +218,7 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .repairUnfinished: "Repair not finished"
         case .serviceBotNotArmed: "Service bot not armed"
         case .serviceBotNotRecovered: "Service bot not recovered"
+        case .serviceBotStranded: "Service bot left behind"
         case .miningDirectivePaused: "Mining directive paused"
         case .miningControllerNotRecovered: "Mining controller not recovered"
         case .mineFleetIncomplete: "Mine fleet incomplete"
@@ -279,6 +284,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "A service bot won't hold an active \"service\" directive. Check it in the device inspector, then retry or skip this target."
         case .serviceBotNotRecovered:
             "A service bot didn't stow before the recall deadline. Retry once it's aboard, or skip this target."
+        case .serviceBotStranded:
+            "A service bot is in a system the vessel has already left, so no recall reaches it. Fly it back to the vessel yourself, then retry. Don't skip — skipping departs without it again."
         case .miningDirectivePaused:
             "The mining controller's salvage directive is paused, so its deployed drones are idle. Resume it from the device inspector — that recalls the drones — then retry."
         case .miningControllerNotRecovered:
@@ -330,6 +337,7 @@ public extension DirectiveAttentionReason {
              .noMiningDroneAboard, .noRelayCoLocated, .dronesNotRecovered,
              .launchDeployedNothing, .noHaulControllerTagged, .awaitingRelayRestock,
              .repairUnfinished, .serviceBotNotArmed, .serviceBotNotRecovered,
+             .serviceBotStranded,
              .miningDirectivePaused, .miningControllerNotRecovered, .mineFleetIncomplete,
              .eventCriteriaUnmet, .awaitingCourierReplication, .eventOptionBlueprintMissing,
              .eventLoadExceedsHold:
@@ -393,6 +401,10 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// lease — a convoy of one is a list of one. A payload wider than one hold
     /// takes one freighter per hold; each flies itself, so nothing contains them.
     @Column(as: [String].JSONRepresentation.self) public var freighterCodes: [String]
+    /// Every service bot this run has put out, enrolled at its first deploy and
+    /// never auto-removed. A recovery obligation, NOT a lease: it reserves
+    /// nothing. Contract in `.claude/memory/bot-roster-departure-gate.md`.
+    @Column(as: [String].JSONRepresentation.self) public var botCodes: [String]
     /// The ordered queue of star-system designations still to visit.
     ///
     /// For a continuous run this is append-only HISTORY rather than a plan: the
@@ -456,7 +468,8 @@ public struct Directive: Identifiable, Equatable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         theatreDepot: String? = nil,
-        freighterCodes: [String] = []
+        freighterCodes: [String] = [],
+        botCodes: [String] = []
     ) {
         self.id = id
         self.kind = kind
@@ -479,6 +492,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.theatreDepot = theatreDepot
         self.freighterCodes = freighterCodes
+        self.botCodes = botCodes
     }
 
     /// Progress through the queue, for the list row's "m/n" readout. Counts
@@ -832,6 +846,17 @@ public extension Directive {
             UPDATE "directives"
                SET "freighterCodes" = json_array("freighterCode")
              WHERE "freighterCode" IS NOT NULL AND "freighterCode" <> ''
+            """
+        ).execute(db)
+    }
+
+    /// The bot roster. Deliberately no backfill — a running directive has no
+    /// record of which bots it already put out, and today's stow state names
+    /// the ones that came home.
+    static let addBotCodes = SchemaMigration("Add 'botCodes' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "botCodes" TEXT NOT NULL DEFAULT '[]'
             """
         ).execute(db)
     }

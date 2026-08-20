@@ -23,11 +23,13 @@ private func salvageDirective(
     targets: [String] = [],
     stepStartedAt: Date = repairFixtureNow,
     controllerCode: String? = nil,
-    fleetTag: String? = nil
+    fleetTag: String? = nil,
+    botCodes: [String] = []
 ) -> Directive {
     repairDirective(
         step: step, deviceCode: "VESSEL", targets: targets, stepStartedAt: stepStartedAt,
-        kind: .salvageRun, controllerCode: controllerCode, fleetTag: fleetTag
+        kind: .salvageRun, controllerCode: controllerCode, fleetTag: fleetTag,
+        botCodes: botCodes
     )
 }
 
@@ -116,7 +118,10 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             bot("BOT1", location: nil, stowedIn: "VESSEL"),
             bot("BOT2", location: nil, stowedIn: "VESSEL"),
         ])
-        let d = salvageDirective(step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"])
+        let d = salvageDirective(
+            step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"],
+            botCodes: ["BOT1", "BOT2"]
+        )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("deploy"), deviceCode: "BOT1",
             params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotDeploy.rawValue
@@ -140,7 +145,9 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             vessel,
             bot("BOT1", location: nil, stowedIn: "VESSEL", tags: []),
         ])
-        let d = salvageDirective(step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"])
+        let d = salvageDirective(
+            step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"], botCodes: ["BOT1"]
+        )
         #expect(SalvageRun().nextAction(directive: d, world: w) == .dispatch(
             kind: .simple("deploy"), deviceCode: "BOT1",
             params: CommandParams(), nextStep: SalvageRun.Step.confirmingBotDeploy.rawValue
@@ -157,7 +164,9 @@ private let long = repairFixtureNow.addingTimeInterval(-60)
             devices: [vessel, bot("BOT1", location: nil, stowedIn: "VESSEL")],
             log: repairStepLog(rounds)
         )
-        let d = salvageDirective(step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"])
+        let d = salvageDirective(
+            step: SalvageRun.Step.deployingBots.rawValue, targets: ["TOSLIT"], botCodes: ["BOT1"]
+        )
         #expect(SalvageRun().nextAction(directive: d, world: w)
             == .advanceStep(nextStep: SalvageRun.Step.armingBots.rawValue))
     }

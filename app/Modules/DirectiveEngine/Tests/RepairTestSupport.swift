@@ -101,7 +101,8 @@ func repairDirective(
     stepStartedAt: Date = repairFixtureNow,
     kind: DirectiveKind = .surveyRun,
     controllerCode: String? = nil,
-    fleetTag: String? = nil
+    fleetTag: String? = nil,
+    botCodes: [String] = []
 ) -> Directive {
     Directive(
         id: "D1", kind: kind, status: .running, deviceCode: deviceCode,
@@ -109,6 +110,7 @@ func repairDirective(
         targets: targets, targetIndex: targetIndex,
         step: step, stepStartedAt: stepStartedAt, returnToOrigin: false,
         originDesignation: nil, attentionReason: nil,
-        createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0),
+        botCodes: botCodes
     )
 }

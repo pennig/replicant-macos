@@ -32,6 +32,10 @@ public enum MissionAction: Equatable, Sendable {
     /// `Directive.claimedRelayCode`, then move to `nextStep`. Carries no lease:
     /// it fixes which relay the run means, nothing about who may command it.
     case claimRelay(deviceCode: String, nextStep: String)
+    /// Record this run's service-bot roster in `Directive.botCodes`, then move to
+    /// `nextStep`. `deviceCodes` is the FULL new roster and must only ever grow —
+    /// see `.claude/memory/bot-roster-departure-gate.md`.
+    case enrolBots(deviceCodes: [String], nextStep: String)
     /// Re-read `locations/{star}`, persist it, then move to `nextStep`. Best-effort:
     /// the endpoint 403s for a system the census has never marked explored, and the
     /// engine swallows that — a stale cache only costs the machine one evaluation.

@@ -34,7 +34,8 @@ struct BotPhaseTests {
                                stowedIn: vesselCode, directives: ["service"])
         let ctx = StepContext(
             directive: repairDirective(
-                step: "deployingBots", deviceCode: vesselCode, targets: [system], stepStartedAt: now
+                step: "deployingBots", deviceCode: vesselCode, targets: [system],
+                stepStartedAt: now, botCodes: ["B1"]
             ),
             world: repairWorld(devices: [vessel, bot]), step: "deployingBots"
         )
@@ -73,7 +74,8 @@ struct BotPhaseTests {
         }
         let ctx = StepContext(
             directive: repairDirective(
-                step: "deployingBots", deviceCode: vesselCode, targets: [system], stepStartedAt: now
+                step: "deployingBots", deviceCode: vesselCode, targets: [system],
+                stepStartedAt: now, botCodes: ["B1"]
             ),
             world: repairWorld(devices: [vessel, bot], log: log), step: "deployingBots"
         )
@@ -98,7 +100,8 @@ struct BotPhaseTests {
         }
         let ctx = StepContext(
             directive: repairDirective(
-                step: "deployingBots", deviceCode: vesselCode, targets: [system], stepStartedAt: now
+                step: "deployingBots", deviceCode: vesselCode, targets: [system],
+                stepStartedAt: now, botCodes: ["B0", "B1"]
             ),
             world: repairWorld(devices: [vessel, deployed, bot], log: log), step: "deployingBots"
         )
