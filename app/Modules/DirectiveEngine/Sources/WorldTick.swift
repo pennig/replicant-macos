@@ -23,7 +23,7 @@ public struct WorldTick: Sendable {
     public let slices: [String: DirectiveSlice]
     public let running: [Directive]
     /// The brain's galaxy-wide read, built from `core` in the same
-    /// transaction — see `WorldView.init(core:now:)`.
+    /// transaction — see `WorldView.read(from:core:now:)`.
     public let view: WorldView
     public let now: Date
 
@@ -49,7 +49,7 @@ public struct WorldTick: Sendable {
             let running = try Directive.where { $0.status.eq(DirectiveStatus.running) }.fetchAll(db)
             let core = try WorldCore.read(from: db)
             let slices = try DirectiveSlice.readAll(from: db, core: core, directives: running)
-            let view = WorldView(core: core, now: now)
+            let view = try WorldView.read(from: db, core: core, now: now)
             return WorldTick(
                 generation: generation, core: core, slices: slices, running: running, view: view, now: now
             )

@@ -197,7 +197,7 @@ private final class CountingReader: DatabaseReader, @unchecked Sendable {
                     status: "idle", location: "SOL-3", locationName: nil,
                     operationalCapacity: 100, queueSize: 0, stowedInDeviceCode: nil,
                     controllerDeviceCode: nil, attachedToDeviceCode: nil,
-                    createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
+                    createdAt: Date(timeIntervalSince1970: 0), availableCommands: ["enqueue_print"],
                     features: [], tags: [], detail: .object([:]),
                     updatedAt: Date(timeIntervalSince1970: 0),
                     firstSeenAt: Date(timeIntervalSince1970: 0)
@@ -224,38 +224,59 @@ private final class CountingReader: DatabaseReader, @unchecked Sendable {
                     components: ["module_x": 1]
                 )
             }.execute(db)
+            // Three, out of designation order, so the equivalence catches a
+            // sort that only happens to agree on a one-row fixture.
+            try seedLocationEvent(db, designation: "EVT3", location: "SOL-3")
             try seedLocationEvent(db, designation: "EVT1", location: "SOL-3")
-            // `star: nil` — `core` carries no `currentStar` data, so
-            // `replicantSystems` stays empty on both sides, not by coincidence.
-            try seedReplicant(db, code: "REP1", star: nil, hostedDeviceCode: "V1")
+            try seedLocationEvent(db, designation: "EVT2", location: "SOL-3")
+            try seedReplicant(db, code: "REP1", star: "SOL", hostedDeviceCode: "V1")
+            try seedSalvageAssay(db, id: "SITE-SOL", system: "SOL", totals: ["metal": 100])
+            try TheatreRecord.insert {
+                TheatreRecord(
+                    depot: "SOL-3", system: "SOL", origin: "pinned",
+                    establishedAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+            try seedSystemDetail(
+                db, system: "SOL", scanned: true,
+                belts: [Belt(designation: "SOL-1-BELT", density: "dense")]
+            )
+            // The pin is now operational (print-capable, stocked, meshed),
+            // which is what makes `LocationInventory` scope to it.
+            try LocationInventory.insert {
+                LocationInventory(
+                    location: "SOL-3", resourceType: "metal", quantity: 250,
+                    fetchedAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
         }
 
         let now = Date(timeIntervalSince1970: 100)
         let (fromCore, standalone) = try await database.read { db in
-            (WorldView(core: try WorldCore.read(from: db), now: now), try WorldView.read(from: db, now: now))
+            (
+                try WorldView.read(from: db, core: try WorldCore.read(from: db), now: now),
+                try WorldView.read(from: db, now: now)
+            )
         }
         #expect(fromCore == standalone)
 
         #expect(!fromCore.devices.isEmpty)
         #expect(!fromCore.starPositions.isEmpty)
         #expect(!fromCore.meshSystems.isEmpty)
+        #expect(!fromCore.salvageUnits.isEmpty)
         #expect(!fromCore.eventSystems.isEmpty)
         #expect(!fromCore.theatres.isEmpty)
+        #expect(!fromCore.theatreRecords.isEmpty)
         #expect(!fromCore.components.isEmpty)
+        #expect(!fromCore.beltsBySystem.isEmpty)
+        #expect(!fromCore.surveyedSystems.isEmpty)
+        #expect(!fromCore.replicantSystems.isEmpty)
         #expect(!fromCore.replicantHostDevices.isEmpty)
         #expect(!fromCore.stockpileUnits.isEmpty)
-        #expect(!fromCore.locationEvents.isEmpty)
+        #expect(!fromCore.theatreStock.isEmpty)
+        #expect(fromCore.theatreStockFreshness != nil)
+        #expect(fromCore.locationEvents.count == 3)
         #expect(!fromCore.blueprintBills.isEmpty)
         #expect(!fromCore.blueprintComponents.isEmpty)
-
-        // Private to `WorldView.read` — no table backs them from `core`, so
-        // both sides stay empty rather than one side faking the other.
-        #expect(fromCore.salvageUnits.isEmpty)
-        #expect(fromCore.theatreRecords.isEmpty)
-        #expect(fromCore.beltsBySystem.isEmpty)
-        #expect(fromCore.surveyedSystems.isEmpty)
-        #expect(fromCore.replicantSystems.isEmpty)
-        #expect(fromCore.theatreStock.isEmpty)
-        #expect(fromCore.theatreStockFreshness == nil)
     }
 }
