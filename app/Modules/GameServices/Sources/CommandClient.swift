@@ -245,9 +245,8 @@ extension CommandClient: DependencyKey {
                     let confirmedAt = date.now
 
                     try? await database.write { db in
-                        // A device travels to one place and mines one body, so a
-                        // new command replaces whatever it was doing. Prints
-                        // queue behind the bench's other jobs instead.
+                        // Travel/mining act on one target at a time; a new
+                        // command replaces the old. Prints queue instead.
                         if kind != .print {
                             let openOps = try Operation
                                 .where {

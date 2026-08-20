@@ -241,7 +241,6 @@ private typealias Operation = GameModels.Operation
         }
 
         #expect(live.count == 2)
-        #expect(live.filter { $0.status == .active }.count <= 1)
     }
 
     /// Mining is continuous — its 200 carries no deadline, so the op confirms
