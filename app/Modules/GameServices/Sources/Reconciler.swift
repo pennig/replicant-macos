@@ -113,9 +113,8 @@ public struct Reconciler: Sendable {
         // the progress bar can't draw). Both also refresh a slipped deadline.
         if let activity = device.derivedActivity {
             let live = try Self.liveOps(on: device.deviceCode, in: db)
-            // The oldest LIVE **active** op of this kind if one exists, else
-            // the oldest live op of this kind at all — an active job is never
-            // outranked by an enqueued sibling that merely started first.
+            // The oldest LIVE **active** op of this kind, else the oldest live
+            // one — active outranks a merely-older enqueued sibling.
             let matchingOp = live.first { $0.kind == activity.kind.rawValue && $0.status == .active }
                 ?? live.first { $0.kind == activity.kind.rawValue }
             // A live *active* op of a DIFFERENT kind means the device moved
