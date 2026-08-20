@@ -258,7 +258,7 @@ enum DirectiveExecutor {
             updated.status = .completed
             updated.attentionReason = nil
             updated.updatedAt = date.now
-            await commit(updated, [
+            await commitLifecycle(updated, [
                 entry(directive, .directiveCompleted, "\(directive.kind.title) completed",
                       step: nil, operationID: nil,
                       id: uuid().uuidString, at: date.now),
@@ -430,7 +430,7 @@ enum DirectiveExecutor {
         updated.attentionReason = reason
         updated.updatedAt = date.now
         let summary = detail.map { "\(reason.rawValue): \($0)" } ?? reason.rawValue
-        await commit(updated, [
+        await commitLifecycle(updated, [
             entry(directive, .stalled, summary,
                   step: directive.step, operationID: nil,
                   id: uuid().uuidString, at: date.now, detail: detail),
@@ -476,23 +476,60 @@ enum DirectiveExecutor {
         )
     }
 
-    /// The single write site: `directive` and its `entries` land in one
-    /// transaction, so a mission is never observed half-advanced.
-    ///
-    /// Reported rather than thrown — an executor must not take the engine down
-    /// over a transient write failure; the next tick re-evaluates from whatever
-    /// the row still says.
+    /// `directive`'s progress columns and its `entries`, in one transaction, so
+    /// a mission is never observed half-advanced. Never `status`; see
+    /// `app/.claude/memory/directive-commit-column-ownership.md`.
     private static func commit(_ directive: Directive, _ entries: [DirectiveLogEntry]) async {
         @Dependency(\.defaultDatabase) var database
         do {
             try await database.write { db in
-                try Directive.upsert { directive }.execute(db)
-                for entry in entries {
-                    try DirectiveLogEntry.insert { entry }.execute(db)
-                }
+                try Directive.where { $0.id.eq(directive.id) }
+                    .update {
+                        $0.step = #bind(directive.step)
+                        $0.stepStartedAt = #bind(directive.stepStartedAt)
+                        $0.targetIndex = #bind(directive.targetIndex)
+                        $0.controllerCode = #bind(directive.controllerCode)
+                        $0.claimedRelayCode = #bind(directive.claimedRelayCode)
+                        $0.updatedAt = #bind(directive.updatedAt)
+                    }
+                    .execute(db)
+                try append(entries, db)
             }
         } catch {
             logger.error("directive \(directive.id, privacy: .public) write failed: \(error)")
+        }
+    }
+
+    /// `directive`'s status transition and its `entries`, refused together when
+    /// the row has left `.running` since the tick read it — the operator's pause
+    /// outranks a transition decided before it landed.
+    private static func commitLifecycle(_ directive: Directive, _ entries: [DirectiveLogEntry]) async {
+        @Dependency(\.defaultDatabase) var database
+        do {
+            try await database.write { db in
+                let applied = try Directive
+                    .where { $0.id.eq(directive.id) && $0.status.eq(DirectiveStatus.running) }
+                    .update {
+                        $0.status = #bind(directive.status)
+                        $0.attentionReason = #bind(directive.attentionReason)
+                        $0.updatedAt = #bind(directive.updatedAt)
+                    }
+                    .returning { $0.id }
+                    .fetchAll(db)
+                guard !applied.isEmpty else {
+                    logger.notice("directive \(directive.id, privacy: .public): \(directive.status.rawValue, privacy: .public) refused — the row has left running")
+                    return
+                }
+                try append(entries, db)
+            }
+        } catch {
+            logger.error("directive \(directive.id, privacy: .public) write failed: \(error)")
+        }
+    }
+
+    private static func append(_ entries: [DirectiveLogEntry], _ db: Database) throws {
+        for entry in entries {
+            try DirectiveLogEntry.insert { entry }.execute(db)
         }
     }
 }

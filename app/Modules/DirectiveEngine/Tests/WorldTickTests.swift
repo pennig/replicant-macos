@@ -476,6 +476,18 @@ private struct StepAdvancingMachine: MissionStepMachine {
     func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
 }
 
+/// Stalls every directive it is asked about.
+private struct StallingMachine: MissionStepMachine {
+    let kind: DirectiveKind = .salvageRun
+    let firstStep = "step"
+
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        .stall(.unreachableDevice, detail: nil)
+    }
+
+    func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
+}
+
 /// `D1` asks for a device refresh the harness answers on its own schedule;
 /// every other directive advances. Records the ids it was asked about, which is
 /// what a would-be second evaluation of `D1` shows up in.
@@ -756,7 +768,7 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
 @Suite struct PausedDirectiveDelta {
     /// The one accepted behaviour change, pinned rather than left to inspection:
     /// the directive row comes from the tick's read, so a pause landing mid-tick
-    /// is honoured on the NEXT tick, up to 5s later.
+    /// is honoured on the NEXT tick, up to 5s later — never later than that.
     @Test func advancesNoDirectivePausedBeforeTheTickRead() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -797,8 +809,8 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
             await core.evaluateOnce(directiveID: "D1", tick: first)
             #expect(try await steps(database) == ["advanced"], "the tick's row is what it evaluated")
 
-            // That evaluation's whole-row write put `running` back, so re-pause
-            // exactly as the operator would before the next tick reads.
+            // Re-applied exactly as the operator would: a second pause is
+            // idempotent, and the next tick reads the same paused row.
             try await database.write { db in
                 try Directive.where { $0.id.eq("D1") }
                     .update { $0.status = DirectiveStatus.paused }
@@ -815,10 +827,10 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
         }
     }
 
-    /// KNOWN DEFECT: `DirectiveExecutor.commit`'s whole-row upsert overwrites a
-    /// pause that lands mid-evaluation. Tracked as a follow-up; this test exists
-    /// so a future fix has a red-to-green target, not to bless the erasure.
-    @Test func aPauseLandingMidEvaluationIsErasedByTheWholeRowWrite() async throws {
+    /// A pause landing mid-evaluation survives that evaluation's commit: the
+    /// commit writes the progress the evaluation decided and never `status`, so
+    /// the operator applies the pause once and it holds.
+    @Test func aPauseLandingMidEvaluationSurvivesTheCommit() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert {
@@ -842,7 +854,44 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
             let row = try await database.read { db in
                 try Directive.where { $0.id.eq("D1") }.fetchOne(db)
             }
-            #expect(row?.status == .running, "the whole-row commit erased the pause that landed mid-evaluation")
+            #expect(row?.status == .paused, "the pause that landed mid-evaluation survives the commit")
+            #expect(row?.step == "advanced", "and the evaluation's own write still landed")
+        }
+    }
+
+    /// The stall an evaluation decided is refused when the operator paused
+    /// underneath it, timeline entry included — the row is theirs, and a resumed
+    /// run re-reaches the same stall from the same world.
+    @Test func aPauseRefusesTheStallDecidedBeforeItLanded() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert {
+                directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
+            }.execute(db)
+        }
+        let now = Date(timeIntervalSince1970: 100)
+        let tick = try await WorldTick.read(from: database, now: now, generation: 1)
+        try await database.write { db in
+            try Directive.where { $0.id.eq("D1") }
+                .update { $0.status = DirectiveStatus.paused }
+                .execute(db)
+        }
+        let core = DirectiveEngineCore(machines: [StallingMachine()], tick: .seconds(5))
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1", tick: tick)
+            let row = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(row?.status == .paused, "the operator's pause outranks the stall")
+            #expect(row?.attentionReason == nil, "and no reason is stamped on it")
+            let entries = try await database.read { db in
+                try DirectiveLogEntry.all.fetchAll(db)
+            }
+            #expect(entries.isEmpty, "the refused write takes its timeline entry with it")
         }
     }
 }

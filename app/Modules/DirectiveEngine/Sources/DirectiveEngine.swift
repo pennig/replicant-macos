@@ -306,9 +306,7 @@ actor DirectiveEngineCore {
 
         var action = machine.nextAction(directive: directive, world: world)
         // The row the action gets applied to. Only `.extendQueue` moves it off
-        // the value read at the top of this method — it is the one resolver that
-        // WRITES the row, so applying its result to the pre-write value would
-        // roll its append back (see `Resolution`).
+        // the value read at the top of this method (see `Resolution`).
         var current = directive
         switch action {
         case let .refreshDevices(deviceCodes, thenStall):
@@ -358,15 +356,9 @@ actor DirectiveEngineCore {
         }
     }
 
-    /// A resolved `action` plus the `directive` row it must be applied to.
-    ///
-    /// Only `.extendQueue` needs the second half. The refresh resolvers re-ask
-    /// with the SAME `Directive` value because a read cannot change the directive
-    /// row — but an extend appends to `targets`, and every executor path builds
-    /// its write as `var updated = directive`, so applying a post-extend action
-    /// to the pre-extend value writes `targets` back and rolls the append away.
-    /// That is not an edge case: the action after a successful extend is normally
-    /// `.assignController`, which commits the whole row.
+    /// A resolved `action` plus the `directive` row it must be applied to. Only
+    /// `.extendQueue` moves that row: it appends to `targets`, and everything
+    /// downstream — the machine's re-ask included — must see the append.
     private struct Resolution {
         let action: MissionAction
         let directive: Directive
@@ -468,7 +460,12 @@ actor DirectiveEngineCore {
         let extended = appended
         do {
             try await database.write { db in
-                try Directive.upsert { extended }.execute(db)
+                try Directive.where { $0.id.eq(extended.id) }
+                    .update {
+                        $0.targets = #bind(extended.targets)
+                        $0.updatedAt = #bind(extended.updatedAt)
+                    }
+                    .execute(db)
             }
         } catch {
             logger.error("directive \(directive.id, privacy: .public): roam append failed: \(error)")
