@@ -95,8 +95,8 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// device column — `Device.replicantCode` records ownership instead.
     public let replicantHostDevices: Set<String>
     /// The other in-force directives, INCLUDING this one — read in the SAME
-    /// transaction as the devices, and the basis of `RelayRun.isNextInLine`.
-    /// See `app/.claude/memory/world-snapshot-peers-fifo.md`.
+    /// transaction as the devices, and what `RelayRun.queuePosition` ranks a hub's
+    /// claimants by. See `app/.claude/memory/world-snapshot-peers-fifo.md`.
     public let peers: [Directive]
     /// The moment this snapshot was taken. Every time comparison in a mission
     /// uses this rather than `Date()`, so step machines stay pure and their

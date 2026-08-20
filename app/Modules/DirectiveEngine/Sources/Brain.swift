@@ -72,10 +72,11 @@ struct Brain: Sendable {
                         .fetchAll(db),
                     by: { $0.directiveID ?? "" }
                 )
-                // The caller's own tick read where it has one; nil reads a fresh one.
+                // The caller's tick read where it has one, so `view.now` is the
+                // tick's instant and predates this transaction; nil reads afresh.
                 let view = try suppliedView ?? WorldView.read(from: db, now: now)
-                // Same transaction as the devices, one row per operational
-                // theatre — never a single flat reading for every theatre.
+                // One row per operational theatre, never a single flat reading for
+                // every theatre — but read here, not necessarily with `view`.
                 let depots = view.theatres.filter(\.isOperational).map(\.depot)
                 var hubFootprints: [String: LocationFootprint] = [:]
                 if !depots.isEmpty {

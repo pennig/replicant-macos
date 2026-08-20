@@ -3,11 +3,10 @@
 //  Replicould — DirectiveEngine
 //
 //  One serial executor per RUNNING custom directive, off the event-dispatch hot
-//  path; built-in directives get none, since the server runs them. ONE
-//  `WorldTick` read per tick feeds every executor and the brain; the network is
-//  touched only when a mission wants a command, so the engine never sees its own
-//  command echo. Started with the sync engine on login, stopped BEFORE the
-//  tables are wiped.
+//  path; built-ins get none, since the server runs them. ONE `WorldTick` read
+//  per tick feeds every executor and the brain; the network is touched only for
+//  a mission's command, so the engine never sees its own echo. Started with the
+//  sync engine on login, stopped BEFORE the tables are wiped.
 //
 
 import Dependencies
@@ -67,6 +66,10 @@ actor DirectiveEngineCore {
     /// the brain. Doubles as the "am I running?" flag `reconcileExecutors()`
     /// re-checks after a suspension.
     private var tickLoop: Task<Void, Never>?
+    /// The brain's tick, kept OFF the executors' path: it reaches the network,
+    /// so a hung one must freeze only itself. A tick landing while one is in
+    /// flight is skipped, never queued, so they cannot pile up.
+    private var brainTick: (task: Task<Void, Never>, generation: UInt64)?
     /// One evaluation loop per running directive, keyed by directive id.
     private var executors: [String: Task<Void, Never>] = [:]
     /// Where each executor waits for its tick. Buffering the NEWEST alone is
@@ -118,6 +121,8 @@ actor DirectiveEngineCore {
         brainLogger.info("stopping")
         tickLoop?.cancel()
         tickLoop = nil
+        brainTick?.task.cancel()
+        brainTick = nil
         // Cleared here or the why-view shows the PREVIOUS account's data; it STAYS
         // cleared because `tickBrain()` re-checks cancellation before publishing.
         @Shared(.brainReport) var published: BrainReport?
@@ -130,8 +135,8 @@ actor DirectiveEngineCore {
     }
 
     /// One tick: read the whole world once, reconcile the executor roster
-    /// against it, hand every running directive that read, then let the brain
-    /// decide against the same read.
+    /// against it, hand every running directive that read, and set the brain
+    /// going on the same read WITHOUT waiting for it.
     func runTick(generation: UInt64) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
@@ -151,7 +156,30 @@ actor DirectiveEngineCore {
         for directive in tick.running {
             deliveries[directive.id]?.yield(tick)
         }
-        await tickBrain(view: tick.view)
+        startBrainTick(view: tick.view, generation: generation)
+    }
+
+    /// Set the brain going on `view`, unless the previous tick's is still in
+    /// flight. Awaiting it here would put a network read in front of every
+    /// executor's next evaluation.
+    private func startBrainTick(view: WorldView, generation: UInt64) {
+        guard brainTick == nil else {
+            brainLogger.debug("tick skipped — the previous one has not finished")
+            return
+        }
+        brainTick = (
+            Task { [weak self] in
+                await self?.tickBrain(view: view)
+                await self?.finishBrainTick(generation)
+            },
+            generation
+        )
+    }
+
+    /// Release the slot, unless a later tick already owns it.
+    private func finishBrainTick(_ generation: UInt64) {
+        guard brainTick?.generation == generation else { return }
+        brainTick = nil
     }
 
     /// One brain tick: bridge `now` in via `@Dependency(\.date)`, ask `Brain` for a

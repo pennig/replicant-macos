@@ -8,12 +8,14 @@
 //  The tick LOOP that drives every executor from that read is here too.
 //
 
+import API
 import ConcurrencyExtras
 import Dependencies
 import Foundation
 import GameDatabase
 import GameModels
 import GameServices
+import GameSession
 import GRDB
 import Sharing
 import SQLiteData
@@ -42,6 +44,10 @@ final class ReadCounter: @unchecked Sendable {
 
     func wrapping(_ base: any DatabaseReader) -> any DatabaseReader {
         CountingReader(base: base, counter: self)
+    }
+
+    func wrapping(_ base: any DatabaseWriter) -> any DatabaseWriter {
+        CountingWriter(base: base, counter: self)
     }
 }
 
@@ -91,6 +97,101 @@ private final class CountingReader: DatabaseReader, @unchecked Sendable {
 
     func unsafeReentrantRead<T>(_ value: (Database) throws -> T) throws -> T {
         try base.unsafeReentrantRead(value)
+    }
+
+    func _add<Reducer: ValueReducer>(
+        observation: ValueObservation<Reducer>,
+        scheduling scheduler: some ValueObservationScheduler,
+        onChange: @escaping @Sendable (Reducer.Value) -> Void
+    ) -> AnyDatabaseCancellable {
+        base._add(observation: observation, scheduling: scheduler, onChange: onChange)
+    }
+}
+
+/// `CountingReader`'s writer half. `defaultDatabase` is a writer, so counting the
+/// TICK LOOP's transactions means wrapping one; writes pass through uncounted.
+private final class CountingWriter: DatabaseWriter, @unchecked Sendable {
+    let base: any DatabaseWriter
+    let counter: ReadCounter
+
+    init(base: any DatabaseWriter, counter: ReadCounter) {
+        self.base = base
+        self.counter = counter
+    }
+
+    var configuration: Configuration { base.configuration }
+    var path: String { base.path }
+    func close() throws { try base.close() }
+    func interrupt() { base.interrupt() }
+
+    @_disfavoredOverload
+    func read<T>(_ value: (Database) throws -> T) throws -> T {
+        try base.read(value)
+    }
+
+    func read<T: Sendable>(_ value: @Sendable (Database) throws -> T) async throws -> T {
+        counter.increment()
+        return try await base.read(value)
+    }
+
+    func asyncRead(_ value: @escaping @Sendable (Result<Database, Error>) -> Void) {
+        base.asyncRead(value)
+    }
+
+    @_disfavoredOverload
+    func unsafeRead<T>(_ value: (Database) throws -> T) throws -> T {
+        try base.unsafeRead(value)
+    }
+
+    func unsafeRead<T: Sendable>(_ value: @Sendable (Database) throws -> T) async throws -> T {
+        try await base.unsafeRead(value)
+    }
+
+    func asyncUnsafeRead(_ value: @escaping @Sendable (Result<Database, Error>) -> Void) {
+        base.asyncUnsafeRead(value)
+    }
+
+    func unsafeReentrantRead<T>(_ value: (Database) throws -> T) throws -> T {
+        try base.unsafeReentrantRead(value)
+    }
+
+    @_disfavoredOverload
+    func writeWithoutTransaction<T>(_ updates: (Database) throws -> T) rethrows -> T {
+        try base.writeWithoutTransaction(updates)
+    }
+
+    func writeWithoutTransaction<T: Sendable>(
+        _ updates: @Sendable (Database) throws -> T
+    ) async throws -> T {
+        try await base.writeWithoutTransaction(updates)
+    }
+
+    func barrierWriteWithoutTransaction<T>(_ updates: (Database) throws -> T) throws -> T {
+        try base.barrierWriteWithoutTransaction(updates)
+    }
+
+    func barrierWriteWithoutTransaction<T: Sendable>(
+        _ updates: @Sendable (Database) throws -> T
+    ) async throws -> T {
+        try await base.barrierWriteWithoutTransaction(updates)
+    }
+
+    func asyncBarrierWriteWithoutTransaction(
+        _ updates: @escaping @Sendable (Result<Database, Error>) -> Void
+    ) {
+        base.asyncBarrierWriteWithoutTransaction(updates)
+    }
+
+    func unsafeReentrantWrite<T>(_ updates: (Database) throws -> T) rethrows -> T {
+        try base.unsafeReentrantWrite(updates)
+    }
+
+    func asyncWriteWithoutTransaction(_ updates: @escaping @Sendable (Database) -> Void) {
+        base.asyncWriteWithoutTransaction(updates)
+    }
+
+    func spawnConcurrentRead(_ value: @escaping @Sendable (Result<Database, Error>) -> Void) {
+        base.spawnConcurrentRead(value)
     }
 
     func _add<Reducer: ValueReducer>(
@@ -303,18 +404,71 @@ private struct StepAdvancingMachine: MissionStepMachine {
 }
 
 /// `D1` asks for a device refresh the harness answers on its own schedule;
-/// every other directive advances.
+/// every other directive advances. Records the ids it was asked about, which is
+/// what a would-be second evaluation of `D1` shows up in.
 private struct BlockingMachine: MissionStepMachine {
     let kind: DirectiveKind = .salvageRun
     let firstStep = "step"
+    let asked = LockIsolated<[String]>([])
 
     func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
-        directive.id == "D1"
+        asked.withValue { $0.append(directive.id) }
+        return directive.id == "D1"
             ? .refreshDevices(deviceCodes: ["V1"], thenStall: nil)
             : .advanceStep(nextStep: "advanced")
     }
 
     func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
+}
+
+/// Waits, recording the ids it was asked about. `.wait` writes no row, so a
+/// transaction count taken around it is the LOOP's and nothing else's.
+private struct WaitingMachine: MissionStepMachine {
+    let kind: DirectiveKind = .salvageRun
+    let firstStep = "step"
+    let asked = LockIsolated<Set<String>>([])
+
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        asked.withValue { $0.insert(directive.id) }
+        return .wait
+    }
+
+    func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
+}
+
+/// `GameClient.testValue` with a budget read that blocks until released — the
+/// first thing `Brain.report` awaits that a test can hold open.
+private func gatedGameClient(_ released: LockIsolated<Bool>) -> GameClient {
+    var client = GameClient.testValue
+    client.budget = { _ in
+        while !released.value { await Task.yield() }
+        return RateLimitGovernor.Snapshot(limit: 60, remaining: 60, resetAt: nil)
+    }
+    return client
+}
+
+/// The why-view's feed as it stands right now, re-read each call — a captured
+/// `@Shared` cannot cross into the `@Sendable` closures below.
+@Sendable private func publishedReport() -> BrainReport? {
+    @Shared(.brainReport) var report: BrainReport?
+    return report
+}
+
+/// Start `runTick` off-thread and wait for it to RETURN, with a deadline. A tick
+/// that waited on a hung brain would otherwise hang the suite rather than fail;
+/// the returned task must be awaited once the hang is released.
+private func boundedTick(
+    _ core: DirectiveEngineCore, generation: UInt64,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async -> Task<Void, Never> {
+    let returned = LockIsolated(false)
+    let task = Task { await core.runTick(generation: generation); returned.setValue(true) }
+    let deadline = ContinuousClock.now + .seconds(10)
+    while ContinuousClock.now < deadline, !returned.value { await Task.yield() }
+    if !returned.value {
+        Issue.record("runTick did not return — it is waiting on the brain", sourceLocation: sourceLocation)
+    }
+    return task
 }
 
 /// Poll `condition` on the real clock: an executor's evaluation is a genuine
@@ -373,7 +527,7 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
             try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
         }
         let core = DirectiveEngineCore(machines: [], tick: .seconds(5))
-        await withDependencies {
+        try await withDependencies {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 100))
             $0.uuid = .incrementing
@@ -381,11 +535,16 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
             $0.defaultInMemoryStorage = InMemoryStorage()
         } operation: {
             await core.runTick(generation: 1)
+            // The brain runs BESIDE the executors now, so settle on its report
+            // rather than assuming it finished before `runTick` returned.
+            try await settle { publishedReport() != nil }
             #expect(await core.brainTickCount == 1)
-            @Shared(.brainReport) var published: BrainReport?
-            #expect(published?.observedAt == Date(timeIntervalSince1970: 100))
+            #expect(
+                publishedReport()?.observedAt == Date(timeIntervalSince1970: 100),
+                "the report is stamped with the tick's own instant"
+            )
             await core.stop()
-            #expect(published == nil, "stop() retires the feed with the loop that fed it")
+            #expect(publishedReport() == nil, "stop() retires the feed with the loop that fed it")
         }
     }
 
@@ -403,7 +562,9 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
         }
         let entered = LockIsolated(0)
         let released = LockIsolated(false)
-        let core = DirectiveEngineCore(machines: [BlockingMachine()], tick: .seconds(5))
+        let machine = BlockingMachine()
+        @Sendable func asks(_ id: String) -> Int { machine.asked.value.filter { $0 == id }.count }
+        let core = DirectiveEngineCore(machines: [machine], tick: .seconds(5))
         try await withDependencies {
             $0.defaultDatabase = database
             $0.date = .constant(Date(timeIntervalSince1970: 100))
@@ -418,12 +579,103 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
         } operation: {
             await core.runTick(generation: 1)
             try await settle { try await steps(database) == ["step", "advanced", "advanced"] }
+            #expect(entered.value == 1, "D1 is blocked in its refresh")
+
             await core.runTick(generation: 2)
             await core.runTick(generation: 3)
-            try await settle { try await steps(database) == ["step", "advanced", "advanced"] }
-            #expect(entered.value == 1, "a tick landing mid-evaluation must not start a second")
+            // The barrier is a POSITIVE signal: wait until both siblings have
+            // consumed a delivery made AFTER D1 blocked, not for an old truth.
+            try await settle { asks("D2") > 1 && asks("D3") > 1 }
+            #expect(asks("D1") == 1, "a tick landing mid-evaluation must not start a second")
+            #expect(entered.value == 1, "and must not re-enter the refresh")
+            #expect(try await steps(database) == ["step", "advanced", "advanced"])
+
             released.setValue(true)
             await core.stop()
+        }
+    }
+
+    /// The brain reaches the network, so it must not sit in front of the
+    /// executors: a `report()` that never returns leaves every directive
+    /// evaluating, and the next tick skips the brain rather than queueing one.
+    @Test func aHungBrainStallsNeitherTheExecutorsNorTheNextTick() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for i in 1...3 {
+                try Directive.insert {
+                    directiveFixture(id: "D\(i)", deviceCode: "V\(i)", targets: ["SOL"])
+                }.execute(db)
+            }
+        }
+        let released = LockIsolated(false)
+        let machine = StepAdvancingMachine()
+        let core = DirectiveEngineCore(machines: [machine], tick: .seconds(5))
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.uuid = .incrementing
+            $0.continuousClock = TestClock()
+            $0.defaultInMemoryStorage = InMemoryStorage()
+            $0.gameClient = gatedGameClient(released)
+        } operation: {
+            let first = await boundedTick(core, generation: 1)
+            try await settle { try await steps(database) == ["advanced", "advanced", "advanced"] }
+            #expect(await core.brainTickCount == 1, "the brain started, and is still hung")
+
+            let second = await boundedTick(core, generation: 2)
+            try await settle { machine.asked.value.count > 3 }
+            #expect(
+                await core.brainTickCount == 1,
+                "a tick landing on an unfinished brain skips it rather than queueing one"
+            )
+            #expect(publishedReport() == nil, "nothing published while report() is hung")
+
+            released.setValue(true)
+            try await settle { publishedReport() != nil }
+            _ = await first.value
+            _ = await second.value
+            await core.stop()
+        }
+    }
+
+    /// Pinned on the LOOP rather than on `WorldTick.read` alone: a tick's
+    /// transaction count is a constant, whatever the roster size — a per-directive
+    /// read would make it scale, which is exactly what this catches.
+    @Test func aTicksTransactionCountDoesNotGrowWithTheRoster() async throws {
+        let small = try await tickReads(directives: 2)
+        let large = try await tickReads(directives: 8)
+        #expect(small == large, "reads must be a constant, not one per directive")
+        #expect(large <= 3, "the tick's own read, and the brain's — never a per-directive one")
+    }
+
+    /// Transactions opened by ONE `runTick` over `directives` running directives,
+    /// counted after every executor has evaluated and the brain has published —
+    /// so nothing of the tick is still outstanding when the count is read.
+    private func tickReads(directives: Int) async throws -> Int {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for i in 1...directives {
+                try Directive.insert {
+                    directiveFixture(id: "D\(i)", deviceCode: "V\(i)", targets: ["SOL"])
+                }.execute(db)
+            }
+        }
+        let counter = ReadCounter()
+        let machine = WaitingMachine()
+        let core = DirectiveEngineCore(machines: [machine], tick: .seconds(5))
+        return try await withDependencies {
+            $0.defaultDatabase = counter.wrapping(database)
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.uuid = .incrementing
+            $0.continuousClock = TestClock()
+            $0.defaultInMemoryStorage = InMemoryStorage()
+        } operation: {
+            await core.runTick(generation: 1)
+            try await settle {
+                machine.asked.value.count == directives && publishedReport() != nil
+            }
+            await core.stop()
+            return counter.reads
         }
     }
 }

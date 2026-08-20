@@ -445,13 +445,13 @@ private func fundedGameClient() -> GameClient {
     return client
 }
 
-/// Drive `count` virtual ticks of BOTH engine loops against the scripted world.
+/// Drive `count` virtual ticks against the scripted world.
 ///
 /// Per tick: the world moves on (`settle`), the brain plans (`tickBrain`), and
-/// every running Relay Run gets one executor evaluation — which is what
-/// `DirectiveEngineCore.start()` runs as two concurrent loops in production.
+/// every running Relay Run gets one executor evaluation — the same work
+/// `DirectiveEngineCore.runTick` does, sequenced here instead of concurrently.
 /// The running set is re-read after the brain plans, so a run launched on this
-/// tick is evaluated on this tick, exactly as the supervisor would pick it up.
+/// tick is evaluated on this tick, exactly as `runTick` would pick it up.
 private func drive(
     _ database: any DatabaseWriter,
     core: DirectiveEngineCore,
