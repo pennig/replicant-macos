@@ -568,26 +568,34 @@ public struct EventRun: MissionStepMachine {
 
     // MARK: - Delivery
 
-    /// Move the carrier first, then the freighter. Each leg is its own dispatch:
-    /// two hulls cannot share one travel command.
+    /// Order the carrier, then every freighter. Each leg is its own dispatch —
+    /// two hulls cannot share one travel command — but a hull already crossing
+    /// is stepped over, so the convoy flies abreast rather than one at a time.
     private func departing(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
         let destination = event.location
         let ctx = StepContext(directive: directive, world: world, step: directive.step)
+        var underway = false
 
         let carrierLeg = TravelTo(
             deviceCode: convoy.carrier.deviceCode, destination: destination,
             arrivalTest: .exactLocation, confirmStep: nil
         )
-        switch carrierLeg.next(ctx) {
-        case let .action(action): return action
-        case .more, .noSubject: return .stall(.unreachableDevice)
-        case .finished: break   // carrier placed — the freighter leg follows
+        if carrierLeg.isUnderway(ctx) {
+            underway = true
+        } else {
+            switch carrierLeg.next(ctx) {
+            case let .action(action): return action
+            case .more, .noSubject: return .stall(.unreachableDevice)
+            case .finished: break   // carrier placed — the freighter legs follow
+            }
         }
 
         guard !convoy.freighters.isEmpty else {
-            return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
+            // A fleet read that has not landed yet still has the whole crossing
+            // to arrive in, so a carrier in the air waits rather than reading.
+            return underway ? .wait : .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
         // One leg per hull, dispatched in-step like the carrier's: a confirm
         // step here would end the loop on the first hull, stranding the rest.
@@ -596,13 +604,18 @@ public struct EventRun: MissionStepMachine {
                 deviceCode: freighter.deviceCode, destination: destination,
                 arrivalTest: .exactLocation, confirmStep: nil
             )
+            if leg.isUnderway(ctx) {
+                underway = true
+                continue
+            }
             switch leg.next(ctx) {
             case let .action(action): return action
             case .finished: continue
             case .more, .noSubject: return .stall(.unreachableDevice)
             }
         }
-        return .advanceStep(nextStep: Step.confirmingArrival.rawValue)
+        // Every hull is either standing at the event or in the air toward it.
+        return underway ? .wait : .advanceStep(nextStep: Step.confirmingArrival.rawValue)
     }
 
     /// Both hulls placed at the event, on rows read since the step began.

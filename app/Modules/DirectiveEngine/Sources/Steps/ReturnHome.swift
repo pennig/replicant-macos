@@ -38,10 +38,17 @@ struct ReturnHome: Equatable, Sendable {
             return .noSubject
         }
         let arrivalTest: TravelTo.ArrivalTest = destination == .origin ? .system : .exactLocation
+        var underway = false
         for code in deviceCodes {
             let leg = TravelTo(
                 deviceCode: code, destination: home, arrivalTest: arrivalTest, confirmStep: nil
             )
+            // A hull already crossing needs nothing ordered, and its wait is not
+            // the convoy's: the hulls behind it fly alongside, not after, it.
+            if leg.isUnderway(ctx) {
+                underway = true
+                continue
+            }
             switch leg.next(ctx) {
             case .finished: continue
             // A hull the fleet read does not hold cannot be flown; the next one
@@ -51,7 +58,8 @@ struct ReturnHome: Equatable, Sendable {
             case .more: return .more
             }
         }
-        return .finished
+        // Every hull is either home or in the air. Only the second is a wait.
+        return underway ? .action(.wait) : .finished
     }
 
     private func resolve(_ ctx: StepContext) -> String? {

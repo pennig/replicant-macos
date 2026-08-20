@@ -200,6 +200,117 @@ struct EventRunMultiFreighterTests {
         #expect(departing(placed) == .advanceStep(nextStep: EventRun.Step.confirmingArrival.rawValue))
     }
 
+    // MARK: - Departing abreast
+
+    /// The convoy mid-departure with `crossing` naming the hulls whose travel op
+    /// is open. `placed` teleports a hull to the event; `crossing` is the state
+    /// between the two, and the one the live run spends its whole leg in.
+    private func departing(placed: Set<String> = [], crossing: Set<String>) -> MissionAction {
+        let ops = crossing.reduce(into: [String: GameModels.Operation]()) { ops, code in
+            ops[code] = GameModels.Operation(
+                id: "OP-\(code)", entityCode: code, kind: OperationKind.travel.rawValue,
+                status: .active, source: .poll, startedAt: now, completesAt: nil,
+                lastConfirmedAt: now, detail: .object([:])
+            )
+        }
+        return EventRun().nextAction(
+            directive: directive(step: .departing, codes: ["FREIGHT-1", "FREIGHT-2"]),
+            world: EventRunFixtures.world(
+                devices: departingConvoy(placed: placed), event: Megaproject.event(), now: now,
+                openOperations: ops
+            )
+        )
+    }
+
+    /// The whole speed-up in one assertion: a carrier in the air does not hold
+    /// the freighter at the depot. Serialised, a convoy costs one whole crossing
+    /// per hull; abreast, it costs one.
+    @Test func aCrossingCarrierDoesNotHoldTheFreighterAtTheDepot() {
+        #expect(departing(crossing: ["CARRIER"]) == .dispatch(
+            kind: .travel, deviceCode: "FREIGHT-1",
+            params: CommandParams(destination: "X-1"),
+            nextStep: EventRun.Step.departing.rawValue
+        ))
+    }
+
+    /// Nor does a crossing freighter hold the one behind it.
+    @Test func aCrossingFreighterDoesNotHoldTheNextOne() {
+        #expect(departing(crossing: ["CARRIER", "FREIGHT-1"]) == .dispatch(
+            kind: .travel, deviceCode: "FREIGHT-2",
+            params: CommandParams(destination: "X-1"),
+            nextStep: EventRun.Step.departing.rawValue
+        ))
+    }
+
+    /// A convoy wholly in the air waits — nothing left to order, and nothing
+    /// standing at the event yet either.
+    @Test func aConvoyWhollyInTheAirWaits() {
+        #expect(departing(crossing: ["CARRIER", "FREIGHT-1", "FREIGHT-2"]) == .wait)
+    }
+
+    /// Walk the executor the way it actually runs: each dispatch puts that hull
+    /// in the air rather than at the event, and NOTHING arrives. Every hull must
+    /// still carry an order — three ticks, not three crossings.
+    @Test func everyHullIsOrderedWithoutWaitingForAnArrival() {
+        var crossing: Set<String> = []
+        var ordered: [String] = []
+        for _ in 0..<4 {
+            guard case let .dispatch(_, deviceCode, _, _) = departing(crossing: crossing) else { break }
+            ordered.append(deviceCode)
+            crossing.insert(deviceCode)
+        }
+        #expect(ordered == ["CARRIER", "FREIGHT-1", "FREIGHT-2"])
+        #expect(departing(crossing: crossing) == .wait)
+    }
+
+    /// The step still ends on arrivals, not on orders: a hull placed and a hull
+    /// crossing is not a convoy that has landed.
+    @Test func aMixedConvoyWaitsRatherThanAdvancing() {
+        #expect(
+            departing(placed: ["CARRIER", "FREIGHT-1"], crossing: ["FREIGHT-2"]) == .wait
+        )
+    }
+
+    // MARK: - Returning abreast
+
+    /// The convoy on the way home, `crossing` naming the hulls already in the air.
+    private func returning(crossing: Set<String>) -> MissionAction {
+        let ops = crossing.reduce(into: [String: GameModels.Operation]()) { ops, code in
+            ops[code] = GameModels.Operation(
+                id: "OP-\(code)", entityCode: code, kind: OperationKind.travel.rawValue,
+                status: .active, source: .poll, startedAt: now, completesAt: nil,
+                lastConfirmedAt: now, detail: .object([:])
+            )
+        }
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1"),
+            EventRunFixtures.courier(attachedTo: "CARRIER", location: "X-1"),
+            EventRunFixtures.device("FREIGHT-1", type: "cargo_freighter", location: "X-1"),
+            EventRunFixtures.device("FREIGHT-2", type: "cargo_freighter", location: "X-1"),
+        ]
+        return EventRun().nextAction(
+            directive: directive(step: .returning, codes: ["FREIGHT-1", "FREIGHT-2"]),
+            world: EventRunFixtures.world(
+                devices: devices, event: Megaproject.event(), now: now, openOperations: ops
+            )
+        )
+    }
+
+    /// The return leg answers to the same rule as the outbound one.
+    @Test func aCrossingCarrierDoesNotHoldTheFreighterAtTheEvent() {
+        #expect(returning(crossing: ["CARRIER"]) == .dispatch(
+            kind: .travel, deviceCode: "FREIGHT-1",
+            params: CommandParams(destination: "HUB-1"),
+            nextStep: EventRun.Step.returning.rawValue
+        ))
+    }
+
+    /// A convoy wholly in the air on the way home waits rather than unloading a
+    /// hold that has not landed.
+    @Test func aConvoyFlyingHomeWaitsRatherThanDepositing() {
+        #expect(returning(crossing: ["CARRIER", "FREIGHT-1", "FREIGHT-2"]) == .wait)
+    }
+
     /// A row written through the single-freighter mirror still leases its hull,
     /// so nothing that predates the list goes unreserved.
     @Test func theMirrorAloneStillLeases() {

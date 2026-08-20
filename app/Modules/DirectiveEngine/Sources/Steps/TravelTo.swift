@@ -48,6 +48,14 @@ struct TravelTo: Equatable, Sendable {
         }
     }
 
+    /// This hull's leg is already in the air: a travel op is open and the row
+    /// does not read as arrived. A caller flying SEVERAL hulls asks this to step
+    /// past a leg in flight rather than return the `.wait` `next` answers for it.
+    func isUnderway(_ ctx: StepContext) -> Bool {
+        guard let device = ctx.world.device(deviceCode), !hasArrived(device) else { return false }
+        return ctx.openOperation(for: deviceCode) != nil
+    }
+
     func next(_ ctx: StepContext) -> StepResult {
         guard let device = ctx.world.device(deviceCode) else { return .noSubject }
         if hasArrived(device) { return .finished }
