@@ -78,13 +78,17 @@ public struct DirectiveSlice: Equatable, Sendable {
             )
         }
 
-        // Every directive's own dispatch entries — feeds the mission-half's
-        // pre-owner-column fallback attribution below.
+        // Only entries naming a NULL-owner mission op — an owned one is
+        // already attributed via `operation.directiveID.in(ids)` below.
+        let nullOwnedMissionOpIDs = GameModels.Operation
+            .where { $0.directiveID.is(nil) && $0.kind.in(WorldSnapshot.dispatchedKinds) }
+            .select(\.id)
         let dispatchRows = try DirectiveLogEntry
             .where {
                 $0.directiveID.in(ids)
                     && $0.kind.eq(DirectiveLogKind.commandDispatched)
                     && $0.operationID.isNot(nil)
+                    && ($0.operationID ?? "").in(nullOwnedMissionOpIDs)
             }
             .order { $0.occurredAt }
             .fetchAll(db)

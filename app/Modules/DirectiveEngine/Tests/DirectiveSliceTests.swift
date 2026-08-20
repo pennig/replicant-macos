@@ -468,6 +468,44 @@ private func sliceDirective() -> Directive {
         }
     }
 
+    /// The log fallback exists only for a mission op with no owner column —
+    /// D1's log naming it is what attributes it, same as `OP-A2` above.
+    @Test func aNullOwnerMissionOpIsAttributedByItsDispatchersLog() async throws {
+        let database = try GameDatabase.bootstrap()
+        let a = directiveFixture(id: "D1", deviceCode: "V1")
+        try await database.write { db in
+            try Operation.insert { operation("OP-NULL", kind: .print) }.execute(db)
+            try DirectiveLogEntry.insert { dispatchEntry("LA", op: "OP-NULL", at: 1) }.execute(db)
+        }
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [a])
+            #expect(batched["D1"]?.dispatchedOperations.keys.sorted() == ["OP-NULL"])
+        }
+    }
+
+    /// A mission op D2 already owns must never be pulled into D1's
+    /// `dispatchedOperations` just because D1's own log also names it — the
+    /// log fallback is for NULL-owner ops only, never a second vote.
+    @Test func theLogFallbackNeverCrossAttributesAnOwnedOperation() async throws {
+        let database = try GameDatabase.bootstrap()
+        let a = directiveFixture(id: "D1", deviceCode: "V1")
+        let b = directiveFixture(id: "D2", deviceCode: "V2")
+        try await database.write { db in
+            try Operation.insert { operation("OP-OWNED", kind: .print, directiveID: "D2") }.execute(db)
+            try DirectiveLogEntry.insert { dispatchEntry("LA", op: "OP-OWNED", at: 1) }.execute(db)
+            // Matched, so this exercises the mission-log-fallback path in
+            // isolation from the (separately-scoped) kind-agnostic audit half.
+            try DirectiveLogEntry.insert { completedEntry("LA-DONE", op: "OP-OWNED", at: 2) }.execute(db)
+        }
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [a, b])
+            #expect(batched["D1"]?.dispatchedOperations.isEmpty == true)
+            #expect(batched["D2"]?.dispatchedOperations.keys.sorted() == ["OP-OWNED"])
+        }
+    }
+
     /// A blob decoded for one directive's target must not appear on a
     /// directive whose own `decoded`/`wanted` sets never named it, even
     /// though the two fetches run once across the whole batch.

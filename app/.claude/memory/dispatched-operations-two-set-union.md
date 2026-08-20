@@ -55,12 +55,46 @@ red under that mutation). `directive_log_by_directive_kind` (`directiveID, kind,
 the outer scan and the inner subquery an indexed `SEARCH`, the inner one a covering-index point lookup —
 `EXPLAIN QUERY PLAN` confirms neither side is a table scan.
 
-Measured on the live database: the eliminated completion fetch was 1,772 rows, now returned as the 3-row
-worklist directly. The dispatch-rows fetch (1,775) is unrelated to this fix and still runs — it also
-feeds `dispatchedOperations`' log-fallback attribution for mission ops with no `directiveID` owner column
-(pre-owner-column rows), a different consumer of the same table this ticket left alone. So the audit
-computation itself collapsed from ~3,547 fetched rows to 3; the slice's total `directiveLogEntries` reads
-per tick went from ~3,547 to ~1,778.
+The eliminated completion fetch was ~1,772 rows, now returned as the 3-row worklist directly.
+
+**The mission-log-fallback fetch had the identical defect, and it shipped bigger.** `dispatchRows` fed
+`dispatchedIDsByDirective`, which exists for exactly one job: attributing a mission op (`print`/`travel`)
+with **no** `directiveID` owner column — a pre-owner-column row, traceable only through the log that
+dispatched it. It originally fetched every `commandDispatched` entry for the whole batch (~1,778 rows) to
+serve that one narrow need, and — same shape as the anti-join bug above — `missionOpsByID` was a flat,
+batch-wide `[id: Operation]` lookup with no owner check, so a directive whose log happened to name an
+op another directive's `directiveID` column already claimed got handed that op too. An owned op is
+already found by `operation.directiveID.in(ids)`, so the fallback is redundant for it; the fetch is now
+filtered to entries naming a mission-kind op whose OWN `directiveID` is NULL:
+
+```swift
+let nullOwnedMissionOpIDs = GameModels.Operation
+    .where { $0.directiveID.is(nil) && $0.kind.in(WorldSnapshot.dispatchedKinds) }
+    .select(\.id)
+DirectiveLogEntry.where {
+    $0.directiveID.in(ids) && $0.kind.eq(.commandDispatched) && $0.operationID.isNot(nil)
+        && ($0.operationID ?? "").in(nullOwnedMissionOpIDs)
+}
+```
+
+`theLogFallbackNeverCrossAttributesAnOwnedOperation` pins this — an op D2 owns, named only in D1's log,
+must never appear in D1's `dispatchedOperations` — and goes red under the mutation of dropping the
+`nullOwnedMissionOpIDs` filter; `aNullOwnerMissionOpIsAttributedByItsDispatchersLog` pins that the
+legitimate fallback still works. `operation_by_directive (directiveID, startedAt)` keeps this an indexed
+`SEARCH`, not a scan.
+
+**What ships, measured on the live database, same 22-directive roster:** the audit anti-join returns its
+3-row worklist directly (was ~1,772 to derive it); the mission-log fallback now reads ~182 rows (was
+~1,778, unfiltered). The slice's total `directiveLogEntries` reads per tick: **3,553 (original) → ~1,781
+(audit anti-join alone) → ~185 (both fixes)** — a ~95% reduction from where this note started.
+
+**A related shape, found but NOT fixed here.** `auditOpsByID` (the audit half, a few paragraphs up) is
+ALSO a flat, batch-wide `[id: Operation]` lookup with no owner-column check. Unlike the mission half,
+this is not obviously a bug: the audit half is deliberately scoped by the LOG ENTRY's own `directiveID`,
+not the operation's, because its job is "does MY dispatch of this op still need closing" — a question the
+op's owner column doesn't answer and was never meant to gate (see "kept kind-agnostic on purpose" above).
+Whether an op named in two directives' logs should audit-close for both, or only one, is a real open
+question this note does not resolve — flag it before assuming the audit half needs the same fix.
 
 **Consumers, so `dispatchedKinds` isn't re-widened by accident:**
 - `RelayRun.printedRelayCode` — names a clone off a COMPLETED print, hours after it closed.
