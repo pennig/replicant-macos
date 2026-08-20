@@ -245,10 +245,8 @@ public struct WorldSnapshot: Equatable, Sendable {
         let vesselCode = directive.deviceCode
 
         return try await database.read { db in
-            let devices = try Device.all.fetchAll(db)
-            let operations = try GameModels.Operation
-                .where { $0.status.in(OperationStatus.openCases) }
-                .fetchAll(db)
+            let core = try WorldCore.read(from: db)
+
             // Newest `logWindow` first, then restored to ascending order — the
             // order every caller (`.reversed()` walks included) already expects.
             let log = try Array(DirectiveLogEntry
@@ -309,17 +307,9 @@ public struct WorldSnapshot: Equatable, Sendable {
                 uniquingKeysWith: { first, _ in first }
             )
 
-            // The in-force rows, this directive's own included — see `peers`.
-            // Status-scoped by `DirectiveStatus.openCases`: a directive
-            // still owning its carrier is still competing for stock; a finished
-            // one is not.
-            let peers = try Directive
-                .where { $0.status.in(DirectiveStatus.openCases) }
-                .fetchAll(db)
-
             var wanted = baseWanted
             var decoded = baseDecoded
-            if let vessel = devices.first(where: { $0.deviceCode == vesselCode }),
+            if let vessel = core.devices[vesselCode],
                let location = vessel.location {
                 // The arrival check reads the system the vessel is in now.
                 wanted.insert(SiteAssay.system(of: location))
@@ -343,85 +333,25 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .fetchAll(db)
             let siteAssays = Dictionary(assays.map { ($0.id, $0.totals) }, uniquingKeysWith: { _, last in last })
 
-            // Whole table by design — see the property's doc comment. Read in
-            // the SAME transaction as everything else so a mission never sees a
-            // pile that a device row from a different instant contradicts.
-            let footprintRows = try LocationFootprint.all.fetchAll(db)
-            let footprints = Dictionary(
-                footprintRows.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }
-            )
-
-            // Same geometry `WorldView.read` computes: a haul candidate must
-            // sit in the delivering theatre's own mesh COMPONENT, not merely be meshed.
-            // Four columns, never the whole row: this is a `[String: Position]`
-            // and nothing here reads the rest. `Star` carries three `Date`
-            // columns, and decoding a Date means an ISO-8601 parse per row —
-            // at catalogue scale that parse cost dominated this whole read
-            // while its result was discarded on the next line.
-            let starRows = try Star.all
-                .select { ($0.designation, $0.positionX, $0.positionY, $0.positionZ) }
-                .fetchAll(db)
-            let starPositions = Dictionary(
-                starRows.map { ($0.0, Position(x: $0.1, y: $0.2, z: $0.3)) },
-                uniquingKeysWith: { _, last in last }
-            )
-            let mesh = SalvageTargetPlanner.meshSystems(in: devices)
-            let components = MeshGraph(positions: starPositions).components(of: mesh)
-
-            let blueprintRows = try Blueprint.all
-                .select { ($0.deviceType, $0.resources, $0.components, $0.printTime) }
-                .fetchAll(db)
-            let blueprintBills = Dictionary(
-                blueprintRows.map { ($0.0, $0.1) }, uniquingKeysWith: { _, last in last }
-            )
-            let blueprintComponents = Dictionary(
-                blueprintRows.map { ($0.0, $0.2) }, uniquingKeysWith: { _, last in last }
-            )
-            let blueprintPrintTimes = Dictionary(
-                blueprintRows.map { ($0.0, $0.3) }, uniquingKeysWith: { _, last in last }
-            )
-
-            // Same `TheatreRegistry` call `WorldView.read` makes — two lists
-            // of theatres in one process would be a real hazard.
-            let pins = try TheatrePin.all.fetchAll(db)
-            let theatres = TheatreRegistry.recognise(
-                devices: devices, pins: pins,
-                records: try TheatreRecord.order { $0.depot }.fetchAll(db), meshSystems: mesh,
-                components: components, stockByLocation: footprints.mapValues(\.resources)
-            )
-
-            // Whole table, like `footprints` — a convoy must see the row it
-            // is about to commit, in this same transaction.
-            let eventRows = try LocationEvent.all.fetchAll(db)
-            let locationEvents = Dictionary(
-                eventRows.map { ($0.designation, $0) }, uniquingKeysWith: { _, last in last }
-            )
-            let replicantHostDevices = Set(
-                try Replicant.all.fetchAll(db).compactMap(\.hostedDeviceCode)
-            )
-
             return WorldSnapshot(
-                devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
-                openOperations: Dictionary(
-                    operations.filter { $0.status == .active }.map { ($0.entityCode, $0) },
-                    uniquingKeysWith: { _, last in last }
-                ),
-                queuedOperations: Dictionary(grouping: operations, by: \.entityCode),
+                devices: core.devices,
+                openOperations: core.openOperations,
+                queuedOperations: core.queuedOperations,
                 log: log,
                 auditLog: auditLog,
                 dispatchedOperations: dispatched,
                 systems: systems,
                 siteAssays: siteAssays,
-                footprints: footprints,
-                starPositions: starPositions,
-                components: components,
-                blueprintBills: blueprintBills,
-                blueprintComponents: blueprintComponents,
-                blueprintPrintTimes: blueprintPrintTimes,
-                theatres: theatres,
-                locationEvents: locationEvents,
-                replicantHostDevices: replicantHostDevices,
-                peers: peers,
+                footprints: core.footprints,
+                starPositions: core.starPositions,
+                components: core.components,
+                blueprintBills: core.blueprintBills,
+                blueprintComponents: core.blueprintComponents,
+                blueprintPrintTimes: core.blueprintPrintTimes,
+                theatres: core.theatres,
+                locationEvents: core.locationEvents,
+                replicantHostDevices: core.replicantHostDevices,
+                peers: core.peers,
                 now: now
             )
         }
