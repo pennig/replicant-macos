@@ -262,6 +262,12 @@ The phase boundary is not negotiable. Phase A must be green and checkpointed bef
 5. **Task 7** (39): `RestockRun`'s pre-spend sweep. C8 lands here; automation-brain ticket 14 closes.
 6. **Task 8** (40): the Print Queue shows its owners.
 
+**Checkpoint E — RUN AND PASSED, 2026-08-19.** Matt ran the app with the brain on and reports
+every printer being leveraged by multiple runs, and **multiple prints from a single Mine Fleet
+Print** — which is C1 working, the acceptance criterion this whole stage was built for. The
+observed concurrent-print count is greater than 1, so Phase A worked and Phase B may start.
+Original wording follows.
+
 **Checkpoint E** (after Task 6, before Task 7): run the app for one evening with the brain on, at a depot with more than one autofactory. Expected: the Operations Log shows two or more concurrent print ops at that depot attributed to the same run; the Print Queue's `+N` badges move; no run orders a device type it already has on order. Record the observed concurrent-print count — if it is 1, Phase A did not work and Phase B must not start.
 
 **Phase B — depth (tickets 41-47, one migration)**
@@ -2358,7 +2364,7 @@ Commit with the message `chore(directives): Stage 3 tidy-up — doc comments, or
 
 ## Open questions for the operator
 
-Four decisions, not tasks — **three still open, since the stall triage answered the third on 2026-08-19.** Two of the three block nothing; the fourth wants an answer before Task 14.
+Four decisions, not tasks — **two still open.** The third was answered by the stall triage on 2026-08-19 and the fourth from the live ledger the same day. **Neither of the two that remain blocks anything**; both are questions about policy rather than fact.
 
 1. **The rail-short policy stays split 4-1, and this plan does not unify it.** `RelayRun.acquire` stalls with `.printStockShort` when the reserve rail is short; the other four wait. Both are documented as deliberate — `RestockRun.swift:82-85` says a decline is never a stall because "dressing idle calm up as a halt spends an operator's attention on nothing", and `RelayRun` is acquiring the single relay its run exists to place. Departure 5 keeps both by making it a `PrintOrder` parameter. **Is that the end state, or should every print site eventually behave one way?** Nothing breaks either way; it is a question about how much of your attention a short rail deserves.
 
@@ -2366,7 +2372,11 @@ Four decisions, not tasks — **three still open, since the stall triage answere
 
 3. ~~**Blocks Task 11 Step 3.**~~ **ANSWERED and closed, 2026-08-19, without needing the probe.** The question was whether `device_type` on a `print.completed` names the printer or the thing printed. The stall triage merged at `34e6a61` answered it from the live ledger: 23 of 235 resolved print ops carry a `result.device_type` contradicting their `params.device_type`, and the case that prompted the fix was a `defence_grid` completion closing a Relay Run's `ftl_relay` print op. **It names the printed device.** Departure 4 carries the consequence: the guard that shipped is a refusal, and Task 11 must turn it into a selection before Task 10's index relax makes refusal wrong.
 
-4. **Blocks Task 14 Step 3.** `Device.queueSize` is the bench's capacity, and the scheduler uses it as the ceiling on depth. **What is not evidenced is whether a `quantity: 3` job takes one queue slot or three.** `MineFleetPrint` routinely orders multi-unit jobs (`MineFleetPrint.swift:114-118`). This plan assumes one slot per job, which under-counts and risks a rejected enqueue rather than a lost one — the safer of the two failure modes, but still a guess. One live observation of a multi-unit print's `print_queue` settles it.
+4. ~~**Blocks Task 14 Step 3.**~~ **ANSWERED from the live ledger, 2026-08-19, and the plan's assumption was wrong.** The question was whether a `quantity: 3` job takes one queue slot or three. Bench `89130889` was carrying exactly ONE open print op — `service_bot`, `quantity: 2` — and its device row held one unit on the platen (`detail.printing`: `service_bot`, 43%, completes 19:26:23) **plus one entry in `detail.print_queue`** with the same `device_type` and the same `tags`. One job, two slots. **A `quantity: N` job occupies N slots, one at a time**, not one slot.
+
+   Two consequences for Task 14. First, **the depth formula is already right and must not be "fixed"**: `queuedJobCount` counts `print_queue` array entries, and an entry is a UNIT rather than a job, so `queuedJobCount + (printingSnapshot != nil ? 1 : 0)` is a true slot count. Multiplying by `quantity` anywhere would double-count. Second, `Device.queueSize` (capacity, typically 10) is therefore a ceiling **in units**, directly comparable to that depth, so the plan's stated fear of under-counting into a rejected enqueue does not arise.
+
+   Evidence caveat: one bench, one job, quantity 2 — no `print_queue` entry anywhere in the live table carries a `quantity` field, so per-unit entries are the only reading that explains a second slot. The competing reading, that the queue entry belongs to a different job whose op row was lost, would itself be notable and is not otherwise indicated.
 
 ---
 
