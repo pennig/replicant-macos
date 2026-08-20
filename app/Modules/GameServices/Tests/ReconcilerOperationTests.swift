@@ -401,6 +401,45 @@ private typealias Operation = GameModels.Operation
         #expect(ops.first?.status == OperationStatus.optimistic)
     }
 
+    /// An in-flight `optimistic` op of the same kind must not block promoting
+    /// a genuinely live sibling — even one that sorts *after* it by
+    /// `(startedAt, id)`, which only a `liveCases`-only scan gets right.
+    @Test func liveSiblingIsPromotedDespiteAnEarlierOptimisticOp() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "staging", entityCode: "965AC2C3", kind: OperationKind.print.rawValue,
+                    status: OperationStatus.optimistic, source: OperationSource.optimistic,
+                    startedAt: Date(timeIntervalSince1970: -1_000), completesAt: nil,
+                    lastConfirmedAt: Date(timeIntervalSince1970: -1_000), detail: .object([:])
+                )
+            }.execute(db)
+            try Operation.insert {
+                Operation(
+                    id: "existing", entityCode: "965AC2C3", kind: OperationKind.print.rawValue,
+                    status: OperationStatus.enqueued, source: OperationSource.optimistic,
+                    startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+                    lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+                )
+            }.execute(db)
+        }
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(printingDevice("965AC2C3"))
+        }
+
+        let ops = try await database.read { db in
+            try Operation.where { $0.entityCode.eq("965AC2C3") }.fetchAll(db)
+        }
+        #expect(ops.count == 2)
+        #expect(ops.first { $0.id == "existing" }?.status == OperationStatus.active)
+        #expect(ops.first { $0.id == "staging" }?.status == OperationStatus.optimistic)
+    }
+
     /// Meeting a survey drone mid-search (a `scan` block with an `eta_seconds`
     /// countdown and no `completes_at`) adopts an active `search` op whose
     /// deadline is the fetch event-time plus the remaining ETA — so a cold-load

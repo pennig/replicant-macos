@@ -119,21 +119,22 @@ public struct Reconciler: Sendable {
         // (a dispatched print sits `enqueued` with no deadline until then, so
         // the progress bar can't draw). Both also refresh a slipped deadline.
         if let activity = device.derivedActivity {
-            let openOps = try Operation.where {
-                $0.entityCode.eq(device.deviceCode) &&
-                $0.status.in(OperationStatus.openCases)
-            }
-            .order { ($0.startedAt, $0.id) }
-            .fetchAll(db)
-
-            // The oldest op of any status tracking this activity's kind — the
-            // op the device is actually running, or about to.
-            let matchingOp = openOps.first { $0.kind == activity.kind.rawValue }
+            let live = try Self.liveOps(on: device.deviceCode, in: db)
+            // The oldest LIVE op tracking this activity's kind — the op the
+            // device is actually running, or about to.
+            let matchingOp = live.first { $0.kind == activity.kind.rawValue }
             // A live *active* op of a DIFFERENT kind means the device moved
             // on; a merely-enqueued sibling is just queued behind it.
-            let staleActiveOp = openOps.first { $0.status == .active && $0.kind != activity.kind.rawValue }
+            let staleActiveOp = live.first { $0.status == .active && $0.kind != activity.kind.rawValue }
+            // An in-flight `optimistic` dispatch of this exact kind owns its
+            // own confirmation; adopting over it would race a duplicate.
+            let optimisticMatch = try Operation.where {
+                $0.entityCode.eq(device.deviceCode)
+                    && $0.status.eq(OperationStatus.optimistic)
+                    && $0.kind.eq(activity.kind.rawValue)
+            }.fetchOne(db)
 
-            if let matchingOp, matchingOp.status != .optimistic, activity.completesAt != nil,
+            if let matchingOp, activity.completesAt != nil,
                matchingOp.status != .active || matchingOp.completesAt != activity.completesAt {
                 // A queued op that has now started, or a moved deadline.
                 // Promote/refresh in place (same id preserves identity).
@@ -145,7 +146,7 @@ public struct Reconciler: Sendable {
                 updated.lastConfirmedAt = device.updatedAt
                 try Operation.upsert { updated }.execute(db)
                 logger.info("ingest \(device.deviceCode, privacy: .public): promoted \(matchingOp.kind, privacy: .public) op \(matchingOp.id, privacy: .public) to active from in-progress snapshot")
-            } else if matchingOp == nil {
+            } else if matchingOp == nil, optimisticMatch == nil {
                 // The device moved to a different activity with no settle or
                 // completion event seen — a server-driven transition.
                 if let staleActiveOp {

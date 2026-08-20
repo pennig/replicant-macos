@@ -18,9 +18,9 @@ import Utils
 
 private typealias Operation = GameModels.Operation
 
-/// One autofactory runs a queue the server sizes at ten, so a completion
-/// arriving there is often some other run's job — closing on device code
-/// alone once stamped a contradicting result into 23 of 235 resolved prints.
+/// A completion selects among a bench's live print jobs by matching the
+/// device type it names, falling back to the oldest live job when no live
+/// op names a type or none matches.
 @Suite struct ReconcilerSharedBenchTests {
     private let bench = "43C9B54A"
     private let start = Date(timeIntervalSince1970: 1_782_000_000)
