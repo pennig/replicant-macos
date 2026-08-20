@@ -94,27 +94,9 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// `WorldView.replicantHostDevices`. Hosting is a roster fact, never a
     /// device column — `Device.replicantCode` records ownership instead.
     public let replicantHostDevices: Set<String>
-    /// The other in-force directives, INCLUDING this one — the rows a mission
-    /// needs to see to know what its siblings already own.
-    ///
-    /// **Every other field here answers "what is the world like?"; this one
-    /// answers "who else is competing for it?"** Most steps need neither — the
-    /// directive row is the lease ledger and `Brain.reservedDevices` does the
-    /// allocating, so a mission never arbitrates for a leased device.
-    ///
-    /// The exception is claiming shared stock no lease covers. Idle relays
-    /// standing at a print hub belong to nobody: they are unstowed, no
-    /// directive names them, and the brain cannot pre-assign them because it
-    /// allocates at LAUNCH while a run claims one much later, once a print
-    /// completes. Two Relay Runs are independent `Task`s on independent
-    /// five-second clocks (`DirectiveEngine.makeExecutor`), so "whoever asks
-    /// first" is a real race with no serialising authority above it; peers let
-    /// a run settle it itself by asking whether it is the oldest waiting run at
-    /// this hub (`RelayRun.isNextInLine`), which is what makes the claim
-    /// race-free and FIFO.
-    ///
-    /// Read in the SAME transaction as the devices, so a run can never see a
-    /// peer's row from one instant against a fleet from another.
+    /// The other in-force directives, INCLUDING this one — read in the SAME
+    /// transaction as the devices, and the basis of `RelayRun.isNextInLine`.
+    /// See `app/.claude/memory/world-snapshot-peers-fifo.md`.
     public let peers: [Directive]
     /// The moment this snapshot was taken. Every time comparison in a mission
     /// uses this rather than `Date()`, so step machines stay pure and their

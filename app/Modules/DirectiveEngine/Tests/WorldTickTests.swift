@@ -5,12 +5,17 @@
 //  The point of the whole task: one transaction per tick, however many
 //  directives are running — and the per-directive `WorldSnapshot` composed
 //  back out of it. `ReadCounter` proves the transaction count, not the log.
+//  The tick LOOP that drives every executor from that read is here too.
 //
 
+import ConcurrencyExtras
+import Dependencies
 import Foundation
 import GameDatabase
 import GameModels
+import GameServices
 import GRDB
+import Sharing
 import SQLiteData
 import Testing
 import UniverseModels
@@ -278,5 +283,209 @@ private final class CountingReader: DatabaseReader, @unchecked Sendable {
         #expect(fromCore.locationEvents.count == 3)
         #expect(!fromCore.blueprintBills.isEmpty)
         #expect(!fromCore.blueprintComponents.isEmpty)
+    }
+}
+
+// MARK: - The tick loop
+
+/// Advances every directive it is asked about, recording the ids.
+private struct StepAdvancingMachine: MissionStepMachine {
+    let kind: DirectiveKind = .salvageRun
+    let firstStep = "step"
+    let asked = LockIsolated<[String]>([])
+
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        asked.withValue { $0.append(directive.id) }
+        return .advanceStep(nextStep: "advanced")
+    }
+
+    func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
+}
+
+/// `D1` asks for a device refresh the harness answers on its own schedule;
+/// every other directive advances.
+private struct BlockingMachine: MissionStepMachine {
+    let kind: DirectiveKind = .salvageRun
+    let firstStep = "step"
+
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        directive.id == "D1"
+            ? .refreshDevices(deviceCodes: ["V1"], thenStall: nil)
+            : .advanceStep(nextStep: "advanced")
+    }
+
+    func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
+}
+
+/// Poll `condition` on the real clock: an executor's evaluation is a genuine
+/// cross-thread hop, so a fixed yield count would flake.
+private func settle(
+    _ condition: @Sendable () async throws -> Bool,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async throws {
+    let deadline = ContinuousClock.now + .seconds(10)
+    while ContinuousClock.now < deadline {
+        if try await condition() { return }
+        await Task.yield()
+    }
+    Issue.record("condition never held", sourceLocation: sourceLocation)
+}
+
+private func steps(_ database: any DatabaseReader) async throws -> [String] {
+    try await database.read { db in try Directive.all.order { $0.id }.fetchAll(db) }.map(\.step)
+}
+
+@Suite struct TickLoopTests {
+    /// One tick reconciles the roster and evaluates EVERY running directive
+    /// from its own single read — no executor opens a read of its own.
+    @Test func oneTickAdvancesEveryRunningDirective() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for i in 1...3 {
+                try Directive.insert {
+                    directiveFixture(id: "D\(i)", deviceCode: "V\(i)", targets: ["SOL"])
+                }.execute(db)
+            }
+        }
+        let machine = StepAdvancingMachine()
+        let core = DirectiveEngineCore(machines: [machine], tick: .seconds(5))
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.uuid = .incrementing
+            $0.continuousClock = TestClock()
+            $0.defaultInMemoryStorage = InMemoryStorage()
+        } operation: {
+            await core.runTick(generation: 1)
+            try await settle { try await steps(database) == ["advanced", "advanced", "advanced"] }
+            #expect(await core.executorCount == 3, "one executor per running directive")
+            #expect(machine.asked.value.sorted() == ["D1", "D2", "D3"])
+            await core.stop()
+        }
+    }
+
+    /// The brain runs off the SAME tick, and its report reaches the why-view's
+    /// feed — one tick loop, not a supervisor with a brain beside it.
+    @Test func oneTickAlsoTicksTheBrain() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedRelay(db, code: "REL1", location: "SOL")
+            try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
+        }
+        let core = DirectiveEngineCore(machines: [], tick: .seconds(5))
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.uuid = .incrementing
+            $0.continuousClock = TestClock()
+            $0.defaultInMemoryStorage = InMemoryStorage()
+        } operation: {
+            await core.runTick(generation: 1)
+            #expect(await core.brainTickCount == 1)
+            @Shared(.brainReport) var published: BrainReport?
+            #expect(published?.observedAt == Date(timeIntervalSince1970: 100))
+            await core.stop()
+            #expect(published == nil, "stop() retires the feed with the loop that fed it")
+        }
+    }
+
+    /// Error isolation and serialisation in one: a directive blocked in a
+    /// refresh neither delays its siblings' evaluations nor takes a second
+    /// evaluation of its own while the first is still in flight.
+    @Test func aBlockedDirectiveNeitherDelaysSiblingsNorDoublesUp() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for i in 1...3 {
+                try Directive.insert {
+                    directiveFixture(id: "D\(i)", deviceCode: "V\(i)", targets: ["SOL"])
+                }.execute(db)
+            }
+        }
+        let entered = LockIsolated(0)
+        let released = LockIsolated(false)
+        let core = DirectiveEngineCore(machines: [BlockingMachine()], tick: .seconds(5))
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 100))
+            $0.uuid = .incrementing
+            $0.continuousClock = TestClock()
+            $0.defaultInMemoryStorage = InMemoryStorage()
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in
+                entered.withValue { $0 += 1 }
+                while !released.value { await Task.yield() }
+                return nil
+            }
+        } operation: {
+            await core.runTick(generation: 1)
+            try await settle { try await steps(database) == ["step", "advanced", "advanced"] }
+            await core.runTick(generation: 2)
+            await core.runTick(generation: 3)
+            try await settle { try await steps(database) == ["step", "advanced", "advanced"] }
+            #expect(entered.value == 1, "a tick landing mid-evaluation must not start a second")
+            released.setValue(true)
+            await core.stop()
+        }
+    }
+}
+
+@Suite struct PausedDirectiveDelta {
+    /// The one accepted behaviour change, pinned rather than left to inspection:
+    /// the directive row comes from the tick's read, so a pause landing mid-tick
+    /// is honoured on the NEXT tick, up to 5s later.
+    @Test func advancesNoDirectivePausedBeforeTheTickRead() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert {
+                directiveFixture(id: "D1", status: .paused, deviceCode: "V1", targets: ["SOL"])
+            }.execute(db)
+        }
+        let tick = try await WorldTick.read(
+            from: database, now: Date(timeIntervalSince1970: 100), generation: 1
+        )
+        #expect(tick.running.isEmpty)
+        #expect(tick.snapshot(for: "D1") == nil)
+    }
+
+    /// The delta itself, both halves: a pause landing AFTER the tick's read is
+    /// still evaluated against that read, and the very next tick honours it.
+    @Test func aPauseLandingAfterTheReadIsHonouredOnTheNextTick() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert {
+                directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
+            }.execute(db)
+        }
+        let now = Date(timeIntervalSince1970: 100)
+        let first = try await WorldTick.read(from: database, now: now, generation: 1)
+        try await database.write { db in
+            try Directive.where { $0.id.eq("D1") }
+                .update { $0.status = DirectiveStatus.paused }
+                .execute(db)
+        }
+        let core = DirectiveEngineCore(machines: [StepAdvancingMachine()], tick: .seconds(5))
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1", tick: first)
+            #expect(try await steps(database) == ["advanced"], "the tick's row is what it evaluated")
+
+            // That evaluation's whole-row write put `running` back, so re-pause
+            // exactly as the operator would before the next tick reads.
+            try await database.write { db in
+                try Directive.where { $0.id.eq("D1") }
+                    .update { $0.status = DirectiveStatus.paused }
+                    .execute(db)
+            }
+            let second = try await WorldTick.read(from: database, now: now, generation: 2)
+            #expect(second.running.isEmpty)
+            await core.evaluateOnce(directiveID: "D1", tick: second)
+            let row = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(row?.status == .paused, "a paused row is never advanced once the tick has seen it")
+            #expect(row?.step == "advanced", "and never advanced a second time")
+        }
     }
 }
