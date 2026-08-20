@@ -35,7 +35,7 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// than the event, which is what keeps missions replay-immune.
     public let log: [DirectiveLogEntry]
     /// The audit pass's live worklist — unmatched `.commandDispatched` entries,
-    /// matched in SQL, never windowed by count. See
+    /// matched per directive in Swift, never windowed by count. See
     /// `app/.claude/memory/dispatched-operations-two-set-union.md`.
     public let auditLog: [DirectiveLogEntry]
     /// This directive's dispatched operations, by id — including closed ones;

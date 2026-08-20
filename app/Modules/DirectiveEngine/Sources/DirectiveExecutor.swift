@@ -296,7 +296,7 @@ enum DirectiveExecutor {
         @Dependency(\.date) var date
         @Dependency(\.uuid) var uuid
 
-        // Reads `auditLog` (SQL-matched, unwindowed), not `log`. See
+        // Reads `auditLog` (Swift-matched, unwindowed), not `log`. See
         // `app/.claude/memory/dispatched-operations-two-set-union.md`.
         var entries: [DirectiveLogEntry] = []
         for dispatch in world.auditLog where dispatch.kind == .commandDispatched {

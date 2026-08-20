@@ -15,11 +15,9 @@ import UniverseModels
 @testable import DirectiveEngine
 
 @Suite struct WorldCoreEquivalence {
-    /// The extraction is a refactor: a core read inside the same transaction
-    /// must produce exactly the fields the composed snapshot exposes. This is
-    /// the test that makes Tasks 4-8 safe to attempt. One row per table (two
-    /// for the relay + star `components` needs), so every comparison is a
-    /// real check rather than empty-to-empty.
+    /// `WorldSnapshot.read` composes from the same `WorldCore.read` this test
+    /// calls, so the `==` assertions are a WIRING check only, not a query
+    /// correctness one; the `!isEmpty` assertions are what carry the weight.
     @Test func matchesTheSnapshotItComposes() async throws {
         let database = try GameDatabase.bootstrap()
         let directive = directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])

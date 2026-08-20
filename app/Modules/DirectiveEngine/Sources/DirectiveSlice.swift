@@ -50,9 +50,9 @@ public struct DirectiveSlice: Equatable, Sendable {
         try readAll(from: db, core: core, directives: [directive])[directive.id] ?? .empty
     }
 
-    /// `read`, batched: every directive's scoped fields in one pass, a fixed
-    /// number of queries regardless of directive count. Keyed by
-    /// `directive.id`; a directive owning no rows still gets an empty entry.
+    /// `read`, batched: one bounded LIMIT query per directive for `log`, plus a
+    /// fixed handful of batched queries for the other four fields — a single
+    /// query cannot express a per-directive LIMIT without reading everything.
     public static func readAll(
         from db: Database, core: WorldCore, directives: [Directive]
     ) throws -> [String: DirectiveSlice] {

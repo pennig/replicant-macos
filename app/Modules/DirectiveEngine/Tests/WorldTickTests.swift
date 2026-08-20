@@ -698,9 +698,10 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
         #expect(tick.snapshot(for: "D1") == nil)
     }
 
-    /// The delta itself, both halves: a pause landing AFTER the tick's read is
-    /// still evaluated against that read, and the very next tick honours it.
-    @Test func aPauseLandingAfterTheReadIsHonouredOnTheNextTick() async throws {
+    /// The evaluation acts on the ROW THE TICK READ, not a fresh re-read: the
+    /// first tick still advances a directive paused after its read landed. A
+    /// pause RE-APPLIED after that evaluation is respected by the next tick.
+    @Test func theTickRowIsWhatEvaluationActsOnAndAReappliedPauseIsRespected() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert {
@@ -738,6 +739,37 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
             }
             #expect(row?.status == .paused, "a paused row is never advanced once the tick has seen it")
             #expect(row?.step == "advanced", "and never advanced a second time")
+        }
+    }
+
+    /// KNOWN DEFECT: `DirectiveExecutor.commit`'s whole-row upsert overwrites a
+    /// pause that lands mid-evaluation. Tracked as a follow-up; this test exists
+    /// so a future fix has a red-to-green target, not to bless the erasure.
+    @Test func aPauseLandingMidEvaluationIsErasedByTheWholeRowWrite() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert {
+                directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
+            }.execute(db)
+        }
+        let now = Date(timeIntervalSince1970: 100)
+        let tick = try await WorldTick.read(from: database, now: now, generation: 1)
+        try await database.write { db in
+            try Directive.where { $0.id.eq("D1") }
+                .update { $0.status = DirectiveStatus.paused }
+                .execute(db)
+        }
+        let core = DirectiveEngineCore(machines: [StepAdvancingMachine()], tick: .seconds(5))
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1", tick: tick)
+            let row = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(row?.status == .running, "the whole-row commit erased the pause that landed mid-evaluation")
         }
     }
 }

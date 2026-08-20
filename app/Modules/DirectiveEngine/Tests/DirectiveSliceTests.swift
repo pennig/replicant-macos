@@ -111,10 +111,8 @@ private func sliceDirective() -> Directive {
     }
 
     /// A third kind naming an operation is neither a dispatch nor a
-    /// completion — the `kind` filter, not just the anti-join, must keep it
-    /// out. An `.opCompleted` row would be excluded by the anti-join alone
-    /// (it always matches its own operation id), so only a kind that is
-    /// NEITHER `.commandDispatched` NOR `.opCompleted` can prove this clause.
+    /// completion — the `kind` filter must keep it out of `auditLog` on its
+    /// own, since an `.opCompleted` row would trivially match its own id.
     @Test func excludesEntriesOfAThirdKindNamingAnOperation() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -160,10 +158,9 @@ private func sliceDirective() -> Directive {
         #expect(world.dispatchedOperations.keys.sorted() == ["OP-P", "OP-T"])
     }
 
-    /// A print keeps every status, `.superseded` included: `printDiagnosis`
-    /// distinguishes "superseded" from "never dispatched", and
-    /// `printedRelayCode` reads the COMPLETED print to name the clone hours
-    /// after it closed. The kind filter must never become a status filter.
+    /// A print keeps every status, `.superseded` included — `printDiagnosis`
+    /// and `printedRelayCode` both need it. The kind filter must never
+    /// become a status filter.
     @Test func keepsPrintsOfEveryStatus() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -208,9 +205,9 @@ private func sliceDirective() -> Directive {
 }
 
 @Suite struct DirectiveSliceComposition {
-    /// The composed snapshot is the core plus the slice and nothing else — the
-    /// invariant every later task leans on. Seeds real rows for all five
-    /// scoped fields, not just the one log entry the brief's template covers.
+    /// `WorldSnapshot.read` composes from the same `WorldCore.read` +
+    /// `DirectiveSlice.read` this test calls, so `composed == direct` is a
+    /// WIRING check only; the five `!isEmpty` assertions carry the weight.
     @Test func composesTheSameSnapshotAsTheDirectRead() async throws {
         let database = try GameDatabase.bootstrap()
         let directive = sliceDirective()
@@ -247,8 +244,8 @@ private func sliceDirective() -> Directive {
 }
 
 @Suite struct DirectiveSliceBatching {
-    /// Batched must equal individual for every directive, or the tick is
-    /// quietly handing missions a different world than they get today.
+    /// A directive's slice must not depend on who else was in the batch:
+    /// `readAll([a,b])["D1"]` must equal `readAll([a])["D1"]` via `.read`.
     @Test func batchedMatchesIndividualForEachDirective() async throws {
         let database = try GameDatabase.bootstrap()
         let a = directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])

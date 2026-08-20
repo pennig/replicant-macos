@@ -1,6 +1,6 @@
 ---
 name: dispatched-operations-two-set-union
-description: "Why WorldSnapshot.dispatchedOperations unions a kind-filtered mission set with a kind-agnostic audit set instead of one query; the SQL-matched audit worklist behind it. 2026-08-20."
+description: "Why WorldSnapshot.dispatchedOperations unions a kind-filtered mission set with a kind-agnostic audit set instead of one query; the audit worklist is matched by a per-directive Swift set-difference, not a SQL anti-join. 2026-08-20."
 metadata:
   type: feedback
 ---
@@ -22,12 +22,20 @@ ANY kind to decide whether a dispatched op reached a terminal state and write it
 the audit pass closing every non-mission kind, with no pre-existing test positioned to notice; this was
 caught by design review, not by a failing test.
 
-**Why the audit worklist matches in SQL, not Swift** (commit `b3eb309`): `auditLog` used to be every
+**Why the audit worklist matches in Swift, not SQL** (commit `f6f9426`): `auditLog` used to be every
 `.opCompleted` plus every `.commandDispatched` naming an op, unbounded and un-deduped in Swift — 7,954
-rows on the oldest directive to find 4 actionable ones. An anti-join
-(`operationID NOT IN (subquery of already-closed ids)`) now does the matching in the query itself, so
-`auditLog` is just the live worklist: an unmatched dispatch, kind-agnostic, never windowed by count
-(unlike `log`'s 500-row window) because it is bounded by ops actually in flight, not by directive age.
+rows on the oldest directive to find 4 actionable ones. An earlier commit (`b3eb309`) replaced that with a
+SQL anti-join (`operationID NOT IN (subquery of already-closed ids)`), but the subquery's exclusion set
+was scoped across the WHOLE BATCH, not per directive — only correct while no operation id is ever named
+by two different directives, an invariant nothing in the schema enforces. `f6f9426` replaced the anti-join
+with what ships today (`DirectiveSlice.swift:93-112`): two unbounded fetches — every `.commandDispatched`
+and every `.opCompleted` row for the batched directives — followed by a per-directive Swift
+set-difference (`!completed.contains(opID)`).
+
+This is not bounded. Measured on the live database right now: the shipped code fetches 1,778 dispatch
+rows + 1,775 completion rows = 3,553 to produce a worklist of 3 actionable entries, and that total grows
+monotonically with directive age. Bounding this per directive (in SQL or otherwise) is a known follow-up,
+not a property of the current design.
 
 **Consumers, so `dispatchedKinds` isn't re-widened by accident:**
 - `RelayRun.printedRelayCode` — names a clone off a COMPLETED print, hours after it closed.

@@ -25,8 +25,8 @@ private let brainLogger = Logger(subsystem: "name.pennig.replicould", category: 
 public struct DirectiveEngine: Sendable {
     /// Begin supervising running directives. Idempotent.
     public var start: @Sendable () async -> Void
-    /// Cancel the supervisor and every executor. Must complete before the
-    /// directive tables are wiped.
+    /// Cancel the tick loop, every executor, and the brain tick. Must complete
+    /// before the directive tables are wiped.
     public var stop: @Sendable () async -> Void
 
     /// `start` and `stop` are the implementations of the properties of the same
@@ -191,7 +191,7 @@ actor DirectiveEngineCore {
     /// The ENTRY check catches a tick that began after `stop()`; the EXIT check
     /// catches one suspended across `Brain.report()`, which would otherwise resume
     /// after the feed was cleared and republish the previous account's data. Both
-    /// read `Task.isCancelled`, not `brain != nil` — this body runs inside the task
+    /// read `Task.isCancelled`, not `brainTick != nil` — this body runs inside the task
     /// `stop()` cancels, so the flag is exact where the field is not yet cleared.
     func tickBrain(view: WorldView? = nil) async {
         guard !Task.isCancelled else {
@@ -219,7 +219,7 @@ actor DirectiveEngineCore {
         do {
             tick = try await WorldTick.read(from: database, now: date.now, generation: 0)
         } catch {
-            logger.error("supervisor read failed: \(error)")
+            logger.error("reconcile tick read failed: \(error)")
             return
         }
         // A stop() may have interleaved across the read above — never resurrect
