@@ -358,20 +358,13 @@ struct WorldSnapshotTests {
                     occurredAt: Date(timeIntervalSince1970: 2)
                 )
             }.execute(db)
-            try DirectiveLogEntry.insert {
-                DirectiveLogEntry(
-                    id: "L-DONE", directiveID: "D1", deviceCode: nil, kind: .opCompleted,
-                    summary: "travel completed", step: nil, operationID: "OP1", eventID: nil,
-                    occurredAt: Date(timeIntervalSince1970: 3)
-                )
-            }.execute(db)
         }
 
         let world = try await WorldSnapshot.read(
             from: database, now: Date(timeIntervalSince1970: 100), directive: directive()
         )
 
-        #expect(world.auditLog.map(\.id) == ["L-TRACKED", "L-DONE"])
+        #expect(world.auditLog.map(\.id) == ["L-TRACKED"])
     }
 
     /// `dispatchedOperations` reads `operations.directiveID` first, union the

@@ -3,11 +3,10 @@
 //  Replicould — DirectiveEngine
 //
 //  One serial executor per RUNNING custom directive, off the event-dispatch hot
-//  path; built-in directives get none, since the server runs them. Evaluation is
-//  clock-driven, not event-driven — a local SQLite read plus a pure function,
-//  touching the network only when a mission wants a command — so the engine never
-//  sees its own command echo and every test is deterministic under `TestClock`.
-//  Started with the sync engine on login, stopped BEFORE the tables are wiped.
+//  path; built-ins get none, since the server runs them. ONE `WorldTick` read
+//  per tick feeds every executor and the brain; the network is touched only for
+//  a mission's command, so the engine never sees its own echo. Started with the
+//  sync engine on login, stopped BEFORE the tables are wiped.
 //
 
 import Dependencies
@@ -26,8 +25,8 @@ private let brainLogger = Logger(subsystem: "name.pennig.replicould", category: 
 public struct DirectiveEngine: Sendable {
     /// Begin supervising running directives. Idempotent.
     public var start: @Sendable () async -> Void
-    /// Cancel the supervisor and every executor. Must complete before the
-    /// directive tables are wiped.
+    /// Cancel the tick loop, every executor, and the brain tick. Must complete
+    /// before the directive tables are wiped.
     public var stop: @Sendable () async -> Void
 
     /// `start` and `stop` are the implementations of the properties of the same
@@ -55,24 +54,32 @@ public struct DirectiveEngine: Sendable {
     }
 }
 
-/// The engine's mutable half: the supervisor loop, one executor task per running
-/// directive, the brain's plan loop, and the resolvers for the actions a mission
-/// cannot apply by itself.
+/// The engine's mutable half: the tick loop, one executor task per running
+/// directive, and the resolvers for the actions a mission cannot apply by
+/// itself.
 actor DirectiveEngineCore {
     /// The registered machines, one per kind; a kind absent here is never run.
     private let machines: [DirectiveKind: any MissionStepMachine]
     /// The interval every loop in this actor sleeps for between iterations.
     private let tick: Duration
-    /// The supervisor loop, nil when stopped. Doubles as the "am I running?"
-    /// flag `reconcileExecutors()` re-checks after a suspension.
-    private var supervisor: Task<Void, Never>?
+    /// The one loop, nil when stopped: one world read, then the executors, then
+    /// the brain. Doubles as the "am I running?" flag `reconcileExecutors()`
+    /// re-checks after a suspension.
+    private var tickLoop: Task<Void, Never>?
+    /// The brain's tick, kept OFF the executors' path: it reaches the network,
+    /// so a hung one must freeze only itself. A tick landing while one is in
+    /// flight is skipped, never queued, so they cannot pile up.
+    private var brainTick: (task: Task<Void, Never>, generation: UInt64)?
     /// One evaluation loop per running directive, keyed by directive id.
     private var executors: [String: Task<Void, Never>] = [:]
-    /// The automation brain's plan loop — reads a `WorldView` and decides what's
-    /// worth doing every tick, beside (never inside) the supervisor loop. It
-    /// LAUNCHES: a tick that finds a grow worth making creates a `relayRun` row,
-    /// which the supervisor then picks up like any other. See `Brain.swift`.
-    private var brain: Task<Void, Never>?
+    /// The tick loop's monotonic counter — an actor field, not a loop-local, so
+    /// a stop()→start() cycle never reuses a generation a pre-stop brain task
+    /// could still resolve against.
+    private var tickGeneration: UInt64 = 0
+    /// Where each executor waits for its tick. Buffering the NEWEST alone is
+    /// what keeps a directive's evaluations serial: a tick arriving mid-
+    /// evaluation replaces the pending one rather than starting a second.
+    private var deliveries: [String: AsyncStream<WorldTick>.Continuation] = [:]
 
     /// Test seam: how many executors are alive.
     var executorCount: Int { executors.count }
@@ -89,62 +96,99 @@ actor DirectiveEngineCore {
         self.tick = tick
     }
 
-    /// Start the supervisor and the brain. Idempotent.
-    ///
-    /// Claims `supervisor` (and `brain`) before any suspension, so a concurrent
-    /// `start()` can't double-supervise and a `stop()` can't interleave between
-    /// the guard and the claim. Nothing suspends between the guard and either
-    /// claim, so both happen atomically within this actor turn.
+    /// Start the tick loop. Idempotent — `tickLoop` is claimed before any
+    /// suspension, so a concurrent `start()` cannot double-supervise and a
+    /// `stop()` cannot interleave between the guard and the claim.
     func start() {
-        guard supervisor == nil else {
+        guard tickLoop == nil else {
             logger.debug("start ignored — already running")
             return
         }
         logger.info("starting — \(self.machines.count) mission machine(s) registered")
-        do {
-            @Dependency(\.continuousClock) var clock
-            let tick = self.tick
-            supervisor = Task { [weak self] in
-                while !Task.isCancelled {
-                    await self?.reconcileExecutors()
-                    try? await clock.sleep(for: tick)
-                }
-            }
-        }
         brainLogger.info("starting — brain online")
-        do {
-            // A separate local read of the same dependencies as the supervisor
-            // above rather than sharing its `clock`/`tick`: two concurrently
-            // running Task closures must not capture the same local variable.
-            @Dependency(\.continuousClock) var clock
-            let tick = self.tick
-            brain = Task { [weak self] in
-                while !Task.isCancelled {
-                    await self?.tickBrain()
-                    try? await clock.sleep(for: tick)
-                }
+        @Dependency(\.continuousClock) var clock
+        let tick = self.tick
+        tickLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.runNextTick()
+                try? await clock.sleep(for: tick)
             }
         }
+    }
+
+    /// Bumps `tickGeneration` and runs one tick — split out of `start()`'s loop
+    /// so the counter lives on the actor, not the loop closure.
+    private func runNextTick() async {
+        tickGeneration &+= 1
+        await runTick(generation: tickGeneration)
     }
 
     /// Cancel every loop and clear the why-view's feed. Must complete before the
     /// directive tables are wiped.
     func stop() {
         logger.info("stopping")
-        supervisor?.cancel()
-        supervisor = nil
         brainLogger.info("stopping")
-        brain?.cancel()
-        brain = nil
-        // Retire the why-view's feed with the brain that fed it, or it shows the
-        // PREVIOUS account's data until the next login's first tick. It only STAYS
-        // cleared because `tickBrain()` re-checks cancellation before publishing —
-        // `cancel()` does not await, so a suspended tick resumes after this line.
+        tickLoop?.cancel()
+        tickLoop = nil
+        brainTick?.task.cancel()
+        brainTick = nil
+        // Cleared here or the why-view shows the PREVIOUS account's data; it STAYS
+        // cleared because `tickBrain()` re-checks cancellation before publishing.
         @Shared(.brainReport) var published: BrainReport?
         $published.withLock { $0 = nil }
         for (_, task) in executors { task.cancel() }
         executors.removeAll()
+        for (_, delivery) in deliveries { delivery.finish() }
+        deliveries.removeAll()
         idlePlanUntil.removeAll()
+    }
+
+    /// One tick: read the whole world once, reconcile the executor roster
+    /// against it, hand every running directive that read, and set the brain
+    /// going on the same read WITHOUT waiting for it.
+    func runTick(generation: UInt64) async {
+        @Dependency(\.defaultDatabase) var database
+        @Dependency(\.date) var date
+
+        let tick: WorldTick
+        do {
+            tick = try await WorldTick.read(from: database, now: date.now, generation: generation)
+        } catch {
+            logger.error("tick read failed: \(error)")
+            return
+        }
+        // A stop() may have interleaved across the read above — never resurrect
+        // executors for a torn-down engine.
+        guard !Task.isCancelled else { return }
+
+        reconcile(running: tick.running)
+        for directive in tick.running {
+            deliveries[directive.id]?.yield(tick)
+        }
+        startBrainTick(view: tick.view, generation: generation)
+    }
+
+    /// Set the brain going on `view`, unless the previous tick's is still in
+    /// flight. Awaiting it here would put a network read in front of every
+    /// executor's next evaluation.
+    private func startBrainTick(view: WorldView, generation: UInt64) {
+        guard brainTick == nil else {
+            brainLogger.debug("tick skipped — the previous one has not finished")
+            return
+        }
+        brainTick = (
+            Task { [weak self] in
+                await self?.tickBrain(view: view)
+                await self?.finishBrainTick(generation)
+            },
+            generation
+        )
+    }
+
+    /// Release the slot, unless a later tick already owns it.
+    private func finishBrainTick(_ generation: UInt64) {
+        guard brainTick?.generation == generation else { return }
+        brainTick = nil
     }
 
     /// One brain tick: bridge `now` in via `@Dependency(\.date)`, ask `Brain` for a
@@ -156,16 +200,16 @@ actor DirectiveEngineCore {
     /// The ENTRY check catches a tick that began after `stop()`; the EXIT check
     /// catches one suspended across `Brain.report()`, which would otherwise resume
     /// after the feed was cleared and republish the previous account's data. Both
-    /// read `Task.isCancelled`, not `brain != nil` — this body runs inside the task
+    /// read `Task.isCancelled`, not `brainTick != nil` — this body runs inside the task
     /// `stop()` cancels, so the flag is exact where the field is not yet cleared.
-    func tickBrain() async {
+    func tickBrain(view: WorldView? = nil) async {
         guard !Task.isCancelled else {
             brainLogger.debug("tick skipped — engine already stopped")
             return
         }
         brainTickCount += 1
         @Dependency(\.date) var date
-        let report = await Brain(now: date.now).report()
+        let report = await Brain(now: date.now).report(view: view)
         guard !Task.isCancelled else {
             brainLogger.debug("tick discarded — engine stopped mid-tick")
             return
@@ -175,66 +219,83 @@ actor DirectiveEngineCore {
         brainLogger.debug("tick: \(String(describing: report.decision), privacy: .public)")
     }
 
-    /// Spawn an executor for each running directive that lacks one, and retire
-    /// executors whose directive has stopped running.
+    /// Test seam: reconcile against a tick read for this call alone. The loop
+    /// itself reconciles against the tick it already read.
     func reconcileExecutors() async {
         @Dependency(\.defaultDatabase) var database
-        let running: [Directive]
+        @Dependency(\.date) var date
+        let tick: WorldTick
         do {
-            running = try await database.read { db in
-                try Directive.where { $0.status.eq(DirectiveStatus.running) }.fetchAll(db)
-            }
+            tick = try await WorldTick.read(from: database, now: date.now, generation: 0)
         } catch {
-            logger.error("supervisor read failed: \(error)")
+            logger.error("reconcile tick read failed: \(error)")
             return
         }
         // A stop() may have interleaved across the read above — never resurrect
         // executors for a torn-down engine.
-        guard supervisor != nil, !Task.isCancelled else { return }
+        guard tickLoop != nil, !Task.isCancelled else { return }
+        reconcile(running: tick.running)
+    }
 
+    /// Spawn an executor for each running directive that lacks one, and retire
+    /// executors whose directive has stopped running.
+    private func reconcile(running: [Directive]) {
         let runningIDs = Set(running.map(\.id))
-        for (id, task) in executors where !runningIDs.contains(id) {
-            task.cancel()
-            executors[id] = nil
-            idlePlanUntil[id] = nil
+        for id in Array(executors.keys) where !runningIDs.contains(id) {
+            retire(id)
         }
         for directive in running where executors[directive.id] == nil {
             executors[directive.id] = makeExecutor(directiveID: directive.id)
         }
     }
 
-    /// A loop evaluating directive `directiveID` once per `tick` until cancelled.
+    /// Cancel `directiveID`'s executor and forget everything held for it.
+    private func retire(_ directiveID: String) {
+        executors[directiveID]?.cancel()
+        executors[directiveID] = nil
+        deliveries[directiveID]?.finish()
+        deliveries[directiveID] = nil
+        idlePlanUntil[directiveID] = nil
+    }
+
+    /// A task evaluating directive `directiveID` once per delivered tick until
+    /// cancelled. One evaluation at a time: the next tick waits in the stream
+    /// rather than starting a second run of the same directive.
     private func makeExecutor(directiveID: String) -> Task<Void, Never> {
-        @Dependency(\.continuousClock) var clock
-        let tick = self.tick
+        let (ticks, delivery) = AsyncStream<WorldTick>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        deliveries[directiveID] = delivery
         return Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.evaluateOnce(directiveID: directiveID)
-                try? await clock.sleep(for: tick)
+            for await tick in ticks where !Task.isCancelled {
+                await self?.evaluateOnce(directiveID: directiveID, tick: tick)
             }
         }
     }
 
-    /// One evaluation of directive `directiveID`: re-read the row (it may have
-    /// changed under us), ask the machine for a single action, apply it.
-    /// Re-reading every time is what makes the directive row the checkpoint a
-    /// relaunch resumes from, rather than any in-memory state a restart loses.
+    /// Test seam: one evaluation against a tick read for this call alone.
     func evaluateOnce(directiveID: String) async {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
-
-        let directive: Directive?
         do {
-            directive = try await database.read { db in
-                try Directive.where { $0.id.eq(directiveID) }.fetchOne(db)
-            }
+            let tick = try await WorldTick.read(
+                from: database, now: date.now, generation: 0
+            )
+            await evaluateOnce(directiveID: directiveID, tick: tick)
         } catch {
             logger.error("executor read failed for \(directiveID, privacy: .public): \(error)")
-            return
         }
+    }
+
+    /// One evaluation of `directiveID`: the row and the world both come from
+    /// `tick`'s single read, and the row as read at TICK TIME is the checkpoint
+    /// a relaunch resumes from, never in-memory state a restart loses.
+    func evaluateOnce(directiveID: String, tick: WorldTick) async {
         // Only a RUNNING directive is advanced. A stall or a pause is the
         // user's to resolve — a tick must never resume one behind their back.
-        guard let directive, directive.status == .running else { return }
+        guard let directive = tick.running.first(where: { $0.id == directiveID }),
+              directive.status == .running
+        else { return }
         guard let machine = machines[directive.kind] else {
             // A kind with no registered machine is left entirely alone: the row
             // is inert, never partially advanced.
@@ -242,13 +303,7 @@ actor DirectiveEngineCore {
             return
         }
 
-        let world: WorldSnapshot
-        do {
-            world = try await WorldSnapshot.read(from: database, now: date.now, directive: directive)
-        } catch {
-            logger.error("world snapshot failed: \(error)")
-            return
-        }
+        guard let world = tick.snapshot(for: directiveID) else { return }
 
         // Audit only, and deliberately BEFORE the machine runs: it appends
         // `.opCompleted` timeline rows for dispatched ops that have since closed,
@@ -260,9 +315,7 @@ actor DirectiveEngineCore {
 
         var action = machine.nextAction(directive: directive, world: world)
         // The row the action gets applied to. Only `.extendQueue` moves it off
-        // the value read at the top of this method — it is the one resolver that
-        // WRITES the row, so applying its result to the pre-write value would
-        // roll its append back (see `Resolution`).
+        // the value read at the top of this method (see `Resolution`).
         var current = directive
         switch action {
         case let .refreshDevices(deviceCodes, thenStall):
@@ -306,23 +359,15 @@ actor DirectiveEngineCore {
         }
         let stillRunnable = await DirectiveExecutor.apply(action, to: current, machine: machine)
         if !stillRunnable {
-            // The row has left `.running`, so the supervisor would retire
-            // this executor within a tick anyway; dropping it here stops it
-            // spending one more evaluation first.
-            executors[directiveID]?.cancel()
-            executors[directiveID] = nil
+            // The row has left `.running`, so the next tick would retire this
+            // executor anyway; dropping it here stops one more evaluation first.
+            retire(directiveID)
         }
     }
 
-    /// A resolved `action` plus the `directive` row it must be applied to.
-    ///
-    /// Only `.extendQueue` needs the second half. The refresh resolvers re-ask
-    /// with the SAME `Directive` value because a read cannot change the directive
-    /// row — but an extend appends to `targets`, and every executor path builds
-    /// its write as `var updated = directive`, so applying a post-extend action
-    /// to the pre-extend value writes `targets` back and rolls the append away.
-    /// That is not an edge case: the action after a successful extend is normally
-    /// `.assignController`, which commits the whole row.
+    /// A resolved `action` plus the `directive` row it must be applied to. Only
+    /// `.extendQueue` moves that row: it appends to `targets`, and everything
+    /// downstream — the machine's re-ask included — must see the append.
     private struct Resolution {
         let action: MissionAction
         let directive: Directive
@@ -424,7 +469,12 @@ actor DirectiveEngineCore {
         let extended = appended
         do {
             try await database.write { db in
-                try Directive.upsert { extended }.execute(db)
+                try Directive.where { $0.id.eq(extended.id) }
+                    .update {
+                        $0.targets = #bind(extended.targets)
+                        $0.updatedAt = #bind(extended.updatedAt)
+                    }
+                    .execute(db)
             }
         } catch {
             logger.error("directive \(directive.id, privacy: .public): roam append failed: \(error)")

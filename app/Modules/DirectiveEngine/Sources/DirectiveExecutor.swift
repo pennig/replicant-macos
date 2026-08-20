@@ -258,7 +258,7 @@ enum DirectiveExecutor {
             updated.status = .completed
             updated.attentionReason = nil
             updated.updatedAt = date.now
-            await commit(updated, [
+            await commitLifecycle(updated, [
                 entry(directive, .directiveCompleted, "\(directive.kind.title) completed",
                       step: nil, operationID: nil,
                       id: uuid().uuidString, at: date.now),
@@ -284,8 +284,8 @@ enum DirectiveExecutor {
     /// timeline gap, and the summary names which it was.
     ///
     /// Idempotent through the log itself — an op id already carrying an
-    /// `.opCompleted` entry is skipped, and the engine runs one executor per
-    /// directive, so there is no second writer to race.
+    /// `.opCompleted` entry is skipped. Reading the worklist at tick time makes
+    /// this a narrow-window guarantee, not a structural one: worst case is a duplicate row.
     ///
     /// Known gap, accepted: a directive that leaves `.running` before its last
     /// dispatched op closes gets no entry for that op, because `evaluateOnce`
@@ -296,16 +296,11 @@ enum DirectiveExecutor {
         @Dependency(\.date) var date
         @Dependency(\.uuid) var uuid
 
-        // Op ids already accounted for. Reads `auditLog`, not the windowed
-        // `log`, so an old dispatch this pass still needs stays resolvable.
-        let alreadyLogged = Set(world.auditLog.compactMap { entry in
-            entry.kind == .opCompleted ? entry.operationID : nil
-        })
-
+        // Reads `auditLog` (SQL-matched, unwindowed), not `log`. See
+        // `app/.claude/memory/dispatched-operations-two-set-union.md`.
         var entries: [DirectiveLogEntry] = []
         for dispatch in world.auditLog where dispatch.kind == .commandDispatched {
             guard let operationID = dispatch.operationID,
-                  !alreadyLogged.contains(operationID),
                   let operation = world.dispatchedOperations[operationID],
                   operation.status.isTerminal
             else { continue }
@@ -435,7 +430,7 @@ enum DirectiveExecutor {
         updated.attentionReason = reason
         updated.updatedAt = date.now
         let summary = detail.map { "\(reason.rawValue): \($0)" } ?? reason.rawValue
-        await commit(updated, [
+        await commitLifecycle(updated, [
             entry(directive, .stalled, summary,
                   step: directive.step, operationID: nil,
                   id: uuid().uuidString, at: date.now, detail: detail),
@@ -481,23 +476,60 @@ enum DirectiveExecutor {
         )
     }
 
-    /// The single write site: `directive` and its `entries` land in one
-    /// transaction, so a mission is never observed half-advanced.
-    ///
-    /// Reported rather than thrown — an executor must not take the engine down
-    /// over a transient write failure; the next tick re-evaluates from whatever
-    /// the row still says.
+    /// `directive`'s progress columns and its `entries`, in one transaction, so
+    /// a mission is never observed half-advanced. Never `status`; see
+    /// `app/.claude/memory/directive-commit-column-ownership.md`.
     private static func commit(_ directive: Directive, _ entries: [DirectiveLogEntry]) async {
         @Dependency(\.defaultDatabase) var database
         do {
             try await database.write { db in
-                try Directive.upsert { directive }.execute(db)
-                for entry in entries {
-                    try DirectiveLogEntry.insert { entry }.execute(db)
-                }
+                try Directive.where { $0.id.eq(directive.id) }
+                    .update {
+                        $0.step = #bind(directive.step)
+                        $0.stepStartedAt = #bind(directive.stepStartedAt)
+                        $0.targetIndex = #bind(directive.targetIndex)
+                        $0.controllerCode = #bind(directive.controllerCode)
+                        $0.claimedRelayCode = #bind(directive.claimedRelayCode)
+                        $0.updatedAt = #bind(directive.updatedAt)
+                    }
+                    .execute(db)
+                try append(entries, db)
             }
         } catch {
             logger.error("directive \(directive.id, privacy: .public) write failed: \(error)")
+        }
+    }
+
+    /// `directive`'s status transition and its `entries`, refused together when
+    /// the row has left `.running` since the tick read it — the operator's pause
+    /// outranks a transition decided before it landed.
+    private static func commitLifecycle(_ directive: Directive, _ entries: [DirectiveLogEntry]) async {
+        @Dependency(\.defaultDatabase) var database
+        do {
+            try await database.write { db in
+                let applied = try Directive
+                    .where { $0.id.eq(directive.id) && $0.status.eq(DirectiveStatus.running) }
+                    .update {
+                        $0.status = #bind(directive.status)
+                        $0.attentionReason = #bind(directive.attentionReason)
+                        $0.updatedAt = #bind(directive.updatedAt)
+                    }
+                    .returning { $0.id }
+                    .fetchAll(db)
+                guard !applied.isEmpty else {
+                    logger.notice("directive \(directive.id, privacy: .public): \(directive.status.rawValue, privacy: .public) refused — the row has left running")
+                    return
+                }
+                try append(entries, db)
+            }
+        } catch {
+            logger.error("directive \(directive.id, privacy: .public) write failed: \(error)")
+        }
+    }
+
+    private static func append(_ entries: [DirectiveLogEntry], _ db: Database) throws {
+        for entry in entries {
+            try DirectiveLogEntry.insert { entry }.execute(db)
         }
     }
 }

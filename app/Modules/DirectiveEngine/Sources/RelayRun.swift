@@ -185,10 +185,8 @@ public struct RelayRun: MissionStepMachine {
     }
 
     /// Where `directive` stands in the line of Relay Runs waiting for stock at
-    /// `location` (0 = next) — **the FIFO rule, and the whole of the claim's
-    /// safety.** Runs evaluate as independent tasks with nothing serialising the
-    /// claim, so each computes the same queue from the same snapshot and takes the
-    /// relay at its own position. Ordered by `createdAt`, id as tie-break.
+    /// `location` (0 = next), ordered by `createdAt` with id as tie-break —
+    /// **the FIFO rule, and the whole of the claim's safety.**
     ///
     /// **`.paused` holds no place in line** — the one status where this and
     /// `DirectiveStatus.openCases` disagree, because a paused run at the head would

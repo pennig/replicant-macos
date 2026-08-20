@@ -149,6 +149,61 @@ public struct WorldView: Equatable, Sendable {
         )
     }
 
+    /// The tick's view: `core`'s overlapping tables reused, plus only what
+    /// `core` cannot supply — salvage, belts/survey, theatre stock — read from
+    /// the same `db` `core` came from.
+    public static func read(from db: Database, core: WorldCore, now: Date) throws -> WorldView {
+        // Sorted, same key `read(from:now:)` sorts by — a dictionary's
+        // iteration order is undefined, and whole-array equality is not.
+        let events = core.locationEvents.values.sorted { $0.designation < $1.designation }
+        let stockpileUnits = core.footprints.values
+            .filter { $0.resources > 0 }
+            .reduce(into: [String: Int]()) { totals, row in
+                totals[SiteAssay.system(of: row.location), default: 0] += row.resources
+            }
+
+        let assays = try SiteAssay.where { !$0.depleted && $0.siteType.eq("salvage") }.fetchAll(db)
+        let salvage = assays.reduce(into: [String: Double]()) { totals, assay in
+            totals[assay.system, default: 0] += assay.totals.values.reduce(0, +)
+        }
+
+        let surveyed = try SystemDetail
+            .where { $0.systemScanned }
+            .select { $0.designation }
+            .fetchAll(db)
+        let belts = try Self.beltsBySystem(in: db)
+
+        let operationalDepots = Set(core.theatres.filter(\.isOperational).map(\.depot))
+        let inventoryRows = operationalDepots.isEmpty ? [] : try LocationInventory
+            .where { $0.location.in(Array(operationalDepots)) }
+            .fetchAll(db)
+        let stock = Self.aggregateStock(rows: inventoryRows, depots: operationalDepots)
+
+        return WorldView(
+            devices: core.devices,
+            starPositions: core.starPositions,
+            meshSystems: core.meshSystems,
+            salvageUnits: salvage,
+            eventSystems: Set(events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }),
+            theatres: core.theatres,
+            theatreRecords: core.theatreRecords,
+            components: core.components,
+            beltsBySystem: belts,
+            surveyedSystems: Set(surveyed),
+            replicantSystems: Set(
+                core.replicants.compactMap { $0.currentStar.map { SiteAssay.system(of: $0) } }
+            ),
+            replicantHostDevices: core.replicantHostDevices,
+            stockpileUnits: stockpileUnits,
+            theatreStock: stock.quantities,
+            theatreStockFreshness: stock.freshness,
+            locationEvents: events,
+            blueprintBills: core.blueprintBills,
+            blueprintComponents: core.blueprintComponents,
+            now: now
+        )
+    }
+
     /// One consistent, galaxy-wide read of everything the brain reasons over,
     /// taken from `db` and stamped `now`. Call it from inside a
     /// `database.read { db in … }` block: every table below must be read in ONE
@@ -184,7 +239,7 @@ public struct WorldView: Equatable, Sendable {
         // `isActive` in Swift after a whole-table read is cheap and keeps exact
         // parity with that property's case-insensitive semantics — a SQL
         // `= 'active'` silently misses a differently-cased status.
-        let events = try LocationEvent.all.fetchAll(db)
+        let events = try LocationEvent.all.fetchAll(db).sorted { $0.designation < $1.designation }
         let eventSystems = Set(
             events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }
         )
