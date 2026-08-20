@@ -498,7 +498,7 @@ Pure refactor, no behaviour change. Move the 13 global fields and their fetches 
 - Consumes: nothing from Tasks 1–2 (those touched only scoped queries).
 - Produces:
   - `struct WorldCore: Equatable, Sendable` with exactly these 13 `public let` properties, types copied verbatim from `WorldSnapshot`: `devices: [String: Device]`, `openOperations: [String: GameModels.Operation]`, `queuedOperations: [String: [GameModels.Operation]]`, `footprints: [String: LocationFootprint]`, `starPositions: [String: Position]`, `components: [String: String]`, `blueprintBills: [String: ResourceCost]`, `blueprintComponents: [String: [String: Int]]`, `blueprintPrintTimes: [String: Int]`, `theatres: [Theatre]`, `locationEvents: [String: LocationEvent]`, `replicantHostDevices: Set<String>`, `peers: [Directive]`.
-  - `static func WorldCore.read(_ db: Database) throws -> WorldCore` — synchronous, takes an open `Database`, does no transaction management of its own.
+  - `static func WorldCore.read(from db: Database) throws -> WorldCore` — matches `WorldView.read(from:now:)`, the sibling reader in this module — synchronous, takes an open `Database`, does no transaction management of its own.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -549,7 +549,7 @@ import UniverseModels
             }.execute(db)
         }
 
-        let core = try await database.read { db in try WorldCore.read(db) }
+        let core = try await database.read { db in try WorldCore.read(from: db) }
         let world = try await WorldSnapshot.read(
             from: database, now: Date(timeIntervalSince1970: 100),
             directive: testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"])
@@ -603,7 +603,7 @@ Create `WorldCore.swift`. Move the global fetches out of `WorldSnapshot.read`'s 
 
 - [ ] **Step 4: Recompose `WorldSnapshot.read`**
 
-`WorldSnapshot.read` keeps its signature. Its closure becomes: `let core = try WorldCore.read(db)`, then the five scoped fetches unchanged, then the existing `WorldSnapshot(...)` init drawing global values from `core`. The `wanted`/`decoded` computation reads `core.devices` where it used to read the local `devices`.
+`WorldSnapshot.read` keeps its signature. Its closure becomes: `let core = try WorldCore.read(from: db)`, then the five scoped fetches unchanged, then the existing `WorldSnapshot(...)` init drawing global values from `core`. The `wanted`/`decoded` computation reads `core.devices` where it used to read the local `devices`.
 
 - [ ] **Step 5: Run the full suite**
 
@@ -636,7 +636,7 @@ The mirror of Task 3 for the five scoped fields. Still no behaviour change.
 - Consumes: `WorldCore` from Task 3.
 - Produces:
   - `struct DirectiveSlice: Equatable, Sendable` with `log: [DirectiveLogEntry]`, `auditLog: [DirectiveLogEntry]`, `dispatchedOperations: [String: GameModels.Operation]`, `systems: [String: StarSystem]`, `siteAssays: [String: [String: Double]]`.
-  - `static func DirectiveSlice.read(_ db: Database, core: WorldCore, directive: Directive) throws -> DirectiveSlice`.
+  - `static func DirectiveSlice.read(from db: Database, core: WorldCore, directive: Directive) throws -> DirectiveSlice`.
   - `WorldSnapshot.init(core:slice:now:)` — internal, composing the public shape.
 
 - [ ] **Step 1: Write the failing test**
@@ -656,8 +656,8 @@ Append to `DirectiveSliceTests.swift`:
         let now = Date(timeIntervalSince1970: 100)
 
         let composed = try await database.read { db -> WorldSnapshot in
-            let core = try WorldCore.read(db)
-            let slice = try DirectiveSlice.read(db, core: core, directive: directive)
+            let core = try WorldCore.read(from: db)
+            let slice = try DirectiveSlice.read(from: db, core: core, directive: directive)
             return WorldSnapshot(core: core, slice: slice, now: now)
         }
         let direct = try await WorldSnapshot.read(from: database, now: now, directive: directive)
@@ -712,7 +712,7 @@ One `readAll` that answers for every running directive at once, so the scoped qu
 
 **Interfaces:**
 - Consumes: `DirectiveSlice.read` from Task 4.
-- Produces: `static func DirectiveSlice.readAll(_ db: Database, core: WorldCore, directives: [Directive]) throws -> [String: DirectiveSlice]`, keyed by `directive.id`. `read` is reimplemented as `readAll` with one element so there is exactly one implementation.
+- Produces: `static func DirectiveSlice.readAll(from db: Database, core: WorldCore, directives: [Directive]) throws -> [String: DirectiveSlice]`, keyed by `directive.id`. `read` is reimplemented as `readAll` with one element so there is exactly one implementation.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -736,10 +736,10 @@ One `readAll` that answers for every running directive at once, so the scoped qu
         }
 
         try await database.read { db in
-            let core = try WorldCore.read(db)
-            let batched = try DirectiveSlice.readAll(db, core: core, directives: [a, b])
-            #expect(batched["D1"] == (try DirectiveSlice.read(db, core: core, directive: a)))
-            #expect(batched["D2"] == (try DirectiveSlice.read(db, core: core, directive: b)))
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [a, b])
+            #expect(batched["D1"] == (try DirectiveSlice.read(from: db, core: core, directive: a)))
+            #expect(batched["D2"] == (try DirectiveSlice.read(from: db, core: core, directive: b)))
         }
     }
 
@@ -747,7 +747,7 @@ One `readAll` that answers for every running directive at once, so the scoped qu
     @Test func readsNothingForNoDirectives() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.read { db in
-            #expect(try DirectiveSlice.readAll(db, core: WorldCore.read(db), directives: []).isEmpty)
+            #expect(try DirectiveSlice.readAll(from: db, core: WorldCore.read(from: db), directives: []).isEmpty)
         }
     }
 }
@@ -871,7 +871,7 @@ Expected: FAIL to compile — `WorldTick` does not exist.
 
 - [ ] **Step 3: Implement `WorldTick.read`**
 
-One `database.read { db in ... }` that fetches `running` (`Directive.where { $0.status.eq(DirectiveStatus.running) }`), then `WorldCore.read(db)`, then `DirectiveSlice.readAll(db, core:, directives: running)`. Nothing else opens a transaction.
+One `database.read { db in ... }` that fetches `running` (`Directive.where { $0.status.eq(DirectiveStatus.running) }`), then `WorldCore.read(from: db)`, then `DirectiveSlice.readAll(from: db, core:, directives: running)`. Nothing else opens a transaction.
 
 - [ ] **Step 4: Run the full suite and commit**
 
@@ -907,7 +907,7 @@ git commit -m "perf(directives): read the whole tick's world in one transaction"
         }
         let now = Date(timeIntervalSince1970: 100)
         let (fromCore, standalone) = try await database.read { db in
-            (WorldView(core: try WorldCore.read(db), now: now), try WorldView.read(from: db, now: now))
+            (WorldView(core: try WorldCore.read(from: db), now: now), try WorldView.read(from: db, now: now))
         }
         #expect(fromCore == standalone)
     }
