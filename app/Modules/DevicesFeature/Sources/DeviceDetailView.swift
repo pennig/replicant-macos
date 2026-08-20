@@ -37,12 +37,17 @@ public struct DeviceDetailView: View {
         self.store = store
     }
 
-    /// The device's single open operation, if any.
-    private var openOperation: Operation? {
+    /// The job the Active Task card shows for the selected device: the
+    /// running op, or the oldest queued one when nothing is running yet.
+    private var selectedOperation: Operation? {
         guard let code = store.selectedDeviceCode else { return nil }
-        return operations.first {
-            $0.entityCode == code && $0.status.isOpen
-        }
+        return DeviceOperations.card(for: code, in: operations)
+    }
+
+    /// How many further live ops wait behind `selectedOperation`.
+    private var queuedBehindSelectedOperation: Int {
+        guard let code = store.selectedDeviceCode else { return 0 }
+        return DeviceOperations.queuedBehind(for: code, in: operations)
     }
 
     public var body: some View {
@@ -318,7 +323,8 @@ public struct DeviceDetailView: View {
 
     private func readouts(_ device: Device) -> some View {
         ActiveTaskCard(
-            operation: openOperation,
+            operation: selectedOperation,
+            queuedBehind: queuedBehindSelectedOperation,
             parameter: device.statusParameter,
             liveTravel: device.travelSnapshot,
             diversion: diversionSnapshot(for: device),

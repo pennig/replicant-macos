@@ -18,6 +18,9 @@ private typealias Operation = GameModels.Operation
 
 struct ActiveTaskCard: View {
     let operation: GameModels.Operation?
+    /// How many further live operations wait behind `operation` on this
+    /// device's bench, or 0.
+    var queuedBehind: Int = 0
     /// The status parameter the backend appended in parentheses (e.g. the device
     /// type being printed, `"transport_drone"`, or the resource being mined). Shown
     /// beside the task kind instead of crammed into the status badge.
@@ -98,28 +101,34 @@ struct ActiveTaskCard: View {
         )
     }
 
-    /// The progress readout for the operation. A multi-leg travel op gets the
-    /// segmented bar; everything else keeps the single interpolated bar. Both are
-    /// keyed by op id so the "reached the end" latch resets for a genuinely new
-    /// operation (but survives a re-arm of the same one).
+    /// The progress readout, plus how many live ops wait behind it. A
+    /// multi-leg travel op gets the segmented bar, everything else the single
+    /// interpolated bar — both keyed by op id so the latch resets on a new op.
     @ViewBuilder
     private func progress(for operation: Operation, itinerary: TravelSnapshot?) -> some View {
-        if operation.status == .active, let completesAt = operation.completesAt {
-            if let itinerary, !itinerary.legs.isEmpty {
-                TravelProgressView(
-                    segments: segments(itinerary),
-                    barStart: barStart(itinerary, operation: operation, completesAt: completesAt),
-                    completesAt: completesAt
-                )
-                .id(operation.id)
-            } else {
-                OperationProgressView(startedAt: operation.startedAt, completesAt: completesAt)
+        VStack(alignment: .leading, spacing: Space.xs) {
+            if operation.status == .active, let completesAt = operation.completesAt {
+                if let itinerary, !itinerary.legs.isEmpty {
+                    TravelProgressView(
+                        segments: segments(itinerary),
+                        barStart: barStart(itinerary, operation: operation, completesAt: completesAt),
+                        completesAt: completesAt
+                    )
                     .id(operation.id)
+                } else {
+                    OperationProgressView(startedAt: operation.startedAt, completesAt: completesAt)
+                        .id(operation.id)
+                }
+            } else {
+                Text(label(for: operation.status))
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextSecondary)
             }
-        } else {
-            Text(label(for: operation.status))
-                .font(.rcCaption)
-                .foregroundStyle(.rcTextSecondary)
+            if queuedBehind > 0 {
+                Text("\(queuedBehind) queued behind")
+                    .font(.rcCaption)
+                    .foregroundStyle(.rcTextTertiary)
+            }
         }
     }
 
