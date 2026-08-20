@@ -28,3 +28,24 @@ Labels: directives-architecture, stage-3
 **Done when:** three benches each holding a job take a fourth job on the shallowest of them, with a test.
 
 **Checkpoint F follows this ticket.**
+
+---
+
+## Step 4 decision, recorded
+
+`CommandClient.swift:247` scopes its supersede loop to `if kind != .print`, and a
+repo-wide grep finds no other `.superseded` write site — a print op is never
+superseded. That branch of the question is settled and closed.
+
+But the blind spot `onOrder` actually had was a different one, opened by Task 12:
+`openOperations` narrowed to the ACTIVE op only, while `onOrder` still read it.
+Once a bench can carry more than one live op (this ticket), any of the owner's
+own jobs still `enqueued` behind the active one went uncounted — not because its
+row was lost, but because `onOrder` was reading the wrong collection. Fixed by
+widening `onOrder` (and `benches`' owner/active-job derivation) onto
+`queuedOperations`, proven by `PrintSchedulerTests.ownEnqueuedJobBehindTheActiveOneCounts`.
+
+`queuedOperations` is left empty by most of the codebase's pre-existing test
+fixtures (`benches`/`onOrder` fall back to a one-op reading off `openOperations`
+so those fixtures keep behaving as before); production always populates it, so
+the widened read is live everywhere that matters.

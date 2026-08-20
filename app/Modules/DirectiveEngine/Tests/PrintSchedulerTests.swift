@@ -46,25 +46,34 @@ private func bench(
 private func op(
     on entity: String, owner: String?, status: OperationStatus = .active,
     kind: String = OperationKind.print.rawValue,
-    deviceType: String? = nil, quantity: Int? = nil
+    deviceType: String? = nil, quantity: Int? = nil,
+    id: String? = nil, startedAt: Date = now
 ) -> GameModels.Operation {
     var params: [String: JSONValue] = [:]
     if let deviceType { params["device_type"] = .string(deviceType) }
     if let quantity { params["quantity"] = .number(Double(quantity)) }
     return GameModels.Operation(
-        id: "OP-\(entity)", entityCode: entity, kind: kind,
-        status: status, source: .poll, startedAt: now, completesAt: nil,
-        lastConfirmedAt: now, detail: .object(["params": .object(params)]),
+        id: id ?? "OP-\(entity)", entityCode: entity, kind: kind,
+        status: status, source: .poll, startedAt: startedAt, completesAt: nil,
+        lastConfirmedAt: startedAt, detail: .object(["params": .object(params)]),
         directiveID: owner
     )
 }
 
+/// `queued` defaults each `open` op into its own single-entry queue, mirroring
+/// `WorldSnapshot.read`'s real shape; pass `queued` explicitly for a bench
+/// carrying more than one live op.
 private func snapshot(
-    _ devices: [Device], open: [String: GameModels.Operation] = [:]
+    _ devices: [Device], open: [String: GameModels.Operation] = [:],
+    queued: [String: [GameModels.Operation]] = [:]
 ) -> WorldSnapshot {
-    WorldSnapshot(
+    var allQueued = queued
+    for (code, op) in open where allQueued[code] == nil {
+        allQueued[code] = [op]
+    }
+    return WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
-        openOperations: open, dispatchedOperations: [:], now: now
+        openOperations: open, queuedOperations: allQueued, dispatchedOperations: [:], now: now
     )
 }
 
@@ -157,8 +166,8 @@ struct PrintSchedulerChoiceTests {
         #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B1")
     }
 
-    @Test("a busy bench is skipped for a free one")
-    func busyBenchSkipped() {
+    @Test("a busy bench with room still loses to a free one")
+    func busyBenchLosesToFree() {
         let world = snapshot(
             [bench("B1", printing: "mining_drone"), bench("B2")],
             open: ["B1": op(on: "B1", owner: "OTHER")]
@@ -167,34 +176,22 @@ struct PrintSchedulerChoiceTests {
         #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
     }
 
-    /// The op row lands before the next poll returns a `printing` block, so
-    /// `queueDepth` alone would miss it.
-    @Test("a bench whose op row beats its snapshot is still occupied")
-    func opRowBeatsSnapshot() {
-        let world = snapshot(
-            [bench("B1"), bench("B2")],
-            open: ["B1": op(on: "B1", owner: "OTHER")]
-        )
-
-        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
-    }
-
-    /// When every bench is occupied there is nothing to choose: the caller
-    /// waits rather than dispatching onto a bench already carrying a job.
-    @Test("no bench can take the job, so there is no choice")
-    func allBusyYieldsNil() {
-        let world = snapshot(
-            [bench("B1", printing: "mining_drone"), bench("B2", printing: "ftl_relay")],
-            open: ["B1": op(on: "B1", owner: "OTHER"), "B2": op(on: "B2", owner: "D-7")]
-        )
+    /// Every bench sits AT capacity, not merely busy: this is the case the
+    /// depth-ranked `choose` still refuses, unlike a bench with headroom.
+    @Test("every bench full yields no choice")
+    func everyBenchFullYieldsNil() {
+        let world = snapshot([
+            bench("B1", capacity: 1, printing: "mining_drone"),
+            bench("B2", capacity: 2, queued: ["ftl_relay"], printing: "ftl_relay")
+        ])
 
         #expect(PrintScheduler.choose(order(), at: depot, in: world) == nil)
     }
 
-    /// A queue snapshot with no matching op still occupies the bench. The
-    /// operator can enqueue by hand from the Print Queue screen.
-    @Test("a bench queued by hand is occupied even with no op row")
-    func queuedByHandOccupies() {
+    /// A queue snapshot with no matching op still adds depth. The operator can
+    /// enqueue by hand from the Print Queue screen.
+    @Test("a bench queued by hand outranks a free one only by depth")
+    func queuedByHandAddsDepth() {
         let world = snapshot([bench("B1", queued: ["ftl_relay"]), bench("B2")])
 
         #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
@@ -205,6 +202,84 @@ struct PrintSchedulerChoiceTests {
         let world = snapshot([bench("X1", commands: [])])
 
         #expect(PrintScheduler.choose(order(), at: depot, in: world) == nil)
+    }
+}
+
+@Suite("Print scheduler — queuing behind a busy bench")
+struct PrintSchedulerQueueingTests {
+    private func order(_ type: String = "ftl_relay", owner: String = "D-7") -> PrintOrder {
+        PrintOrder(deviceType: type, owner: owner)
+    }
+
+    @Test("with every bench busy, the shallowest queue takes the job")
+    func shallowestQueueTakesTheJob() {
+        let world = snapshot([
+            bench("B1", queued: ["mining_drone", "ftl_relay"], printing: "ami_transport_controller"),
+            bench("B2", queued: ["mining_drone"], printing: "ami_transport_controller"),
+            bench("B3", queued: ["mining_drone", "ftl_relay", "autofactory"], printing: "ftl_beacon")
+        ])
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
+    }
+
+    @Test("equal depth breaks by device code")
+    func equalDepthBreaksByCode() {
+        let world = snapshot([bench("B2", printing: "mining_drone"), bench("B1", printing: "mining_drone")])
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B1")
+    }
+
+    @Test("a free bench still beats a shallow queue")
+    func freeStillBeatsShallow() {
+        let world = snapshot([bench("B1", printing: "mining_drone"), bench("B2")])
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
+    }
+
+    @Test("a bench at capacity takes nothing")
+    func fullBenchTakesNothing() {
+        let world = snapshot([bench("B1", capacity: 2, queued: ["mining_drone"], printing: "ami_transport_controller")])
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world) == nil)
+    }
+
+    /// Owners come from `queuedOperations`, oldest first — the active job and
+    /// whatever else this bench has enqueued behind it.
+    @Test("two runs on one bench are both owners, oldest first")
+    func twoOwnersOnOneBench() {
+        let older = op(on: "B1", owner: "D-7", startedAt: now)
+        let newer = op(
+            on: "B1", owner: "D-9", status: .enqueued,
+            id: "OP-B1-2", startedAt: now.addingTimeInterval(1)
+        )
+        let world = snapshot(
+            [bench("B1", queued: ["ftl_relay"], printing: "mining_drone")],
+            queued: ["B1": [older, newer]]
+        )
+
+        #expect(PrintScheduler.benches(at: depot, in: world).first?.owners == ["D-7", "D-9"])
+    }
+
+    /// `Device.init`'s `schema.queueSize ?? 0` makes zero the server's own
+    /// "never reported" sentinel, never a genuine zero-slot printer, so it
+    /// must not cap a bench with real depth already on it.
+    @Test("a printer with no reported queue size is not capacity-limited")
+    func unreportedQueueSizeIsUnbounded() {
+        let world = snapshot([bench("B1", capacity: 0, queued: ["a", "b", "c"], printing: "d")])
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B1")
+    }
+
+    /// A dispatched op can land before the printer's own poll shows it — the
+    /// snapshot alone would read this bench as empty.
+    @Test("an op not yet in the queue snapshot still adds depth")
+    func opAheadOfItsSnapshotStillAddsDepth() {
+        let world = snapshot(
+            [bench("B1"), bench("B2")],
+            open: ["B1": op(on: "B1", owner: "OTHER")]
+        )
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B2")
     }
 }
 
@@ -224,6 +299,24 @@ struct PrintSchedulerOnOrderTests {
         #expect(
             PrintScheduler.onOrder(for: "D-7", at: depot, in: world)
                 == ["mining_drone": 3, "ftl_relay": 1]
+        )
+    }
+
+    /// `openOperations` holds only the ACTIVE op per device (Task 12); a
+    /// second job of the owner's own, still `enqueued` behind it, must not
+    /// go uncounted just because it never became the platen job.
+    @Test("an owner's own enqueued job behind the active one still counts")
+    func ownEnqueuedJobBehindTheActiveOneCounts() {
+        let active = op(on: "B1", owner: "D-7", deviceType: "mining_drone", startedAt: now)
+        let queued = op(
+            on: "B1", owner: "D-7", status: .enqueued, deviceType: "ftl_relay",
+            id: "OP-B1-2", startedAt: now.addingTimeInterval(1)
+        )
+        let world = snapshot([bench("B1")], queued: ["B1": [active, queued]])
+
+        #expect(
+            PrintScheduler.onOrder(for: "D-7", at: depot, in: world)
+                == ["mining_drone": 1, "ftl_relay": 1]
         )
     }
 

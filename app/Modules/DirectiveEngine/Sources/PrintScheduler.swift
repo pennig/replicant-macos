@@ -55,44 +55,60 @@ enum PrintScheduler {
             .filter { $0.acceptsPrintJobs && $0.location == depot && !$0.isCarrierHull }
             .sorted { $0.deviceCode < $1.deviceCode }
             .map { device in
-                let active = world.openOperation(for: device.deviceCode)
+                let live = liveOps(for: device.deviceCode, in: world)
                 return Bench(
                     device: device,
-                    activeJob: active,
-                    queueDepth: depth(of: device),
-                    owners: [active?.directiveID].compactMap { $0 }
+                    activeJob: live.first { $0.status == .active },
+                    queueDepth: depth(of: device, liveOps: live),
+                    owners: live.compactMap(\.directiveID)
                 )
             }
     }
 
-    /// The bench's load: the waiting queue plus the job on the platen.
-    /// The two live in different blocks and never overlap, and `queueSize` is
-    /// the bench's capacity rather than its load.
-    private static func depth(of device: Device) -> Int {
-        device.queuedJobCount + (device.printingSnapshot != nil ? 1 : 0)
+    /// This bench's live ops, oldest first: `queuedOperations` when populated,
+    /// else a one-op fallback onto `openOperations` (which it always subsumes
+    /// in a real read).
+    private static func liveOps(for deviceCode: String, in world: WorldSnapshot) -> [GameModels.Operation] {
+        let queued = world.queuedOperations[deviceCode] ?? []
+        return queued.isEmpty ? world.openOperation(for: deviceCode).map { [$0] } ?? [] : queued
+    }
+
+    /// The bench's load: the printer's own snapshot, or the ops table's live
+    /// count when that is higher — a dispatch can land before the next poll
+    /// reflects it. `queueSize` is capacity, never load.
+    private static func depth(of device: Device, liveOps: [GameModels.Operation]) -> Int {
+        max(device.queuedJobCount + (device.printingSnapshot != nil ? 1 : 0), liveOps.count)
     }
 
     /// The bench that should take `order` at `depot`, or nil when none can.
-    /// Phase A takes only an idle bench: dispatching onto an occupied one
-    /// supersedes whatever op it already holds, so Task 14 relaxes this to depth.
+    /// A free bench beats a shallow queue, a shallow queue beats a deep one,
+    /// and the lowest device code breaks every tie.
     static func choose(_ order: PrintOrder, at depot: String, in world: WorldSnapshot) -> Bench? {
-        benches(at: depot, in: world).first { $0.queueDepth == 0 && $0.activeJob == nil }
+        benches(at: depot, in: world)
+            // `queueSize` reads 0 when the server never reported it (`Device.init`'s
+            // `?? 0`), never as a genuine zero-slot printer, so it caps nothing here.
+            .filter { $0.device.queueSize <= 0 || $0.queueDepth < $0.device.queueSize }
+            .min { left, right in
+                left.queueDepth == right.queueDepth
+                    ? left.device.deviceCode < right.device.deviceCode
+                    : left.queueDepth < right.queueDepth
+            }
     }
 
-    /// What `owner` already has on order at `depot`, by device type. Ops only:
-    /// a `print_queue` entry carries no id, so it cannot be attributed to a
-    /// directive; an op that names no type cannot be netted.
+    /// What `owner` already has on order at `depot`, by device type — every
+    /// live op per bench, not just the active one. A `print_queue` entry
+    /// carries no id, so only ops can be attributed to a directive.
     static func onOrder(
         for owner: String, at depot: String, in world: WorldSnapshot
     ) -> [String: Int] {
-        let codes = Set(benches(at: depot, in: world).map(\.device.deviceCode))
-        return world.openOperations.values.reduce(into: [String: Int]()) { total, op in
-            guard op.kind == OperationKind.print.rawValue,
-                  op.directiveID == owner,
-                  codes.contains(op.entityCode),
-                  let type = op.printedDeviceType
-            else { return }
-            total[type, default: 0] += op.printedQuantity ?? 1
+        benches(at: depot, in: world).reduce(into: [String: Int]()) { total, bench in
+            for op in liveOps(for: bench.device.deviceCode, in: world) {
+                guard op.kind == OperationKind.print.rawValue,
+                      op.directiveID == owner,
+                      let type = op.printedDeviceType
+                else { continue }
+                total[type, default: 0] += op.printedQuantity ?? 1
+            }
         }
     }
 }

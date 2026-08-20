@@ -44,6 +44,7 @@ func deviceFixture(
     availableCommands: [String] = [],
     tags: [String] = [],
     stowedIn: String? = nil,
+    queueSize: Int = 0,
     updatedAt: Date = Date(timeIntervalSince1970: 0)
 ) -> Device {
     // A carrier hull wears `Brain.carrierTag` unless the test says otherwise,
@@ -54,7 +55,7 @@ func deviceFixture(
     let resolved = (isCarrierShaped && tags.isEmpty) ? [Brain.carrierTag.string] : tags
     return Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
-        location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        location: location, locationName: nil, operationalCapacity: 100, queueSize: queueSize,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: availableCommands,
         features: resolvedFeatures, tags: resolved, detail: .object([:]),
@@ -73,13 +74,14 @@ func seedDevice(
     availableCommands: [String] = [],
     tags: [String] = [],
     stowedIn: String? = nil,
+    queueSize: Int = 0,
     updatedAt: Date = Date(timeIntervalSince1970: 0)
 ) throws {
     try Device.insert {
         deviceFixture(
             code: code, type: type, location: location, status: status, features: features,
             availableCommands: availableCommands, tags: tags, stowedIn: stowedIn,
-            updatedAt: updatedAt
+            queueSize: queueSize, updatedAt: updatedAt
         )
     }.execute(db)
 }
@@ -98,14 +100,15 @@ func seedRelay(
 }
 
 /// A print-capable device — `Device.isPrintHub` keys off `enqueue_print` in
-/// `availableCommands`, not device type.
+/// `availableCommands`, not device type. `queueSize` defaults to 0 (capacity
+/// unreported), matching every other fixture in this file.
 func seedPrintHub(
     _ db: Database, code: String, location: String,
-    updatedAt: Date = Date(timeIntervalSince1970: 0)
+    queueSize: Int = 0, updatedAt: Date = Date(timeIntervalSince1970: 0)
 ) throws {
     try seedDevice(
         db, code: code, type: "autofactory", location: location,
-        availableCommands: ["enqueue_print"], updatedAt: updatedAt
+        availableCommands: ["enqueue_print"], queueSize: queueSize, updatedAt: updatedAt
     )
 }
 

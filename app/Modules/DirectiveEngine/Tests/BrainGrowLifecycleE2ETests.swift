@@ -58,7 +58,9 @@ private let firstClone = cloneCode(forPrint: 1)
 private func seedGrowWorld(_ db: Database) throws {
     try seedRelay(db, code: "REL1", location: "SOL", updatedAt: liftoff)
     try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
-    try seedPrintHub(db, code: "HUB1", location: hubLocation, updatedAt: liftoff)
+    // One queue slot: the hub works one print at a time, so restock's own
+    // relay cannot dispatch until the grow run's print actually clears it.
+    try seedPrintHub(db, code: "HUB1", location: hubLocation, queueSize: 1, updatedAt: liftoff)
     try seedDevice(db, code: "V1", type: "heaven_vessel", location: hubLocation, updatedAt: liftoff)
 
     try seedStar(db, designation: target, x: 5, y: 0, z: 0)
@@ -179,12 +181,14 @@ private actor ScriptedServer {
     /// stub would hide it if something started to.
     nonisolated func seam() -> CommandClient {
         var client = CommandClient.testValue
-        let body: @Sendable (OperationKind, String, CommandParams) async -> CommandOutcome = { [self] kind, deviceCode, params in
+        client.dispatch = { [self] kind, deviceCode, params in
             @Dependency(\.date) var date
-            return await dispatch(kind: kind, deviceCode: deviceCode, params: params, now: date.now)
+            return await dispatch(kind: kind, deviceCode: deviceCode, params: params, owner: nil, now: date.now)
         }
-        client.dispatch = body
-        client.dispatchOwned = { kind, deviceCode, params, _ in await body(kind, deviceCode, params) }
+        client.dispatchOwned = { [self] kind, deviceCode, params, owner in
+            @Dependency(\.date) var date
+            return await dispatch(kind: kind, deviceCode: deviceCode, params: params, owner: owner, now: date.now)
+        }
         return client
     }
 
@@ -193,8 +197,12 @@ private actor ScriptedServer {
         return "OP-\(opCounter)"
     }
 
+    /// `owner` mirrors what the live `CommandClient` stamps onto a dispatched
+    /// op's `directiveID` — real here since `PrintScheduler.onOrder` now nets
+    /// demand by ownership, not merely by an open row existing.
     func dispatch(
-        kind: OperationKind, deviceCode: String, params: CommandParams, now: Date
+        kind: OperationKind, deviceCode: String, params: CommandParams,
+        owner: CommandOwner?, now: Date
     ) async -> CommandOutcome {
         commands.append(
             SeamCommand(
@@ -217,7 +225,8 @@ private actor ScriptedServer {
                         id: opID, entityCode: deviceCode, kind: OperationKind.print.rawValue,
                         status: .enqueued, source: .poll, startedAt: now, completesAt: nil,
                         lastConfirmedAt: now,
-                        detail: .object(["params": .object(["device_type": .string(params.deviceType ?? "")])])
+                        detail: .object(["params": .object(["device_type": .string(params.deviceType ?? "")])]),
+                        directiveID: owner?.directiveID
                     )
                 }.execute(db)
             }
