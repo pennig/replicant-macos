@@ -184,3 +184,78 @@ private final class CountingReader: DatabaseReader, @unchecked Sendable {
         #expect(tick.snapshot(for: "GHOST") == nil)
     }
 }
+
+@Suite struct WorldViewFromCore {
+    /// The brain's view and the directives' core must be the same world. Built
+    /// from one read, they cannot disagree; built from two, they routinely did.
+    @Test func matchesTheStandaloneRead() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Device.insert {
+                Device(
+                    deviceCode: "V1", deviceType: "transport_hauler", replicantCode: "R1",
+                    status: "idle", location: "SOL-3", locationName: nil,
+                    operationalCapacity: 100, queueSize: 0, stowedInDeviceCode: nil,
+                    controllerDeviceCode: nil, attachedToDeviceCode: nil,
+                    createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
+                    features: [], tags: [], detail: .object([:]),
+                    updatedAt: Date(timeIntervalSince1970: 0),
+                    firstSeenAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+            try LocationFootprint.insert {
+                LocationFootprint(
+                    location: "SOL-3", devices: 1, resources: 500, resourceSites: 0,
+                    locationEvents: 0, replicants: 0,
+                    fetchedAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
+            try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
+            try seedRelay(db, code: "REL1", location: "SOL-3")
+            try TheatrePin.insert {
+                TheatrePin(location: "SOL-3", createdAt: Date(timeIntervalSince1970: 0))
+            }.execute(db)
+            try Blueprint.insert {
+                Blueprint(
+                    deviceType: "transport_hauler", shortDescription: "", fullDescription: "",
+                    printTime: 600, features: [], directives: [],
+                    resources: ResourceCost(structural: 200), stowCapacity: 0, cargoCapacity: 0,
+                    attachCapacity: 0, queueSize: 0, strength: 1, currentHubs: nil,
+                    components: ["module_x": 1]
+                )
+            }.execute(db)
+            try seedLocationEvent(db, designation: "EVT1", location: "SOL-3")
+            // `star: nil` — `core` carries no `currentStar` data, so
+            // `replicantSystems` stays empty on both sides, not by coincidence.
+            try seedReplicant(db, code: "REP1", star: nil, hostedDeviceCode: "V1")
+        }
+
+        let now = Date(timeIntervalSince1970: 100)
+        let (fromCore, standalone) = try await database.read { db in
+            (WorldView(core: try WorldCore.read(from: db), now: now), try WorldView.read(from: db, now: now))
+        }
+        #expect(fromCore == standalone)
+
+        #expect(!fromCore.devices.isEmpty)
+        #expect(!fromCore.starPositions.isEmpty)
+        #expect(!fromCore.meshSystems.isEmpty)
+        #expect(!fromCore.eventSystems.isEmpty)
+        #expect(!fromCore.theatres.isEmpty)
+        #expect(!fromCore.components.isEmpty)
+        #expect(!fromCore.replicantHostDevices.isEmpty)
+        #expect(!fromCore.stockpileUnits.isEmpty)
+        #expect(!fromCore.locationEvents.isEmpty)
+        #expect(!fromCore.blueprintBills.isEmpty)
+        #expect(!fromCore.blueprintComponents.isEmpty)
+
+        // Private to `WorldView.read` — no table backs them from `core`, so
+        // both sides stay empty rather than one side faking the other.
+        #expect(fromCore.salvageUnits.isEmpty)
+        #expect(fromCore.theatreRecords.isEmpty)
+        #expect(fromCore.beltsBySystem.isEmpty)
+        #expect(fromCore.surveyedSystems.isEmpty)
+        #expect(fromCore.replicantSystems.isEmpty)
+        #expect(fromCore.theatreStock.isEmpty)
+        #expect(fromCore.theatreStockFreshness == nil)
+    }
+}

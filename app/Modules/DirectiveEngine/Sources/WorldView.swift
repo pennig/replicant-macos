@@ -149,6 +149,33 @@ public struct WorldView: Equatable, Sendable {
         )
     }
 
+    /// Reuses `core`'s overlapping tables instead of re-fetching them — the
+    /// rest keep the defaults `init(devices:starPositions:...)` already gives
+    /// them, same as `WorldTick.read` fills in from its own transaction.
+    public init(core: WorldCore, now: Date) {
+        let events = Array(core.locationEvents.values)
+        let stockpileUnits = core.footprints.values
+            .filter { $0.resources > 0 }
+            .reduce(into: [String: Int]()) { totals, row in
+                totals[SiteAssay.system(of: row.location), default: 0] += row.resources
+            }
+        self.init(
+            devices: core.devices,
+            starPositions: core.starPositions,
+            meshSystems: SalvageTargetPlanner.meshSystems(in: Array(core.devices.values)),
+            salvageUnits: [:],
+            eventSystems: Set(events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }),
+            theatres: core.theatres,
+            components: core.components,
+            replicantHostDevices: core.replicantHostDevices,
+            stockpileUnits: stockpileUnits,
+            locationEvents: events,
+            blueprintBills: core.blueprintBills,
+            blueprintComponents: core.blueprintComponents,
+            now: now
+        )
+    }
+
     /// One consistent, galaxy-wide read of everything the brain reasons over,
     /// taken from `db` and stamped `now`. Call it from inside a
     /// `database.read { db in … }` block: every table below must be read in ONE
