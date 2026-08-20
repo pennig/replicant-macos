@@ -27,24 +27,7 @@
 - `Operation.kind` is a `String` column. Compare against `OperationKind.print.rawValue`, never a bare literal.
 - **Comment budget, hard (from `app/CLAUDE.md`): file header ≤ 10 lines, declaration doc `///` ≤ 3 lines, inline `//` ≤ 2 lines.** Blank `///` lines count. A fact that does not fit goes to a `.claude/memory/` note and the comment becomes the sentence pointing at it. History, rejected alternatives and design rationale never go in source at all.
   **Where a task's code block below shows a longer comment, the budget wins.** Those blocks were written before this constraint was discovered; trim them and write the memory note. Measured: `WorldSnapshot.swift` was 27 of 31 doc blocks within budget before this branch, so the rule is enforced in practice, not merely stated. `app/.claude/memory/comment-policy.md` records what happened last time a pass ignored it.
-- **`Directive` fixtures use the helper below, never a hand-written init.** `Directive`'s memberwise init takes nine more arguments than is obvious, and `currentTarget` is a COMPUTED property (`targets[targetIndex]`) that cannot be passed. Every task's test code calls `testDirective(...)`; paste this helper into whichever new test file needs it first, and reuse it thereafter:
-
-```swift
-private func testDirective(
-    id: String, deviceCode: String, targets: [String] = ["SOL"],
-    status: DirectiveStatus = .running, kind: DirectiveKind = .haulRun
-) -> Directive {
-    Directive(
-        id: id, kind: kind, status: status, deviceCode: deviceCode,
-        targets: targets, targetIndex: 0, step: "preflight",
-        stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
-        originDesignation: nil, attentionReason: nil,
-        createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
-    )
-}
-```
-
-  With `targetIndex: 0`, `currentTarget` resolves to `targets.first`. If `.haulRun` is the wrong `kind` for what a test exercises, pass the right one rather than editing the helper's default.
+- **`Directive` fixtures use the module's existing `directiveFixture(...)` helper** at `app/Modules/DirectiveEngine/Tests/BrainTestSupport.swift:143`, never a hand-written init and never a new local helper. It is not `private`, so every test file in the target already sees it. Signature: `directiveFixture(id:kind:status:deviceCode:controllerCode:fleetTag:targets:theatreDepot:)`, defaulting to a running Salvage Run owning `"V1"`. `Directive`'s real init takes fourteen arguments and `currentTarget` is a COMPUTED property (`targets[targetIndex]`) that cannot be passed at all — which is why hand-rolling one wastes a round.
 
 ## File Structure
 
@@ -121,7 +104,7 @@ private func completedEntry(_ id: String, op: String, at: Double) -> DirectiveLo
 }
 
 private func sliceDirective() -> Directive {
-    testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"])
+    directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
 }
 
 @Suite struct AuditLogNarrowing {
@@ -554,7 +537,7 @@ import UniverseModels
         let core = try await database.read { db in try WorldCore.read(from: db) }
         let world = try await WorldSnapshot.read(
             from: database, now: Date(timeIntervalSince1970: 100),
-            directive: testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"])
+            directive: directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
         )
 
         #expect(core.devices == world.devices)
@@ -724,8 +707,8 @@ One `readAll` that answers for every running directive at once, so the scoped qu
     /// quietly handing missions a different world than they get today.
     @Test func batchedMatchesIndividualForEachDirective() async throws {
         let database = try GameDatabase.bootstrap()
-        let a = testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"])
-        let b = testDirective(id: "D2", deviceCode: "V2", targets: ["VEGA"])
+        let a = directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
+        let b = directiveFixture(id: "D2", deviceCode: "V2", targets: ["VEGA"])
         try await database.write { db in
             try DirectiveLogEntry.insert { dispatchEntry("L1", op: "OP-A", at: 1) }.execute(db)
             try DirectiveLogEntry.insert {
@@ -828,7 +811,7 @@ git commit -m "perf(directives): answer every directive's scoped read in one pas
         try await database.write { db in
             for i in 1...5 {
                 try Directive.insert {
-                    testDirective(id: "D\(i)", deviceCode: "V\(i)", targets: ["SOL"])
+                    directiveFixture(id: "D\(i)", deviceCode: "V\(i)", targets: ["SOL"])
                 }.execute(db)
             }
         }
@@ -845,10 +828,10 @@ git commit -m "perf(directives): answer every directive's scoped read in one pas
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert {
-                testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"])
+                directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
             }.execute(db)
             try Directive.insert {
-                testDirective(id: "D2", deviceCode: "V2", targets: ["SOL"], status: .paused)
+                directiveFixture(id: "D2", status: .paused, deviceCode: "V2", targets: ["SOL"])
             }.execute(db)
         }
         let tick = try await WorldTick.read(
@@ -959,7 +942,7 @@ The only task that changes control flow, and the only one with a behaviour delta
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert {
-                testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"], status: .paused)
+                directiveFixture(id: "D1", status: .paused, deviceCode: "V1", targets: ["SOL"])
             }.execute(db)
         }
         let tick = try await WorldTick.read(
