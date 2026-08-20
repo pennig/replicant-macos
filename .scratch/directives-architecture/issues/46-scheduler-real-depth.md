@@ -1,7 +1,7 @@
 # 46 — The scheduler queues behind a busy bench
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 45
 Labels: directives-architecture, stage-3
 
@@ -17,13 +17,13 @@ Labels: directives-architecture, stage-3
 
 ---
 
-- [ ] **Step 1:** Write five failing cases: shallowest queue wins; equal depth breaks by code; a free bench still beats a shallow queue; a bench at capacity takes nothing; two runs on one bench are both owners, oldest first.
-- [ ] **Step 2:** Confirm the first four return nil and the fifth returns one owner.
-- [ ] **Step 3:** Widen `choose` to a `min` over depth with the code tie-break, filtered by `queueDepth < device.queueSize`. Take owners and the active job from `queuedOperations`.
-- [ ] **Step 4:** Settle the `onOrder` question above and write the test that proves whichever answer you take.
-- [ ] **Step 5:** Eight targets green.
-- [ ] **Step 6:** **Mutation probe.** Invert the `min` comparator and confirm two cases redden. Change the capacity filter to `<=` and confirm one reddens. Revert both.
-- [ ] **Step 7:** Record the borrow count; `check-comments.sh`; commit.
+- [x] **Step 1:** Write five failing cases: shallowest queue wins; equal depth breaks by code; a free bench still beats a shallow queue; a bench at capacity takes nothing; two runs on one bench are both owners, oldest first.
+- [x] **Step 2:** Confirm the first four return nil and the fifth returns one owner.
+- [x] **Step 3:** Widen `choose` to a `min` over depth with the code tie-break, filtered by `queueDepth < device.queueSize`. Take owners and the active job from `queuedOperations`.
+- [x] **Step 4:** Settle the `onOrder` question above and write the test that proves whichever answer you take.
+- [x] **Step 5:** Eight targets green.
+- [x] **Step 6:** **Mutation probe.** Invert the `min` comparator and confirm two cases redden. Change the capacity filter to `<=` and confirm one reddens. Revert both.
+- [x] **Step 7:** Record the borrow count; `check-comments.sh`; commit.
 
 **Done when:** three benches each holding a job take a fourth job on the shallowest of them, with a test.
 
@@ -92,3 +92,48 @@ misattributions — one row's rewrite was double-listed as also "unchanged,"
 and one at-capacity reframe was missing from every category — both caught in
 review and corrected by re-checking every row against `git diff` directly
 rather than from memory.
+
+**Built and reviewed 2026-08-19**, subagent-driven, on branch `worktree-directives-stage-3`,
+which was merged with `main` at `8902fc1` before Phase B began. **Phase B is not itself merged** —
+that is Matt's call. Every claim below was checked against source or the event stream rather than
+taken from a subagent's summary.
+
+| Commit | What |
+|---|---|
+| `ba124b1` | `feat(directives): the scheduler queues behind a busy bench` |
+| `a7f56b9` | `fix: conservative queueSize reading; retire 21 stale busy-bench assertions` |
+| `743e8ed` | `docs: fix 4 over-budget doc comments, correct the classification table` |
+
+**What Phase B was for.** `PrintScheduler.choose` may now return an occupied bench, ranked by real
+depth against capacity, so a depot whose demand exceeds its bench count queues rather than waits.
+`Bench.owners` may hold several. Depth stays `queuedJobCount + (printingSnapshot != nil ? 1 : 0)`
+and is **not** multiplied by quantity — see below. This ticket was built before 45, out of the
+plan's order, because it is what returned the branch to green.
+
+**Open Question 4 is answered, and the plan's assumption was wrong.** It asked whether a
+`quantity: N` job takes one queue slot or N, assumed one, and worried depth under-counts. Live
+bench `89130889` carried exactly one open op — `service_bot`, `quantity: 2` — with one unit on the
+platen and **one entry in `print_queue`** bearing the same type and tags. **A job of N occupies N
+slots, one at a time.** So `print_queue` entries are UNITS, `queuedJobCount + active` is already a
+true slot count, and `Device.queueSize` is a ceiling in those same units. Multiplying by quantity
+would double-count.
+
+**`queueSize <= 0` does not mean uncapped, settled by live data over argument.** The first commit
+read a non-positive `queueSize` as unbounded. Of 13 print-capable devices in production, **eight
+report 0** — four heaven vessels, a racing vessel, three structural fabricators — against five
+reporting 10, which are the real depot autofactories. Uncapped would let the scheduler pile
+unbounded work onto a heaven vessel, which is this stage's own failure mode one layer down. A
+non-positive `queueSize` now caps the bench at one slot, the platen.
+
+**21 pre-existing tests asserted the semantic this ticket removes, and they were resolved here
+rather than deferred** — the precedent being ticket 35, which rewrote 8 when it changed the same
+semantic in the other direction, and ticket 38, which rewrote 18. The instruction was not "make
+them green" but to decide, per test, between a removed semantic and a genuine regression. The
+result: **11 rewritten**, **6 already correct**, **4 reframed as explicit at-capacity cases**, and
+**one — `acquireDoesNotOrderTwice` — where a real fixture bug was found and fixed instead**:
+`PrintJob.stillPrinting` checks the **carrier's** device code while the fixture populated the
+**bench's**, so the owner-scoped guard was never reached.
+
+The classification table needed a correction of its own: its arithmetic summed to 21 only because
+two errors cancelled — one test double-counted, one omitted. Corrected to 11 + 6 + 4, with every
+remaining row re-verified against the diff.

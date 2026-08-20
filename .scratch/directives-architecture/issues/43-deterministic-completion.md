@@ -1,7 +1,7 @@
 # 43 — A completion closes the op it names, or the oldest
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 42
 Labels: directives-architecture, stage-3
 
@@ -22,13 +22,13 @@ So the rule here is **oldest live print first**, which needs no field that may b
 
 ---
 
-- [ ] **Step 1:** Write the three failing tests against the harnesses those two test files already use — a completion closes the oldest; a poll does not adopt twice; an expired deadline closes its own operation.
-- [ ] **Step 2:** Confirm all three fail.
-- [ ] **Step 3:** Give `completeOpenOperation` an optional `operationID:` and an ordered fetch. Break the `startedAt` tie by `id` — two ops in one transaction share the timestamp.
-- [ ] **Step 4:** `DeadlineScheduler` passes `operationID: op.id` at both `:200` and `:255`.
-- [ ] **Step 5:** Fix the four-arm switch at `:121-126`; scope the complete-as-stale arm to `.active`.
-- [ ] **Step 6:** Extract the ordered fetch and repoint `:284-286` at it.
-- [ ] **Step 7:** Eight targets green; `check-comments.sh`; commit.
+- [x] **Step 1:** Write the three failing tests against the harnesses those two test files already use — a completion closes the oldest; a poll does not adopt twice; an expired deadline closes its own operation.
+- [x] **Step 2:** Confirm all three fail.
+- [x] **Step 3:** Give `completeOpenOperation` an optional `operationID:` and an ordered fetch. Break the `startedAt` tie by `id` — two ops in one transaction share the timestamp.
+- [x] **Step 4:** `DeadlineScheduler` passes `operationID: op.id` at both `:200` and `:255`.
+- [x] **Step 5:** Fix the four-arm switch at `:121-126`; scope the complete-as-stale arm to `.active`.
+- [x] **Step 6:** Extract the ordered fetch and repoint `:284-286` at it.
+- [x] **Step 7:** Eight targets green; `check-comments.sh`; commit.
 
 **Done when:** a bench with one active and two enqueued prints closes the active one on a `print.completed`, with a test.
 
@@ -52,3 +52,43 @@ and leans on the poll path to clear them.
 Tests: `GameServices/Tests/ReconcilerSharedBenchTests.swift`. The poll path
 (`result: nil`) is deliberately unguarded and is what currently clears a job
 whose event this refused.
+
+## Comments
+
+**Built and reviewed 2026-08-19**, subagent-driven, on branch `worktree-directives-stage-3`,
+which was merged with `main` at `8902fc1` before Phase B began. **Phase B is not itself merged** —
+that is Matt's call. Every claim below was checked against source or the event stream rather than
+taken from a subagent's summary.
+
+| Commit | What |
+|---|---|
+| `d1ac8c0` | `fix(operations): a completion closes the op it names, or the oldest` |
+| `e7075fd` | `fix(operations): scope the adopt scan to live ops, separate the optimistic guard` |
+
+Three unordered `fetchOne`s over `liveCases` now pick deterministically by `(startedAt, id)`, a
+total tie-break since `id` is unique. Two of the three share one ordered `liveOps` helper, so the
+two-copy drift the brief warned about cannot happen.
+
+**The scope grew after the plan was written, and Matt named it.** `daf33af` on `main` had
+consolidated three guards into one `completionMayClose` that **both** event paths ask — because the
+device path, the one production actually uses, never called `completeOpenOperation` at all. A
+refusal is the wrong behaviour once N ops can be live, so that became `selectCompletableOp`, doing
+match-then-age: the named `operationID` wins, else filter by kind and event time, else match the
+printed device type, else the oldest. `completionMayClose` has zero remaining references in source.
+
+**The blocker ticket 42 raised is closed, and the test is not vacuous.** The reviewer traced it
+rather than trusting the report: `pollDoesNotPromoteTheEnqueuedSiblingOverTheRunningJob` seeds the
+enqueued op **before** the active one, the opposite of age order, then ingests a device snapshot
+matching the active op's timestamps. Pre-fix, an unordered fetch surfacing the enqueued row
+satisfies every arm of the promote condition and writes it to `.active` while the real active job
+holds that status — colliding on the new unique index, which is exactly the
+`UNIQUE constraint failed: operations.entityCode` reported as its RED.
+
+**One fix round, and the finding was a claim dressed as a conclusion.** The first attempt computed
+`matchingOp` over `openCases`, including `optimistic`, and called it "strictly safer".
+`optimistic` sits deliberately outside the uniqueness index so it can coexist with the op it will
+replace — so an optimistic row sorting first binds `matchingOp`, blocks promotion of a genuinely
+live sibling, and blocks the stale-active branch too. Now scoped to `liveCases`, with a
+**separately named** `optimisticMatch` gating only the adopt branch. Pinned by
+`liveSiblingIsPromotedDespiteAnEarlierOptimisticOp`, verified by construction: the optimistic op is
+seeded at `startedAt -1000` so it would win under the old scan.
