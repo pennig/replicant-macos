@@ -34,27 +34,13 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// Completion detection reads the `directive.completed` ROW here rather
     /// than the event, which is what keeps missions replay-immune.
     public let log: [DirectiveLogEntry]
-    /// Every `.commandDispatched` entry that NAMES an operation and has no
-    /// `.opCompleted` counterpart yet — the audit pass's worklist, matched in
-    /// SQL. Unlike `log`, never windowed by count: an op dispatched long before
-    /// `log`'s cutoff still resolves here. Bounded by ops in flight, not by
-    /// directive age.
+    /// The audit pass's live worklist — unmatched `.commandDispatched` entries,
+    /// matched in SQL, never windowed by count. See
+    /// `app/.claude/memory/dispatched-operations-two-set-union.md`.
     public let auditLog: [DirectiveLogEntry]
-    /// The operations this directive dispatched, by operation id — **including
-    /// closed ones**. Two sets in one lookup:
-    ///
-    /// - kinds any mission machine reads (`dispatchedKinds`), every status:
-    ///   `RelayRun.printedRelayCode` names its clone from the COMPLETED print
-    ///   hours after it closed, `printDiagnosis` needs `.superseded` to tell a
-    ///   superseded print from one never dispatched, and
-    ///   `Steps/TravelTo.lastTravelCompletion` post-dates a device row against
-    ///   its last completed travel;
-    /// - whatever `auditLog` still has open, of ANY kind, so the audit pass can
-    ///   notice a dispatched op reaching a terminal state and write its
-    ///   `.opCompleted` entry.
-    ///
-    /// Never fold these into `openOperations`: a mission asking "is this device
-    /// busy?" reads that lookup, and a closed op inside it reads as in-flight.
+    /// This directive's dispatched operations, by id — including closed ones;
+    /// union of a kind-filtered mission set and an audit set, never folded into
+    /// `openOperations`. See `app/.claude/memory/dispatched-operations-two-set-union.md`.
     public let dispatchedOperations: [String: GameModels.Operation]
     /// Cached `StarSystem` blobs, by star designation. Only the CURRENT target,
     /// the origin and the vessel's own system are decoded — never the rest of
@@ -144,11 +130,9 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// with many interleaved controllers; 500 leaves headroom.
     public static let logWindow = 500
 
-    /// The operation kinds `dispatchedOperations` carries for the mission
-    /// machines. Every consumer outside the audit pass filters to exactly one
-    /// of these (`EventRun`, `RelayRun`, `Steps/PrintJob` on `print`;
-    /// `Steps/TravelTo` on `travel`), so anything else is fetched, decoded and
-    /// discarded. Widen this only alongside a consumer that reads the new kind.
+    /// Kinds `dispatchedOperations`'s mission half carries; widen only
+    /// alongside a new consumer. See
+    /// `app/.claude/memory/dispatched-operations-two-set-union.md`.
     static let dispatchedKinds = [OperationKind.print.rawValue, OperationKind.travel.rawValue]
 
     public init(
@@ -274,12 +258,8 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .fetchAll(db)
                 .reversed())
 
-            // Only dispatches with no `.opCompleted` counterpart — the rows the
-            // audit pass can still act on. Matching in SQL rather than fetching
-            // the whole history and diffing it in Swift: settled dispatches are
-            // the overwhelming majority (7,954 rows to find 4) and re-reading
-            // them every tick is pure waste. Unbounded only in the pending
-            // sense, which is bounded by how many ops are actually in flight.
+            // Matched in SQL, not Swift — see
+            // `app/.claude/memory/dispatched-operations-two-set-union.md`.
             let auditLog = try DirectiveLogEntry
                 .where { entry in
                     entry.directiveID.eq(directiveID)
@@ -298,9 +278,8 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .order { $0.occurredAt }
                 .fetchAll(db)
 
-            // The ids this directive is on record as dispatching. One query, so
-            // the ids never cross into Swift to come back as a host-parameter
-            // list.
+            // Ids this directive dispatched — one query, never a
+            // host-parameter list in Swift.
             let dispatchedIDs = DirectiveLogEntry
                 .where {
                     $0.directiveID.eq(directiveID)
@@ -309,9 +288,8 @@ public struct WorldSnapshot: Equatable, Sendable {
                 }
                 .select { $0.operationID ?? "" }
 
-            // The mission half: only the kinds a machine reads. The owner
-            // column is the source of truth; the log is a fallback for rows
-            // written before it existed.
+            // Mission half: kinds a machine reads. Owner column is truth; log
+            // is the fallback for rows written before it existed.
             let missionOps = try GameModels.Operation
                 .where { operation in
                     (operation.directiveID.eq(directiveID) || operation.id.in(dispatchedIDs))
@@ -319,11 +297,8 @@ public struct WorldSnapshot: Equatable, Sendable {
                 }
                 .fetchAll(db)
 
-            // The audit half: whatever `auditLog` still needs closed, of ANY
-            // kind. Kept out of the kind filter deliberately — filtering it
-            // would silently stop `recordCompletedOps` writing `.opCompleted`
-            // for `launch`, `recall`, `deploy` and every other kind. This is
-            // the single reason the two halves cannot be merged into one query.
+            // Audit half, kept kind-agnostic on purpose. See
+            // `app/.claude/memory/dispatched-operations-two-set-union.md`.
             let auditOperationIDs = auditLog.compactMap(\.operationID)
             let auditOps = auditOperationIDs.isEmpty
                 ? []

@@ -296,10 +296,8 @@ enum DirectiveExecutor {
         @Dependency(\.date) var date
         @Dependency(\.uuid) var uuid
 
-        // Reads `auditLog`, not the windowed `log`, so an old dispatch this
-        // pass still needs stays resolvable. The already-closed exclusion now
-        // happens in SQL — `auditLog` never contains a dispatch that already
-        // has an `.opCompleted` counterpart.
+        // Reads `auditLog` (SQL-matched, unwindowed), not `log`. See
+        // `app/.claude/memory/dispatched-operations-two-set-union.md`.
         var entries: [DirectiveLogEntry] = []
         for dispatch in world.auditLog where dispatch.kind == .commandDispatched {
             guard let operationID = dispatch.operationID,

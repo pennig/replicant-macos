@@ -25,6 +25,8 @@
 - Fixtures must pin excluded rows explicitly, not only included ones, and every exclusion must be proved by mutation (delete the filter, watch the test fail).
 - Commit after every task. Never open a PR; land on the local branch.
 - `Operation.kind` is a `String` column. Compare against `OperationKind.print.rawValue`, never a bare literal.
+- **Comment budget, hard (from `app/CLAUDE.md`): file header ≤ 10 lines, declaration doc `///` ≤ 3 lines, inline `//` ≤ 2 lines.** Blank `///` lines count. A fact that does not fit goes to a `.claude/memory/` note and the comment becomes the sentence pointing at it. History, rejected alternatives and design rationale never go in source at all.
+  **Where a task's code block below shows a longer comment, the budget wins.** Those blocks were written before this constraint was discovered; trim them and write the memory note. Measured: `WorldSnapshot.swift` was 27 of 31 doc blocks within budget before this branch, so the rule is enforced in practice, not merely stated. `app/.claude/memory/comment-policy.md` records what happened last time a pass ignored it.
 - **`Directive` fixtures use the helper below, never a hand-written init.** `Directive`'s memberwise init takes nine more arguments than is obvious, and `currentTarget` is a COMPUTED property (`targets[targetIndex]`) that cannot be passed. Every task's test code calls `testDirective(...)`; paste this helper into whichever new test file needs it first, and reuse it thereafter:
 
 ```swift
