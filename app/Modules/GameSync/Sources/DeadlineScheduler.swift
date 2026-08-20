@@ -197,7 +197,9 @@ actor DeadlineScheduler {
             if let device, device.isSettled {
                 logger.info("op \(op.id, privacy: .public): device settled (\(device.status, privacy: .public)) — completing")
                 overdueSince[op.id] = nil
-                await reconciler.completeOpenOperation(on: op.entityCode, source: .poll, eventTime: nil, result: nil)
+                await reconciler.completeOpenOperation(
+                    on: op.entityCode, source: .poll, eventTime: nil, result: nil, operationID: op.id
+                )
             } else if let freshETA = device?.activityDeadline, freshETA > now.addingTimeInterval(rearmBackoff) {
                 // The server supplied a genuinely later estimate — the action is
                 // progressing, not stuck. Re-arm to it and restart give-up
@@ -252,7 +254,9 @@ actor DeadlineScheduler {
             // completing it here is the backstop for a lost stop event.
             if let device, device.isSettled {
                 logger.info("continuous op \(op.id, privacy: .public) (\(op.kind, privacy: .public)) on \(op.entityCode, privacy: .public): device settled (\(device.status, privacy: .public)) — completing (stop event lost)")
-                await reconciler.completeOpenOperation(on: op.entityCode, source: .poll, eventTime: nil, result: nil)
+                await reconciler.completeOpenOperation(
+                    on: op.entityCode, source: .poll, eventTime: nil, result: nil, operationID: op.id
+                )
             }
         }
     }

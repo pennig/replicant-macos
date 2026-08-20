@@ -119,67 +119,44 @@ public struct Reconciler: Sendable {
         // (a dispatched print sits `enqueued` with no deadline until then, so
         // the progress bar can't draw). Both also refresh a slipped deadline.
         if let activity = device.derivedActivity {
-            let openOp = try Operation.where {
+            let openOps = try Operation.where {
                 $0.entityCode.eq(device.deviceCode) &&
                 $0.status.in(OperationStatus.openCases)
             }
-            .fetchOne(db)
+            .order { ($0.startedAt, $0.id) }
+            .fetchAll(db)
 
-            switch openOp {
-            case nil:
-                // Adopt a fresh active op from the snapshot.
-                let op = Operation(
-                    id: uuid().uuidString,
-                    entityCode: device.deviceCode,
-                    kind: activity.kind.rawValue,
-                    status: .active,
-                    source: OperationSource.poll,
-                    startedAt: activity.startedAt ?? device.updatedAt,
-                    completesAt: activity.completesAt,
-                    lastConfirmedAt: device.updatedAt,
-                    detail: .object([:])
-                )
-                try Operation.insert { op }.execute(db)
-                logger.info("ingest \(device.deviceCode, privacy: .public): adopted \(activity.kind.rawValue, privacy: .public) op from in-progress snapshot")
+            // The oldest op of any status tracking this activity's kind — the
+            // op the device is actually running, or about to.
+            let matchingOp = openOps.first { $0.kind == activity.kind.rawValue }
+            // A live *active* op of a DIFFERENT kind means the device moved
+            // on; a merely-enqueued sibling is just queued behind it.
+            let staleActiveOp = openOps.first { $0.status == .active && $0.kind != activity.kind.rawValue }
 
-            case let op? where op.status != .optimistic
-                && op.kind == activity.kind.rawValue
-                && activity.completesAt != nil
-                && (op.status != .active || op.completesAt != activity.completesAt):
-                // The op exists but the snapshot is ahead of it: a queued op
-                // that has now started, or a moved deadline. Promote/refresh in
-                // place (same id, so the progress bar keeps its identity). An
-                // `optimistic` op is left for dispatch to confirm.
-                var updated = op
+            if let matchingOp, matchingOp.status != .optimistic, activity.completesAt != nil,
+               matchingOp.status != .active || matchingOp.completesAt != activity.completesAt {
+                // A queued op that has now started, or a moved deadline.
+                // Promote/refresh in place (same id preserves identity).
+                var updated = matchingOp
                 updated.status = .active
                 updated.completesAt = activity.completesAt
                 if let startedAt = activity.startedAt { updated.startedAt = startedAt }
                 updated.source = OperationSource.poll
                 updated.lastConfirmedAt = device.updatedAt
                 try Operation.upsert { updated }.execute(db)
-                logger.info("ingest \(device.deviceCode, privacy: .public): promoted \(op.kind, privacy: .public) op \(op.id, privacy: .public) to active from in-progress snapshot")
-
-            case let op? where op.status != .optimistic && op.kind != activity.kind.rawValue:
-                // The device has moved on to a *different* activity than the
-                // open op tracks — the old action finished (we never saw a
-                // settled status or completion event, because the device went
-                // straight from one timed action into the next) and a new one
-                // began. This happens when the transition is server-driven (a
-                // recalled survey controller resuming a scan, an AMI directive
-                // re-tasking a drone) rather than via local dispatch, which
-                // would have superseded the prior op itself. Complete the stale
-                // op and adopt the current activity, so the inspector stops
-                // showing the finished task and the deadline scheduler tracks
-                // the right one instead of re-arming the wrong op to its ETA.
-                // An `optimistic` op is left for dispatch to confirm.
-                var stale = op
-                stale.status = .completed
-                stale.source = OperationSource.poll
-                stale.lastConfirmedAt = device.updatedAt
-                // Complete first so the open-uniqueness index has room for the
-                // adopted active op in the same transaction.
-                try Operation.upsert { stale }.execute(db)
-
+                logger.info("ingest \(device.deviceCode, privacy: .public): promoted \(matchingOp.kind, privacy: .public) op \(matchingOp.id, privacy: .public) to active from in-progress snapshot")
+            } else if matchingOp == nil {
+                // The device moved to a different activity with no settle or
+                // completion event seen — a server-driven transition.
+                if let staleActiveOp {
+                    var stale = staleActiveOp
+                    stale.status = .completed
+                    stale.source = OperationSource.poll
+                    stale.lastConfirmedAt = device.updatedAt
+                    // Complete first so the open-uniqueness index has room for
+                    // the adopted active op in the same transaction.
+                    try Operation.upsert { stale }.execute(db)
+                }
                 let adopted = Operation(
                     id: uuid().uuidString,
                     entityCode: device.deviceCode,
@@ -192,10 +169,11 @@ public struct Reconciler: Sendable {
                     detail: .object([:])
                 )
                 try Operation.insert { adopted }.execute(db)
-                logger.info("ingest \(device.deviceCode, privacy: .public): completed stale \(op.kind, privacy: .public) op \(op.id, privacy: .public) and adopted \(activity.kind.rawValue, privacy: .public) from in-progress snapshot")
-
-            default:
-                break
+                if let staleActiveOp {
+                    logger.info("ingest \(device.deviceCode, privacy: .public): completed stale \(staleActiveOp.kind, privacy: .public) op \(staleActiveOp.id, privacy: .public) and adopted \(activity.kind.rawValue, privacy: .public) from in-progress snapshot")
+                } else {
+                    logger.info("ingest \(device.deviceCode, privacy: .public): adopted \(activity.kind.rawValue, privacy: .public) op from in-progress snapshot")
+                }
             }
         } else if device.isSettled {
             // The device has settled (idle/stowed/inactive): it finished
@@ -281,13 +259,10 @@ public struct Reconciler: Sendable {
         return await withErrorReporting {
             try await database.write { db -> Bool in
                 var closed = false
-                if let plan, var op = try Operation.where({
-                    $0.entityCode.eq(deviceCode) && $0.status.in(OperationStatus.liveCases)
-                }).fetchOne(db),
-                   Self.completionMayClose(
-                       op, on: deviceCode, eventTime: eventTime,
-                       result: plan.result, allowedKinds: plan.allowedKinds
-                   ) {
+                if let plan, var op = Self.selectCompletableOp(
+                    among: try Self.liveOps(on: deviceCode, in: db), on: deviceCode,
+                    eventTime: eventTime, result: plan.result, allowedKinds: plan.allowedKinds
+                ) {
                     if let result = plan.result {
                         var dict: [String: JSONValue] = {
                             if case .object(let existing) = op.detail { return existing }
@@ -421,36 +396,27 @@ public struct Reconciler: Sendable {
     /// genuinely earlier action's completion leak forward.
     static let eventTimeSkewTolerance: TimeInterval = 5
 
-    /// Mark the single open operation on a device completed, recording any event
-    /// result (e.g. a print's `new_device_code`) under `detail.result`.
-    ///
-    /// Which completions may close which op is `completionMayClose`. None of its
-    /// guards constrains the poll path (`allowedKinds`, `eventTime` and `result`
-    /// all nil), which is therefore the backstop for a declined event.
-    ///
-    /// Returns whether an open operation was found and closed.
+    /// Mark a device's live operation completed, recording any event result
+    /// under `detail.result`. Selection is `selectCompletableOp`; the poll
+    /// path (every guard nil) closes the oldest live op outright.
     @discardableResult
     public func completeOpenOperation(
         on deviceCode: String,
         source: OperationSource,
         eventTime: Date?,
         result: [String: JSONValue]?,
-        allowedKinds: Set<String>? = nil
+        allowedKinds: Set<String>? = nil,
+        operationID: String? = nil
     ) async -> Bool {
         @Dependency(\.defaultDatabase) var database
         @Dependency(\.date) var date
         let stamp = eventTime ?? date.now
         return await withErrorReporting {
             try await database.write { db -> Bool in
-            guard var op = try Operation.where({
-                $0.entityCode.eq(deviceCode)
-                    && $0.status.in(OperationStatus.liveCases)
-            }).fetchOne(db)
-            else { return false }
-
-            guard Self.completionMayClose(
-                op, on: deviceCode, eventTime: eventTime,
-                result: result, allowedKinds: allowedKinds
+            guard var op = Self.selectCompletableOp(
+                among: try Self.liveOps(on: deviceCode, in: db), on: deviceCode,
+                eventTime: eventTime, result: result, allowedKinds: allowedKinds,
+                operationID: operationID
             ) else { return false }
 
             if let result {
@@ -471,35 +437,48 @@ public struct Reconciler: Sendable {
         } ?? false
     }
 
-    /// Whether this completion may close `op` — one copy for both closing paths.
-    /// `applyDeviceEvent` holds the other close, and `GameSync` routes almost
-    /// every event through it, so guarding this one alone guards nothing.
-    static func completionMayClose(
-        _ op: GameModels.Operation,
+    /// The device's live ops, oldest first (ties on `startedAt` broken by
+    /// `id` — ops dispatched in one transaction share a timestamp), so every
+    /// completion path picks the same deterministic order.
+    private static func liveOps(on deviceCode: String, in db: Database) throws -> [GameModels.Operation] {
+        try Operation.where {
+            $0.entityCode.eq(deviceCode) && $0.status.in(OperationStatus.liveCases)
+        }
+        .order { ($0.startedAt, $0.id) }
+        .fetchAll(db)
+    }
+
+    /// Which live op a completion closes: the one whose `params.device_type`
+    /// matches the result, or the oldest when neither side names a type.
+    /// `operationID`, when given, names the op outright.
+    static func selectCompletableOp(
+        among ops: [GameModels.Operation],
         on deviceCode: String,
         eventTime: Date?,
         result: [String: JSONValue]?,
-        allowedKinds: Set<String>?
-    ) -> Bool {
-        // A `site.depleted` can never close a travel op.
-        if let allowedKinds, !allowedKinds.contains(op.kind) {
-            logger.notice("ignored completion on \(deviceCode, privacy: .public): open op is \(op.kind, privacy: .public), event closes \(allowedKinds.sorted().joined(separator: "/"), privacy: .public) — stale/replayed event")
-            return false
+        allowedKinds: Set<String>?,
+        operationID: String? = nil
+    ) -> GameModels.Operation? {
+        if let operationID { return ops.first { $0.id == operationID } }
+
+        // Narrow to ops this completion could plausibly belong to — a bench
+        // runs a queue deeper than one op, so a mismatch is another job's event.
+        var candidates = ops
+        if let allowedKinds { candidates = candidates.filter { allowedKinds.contains($0.kind) } }
+        if let eventTime {
+            candidates = candidates.filter {
+                eventTime >= $0.startedAt.addingTimeInterval(-Self.eventTimeSkewTolerance)
+            }
         }
-        // A completion stamped before the op started belongs to an earlier action.
-        if let eventTime, eventTime < op.startedAt.addingTimeInterval(-Self.eventTimeSkewTolerance) {
-            logger.notice("ignored completion on \(deviceCode, privacy: .public): event time \(eventTime.ISO8601Format(), privacy: .public) predates op start \(op.startedAt.ISO8601Format(), privacy: .public) — stale/replayed event")
-            return false
+        guard !candidates.isEmpty else {
+            logger.notice("ignored completion on \(deviceCode, privacy: .public): no live op matches this event's kind/timing — stale/replayed event")
+            return nil
         }
-        // A bench runs a queue deeper than the one op this table holds for it, so
-        // a result of another type is another job of that queue finishing.
-        if let wanted = op.detail["params"]?["device_type"]?.stringValue,
-           let produced = result?["device_type"]?.stringValue,
-           wanted != produced
-        {
-            logger.notice("ignored completion on \(deviceCode, privacy: .public): open op asked for \(wanted, privacy: .public), event produced \(produced, privacy: .public) — another job on this bench")
-            return false
+
+        if let produced = result?["device_type"]?.stringValue,
+           let matched = candidates.first(where: { $0.printedDeviceType == produced }) {
+            return matched
         }
-        return true
+        return candidates.first
     }
 }

@@ -2,8 +2,8 @@
 //  ReconcilerSharedBenchTests.swift
 //  Replicould — GameServices
 //
-//  A print completion may only close a job that asked for the device type it
-//  reports.
+//  A print completion selects among a bench's live jobs by matching the
+//  device type it names, falling back to the oldest.
 //
 
 import API
@@ -18,21 +18,21 @@ import Utils
 
 private typealias Operation = GameModels.Operation
 
-/// One autofactory runs a queue the server sizes at ten, while
-/// `operation_one_open_per_device` lets the client hold a single open op for
-/// that bench. So a completion arriving there is often some other run's job,
-/// and closing the open op on device code alone stamped a contradicting result
-/// into it — 23 of the live ledger's 235 resolved print ops.
+/// One autofactory runs a queue the server sizes at ten, so a completion
+/// arriving there is often some other run's job — closing on device code
+/// alone once stamped a contradicting result into 23 of 235 resolved prints.
 @Suite struct ReconcilerSharedBenchTests {
     private let bench = "43C9B54A"
     private let start = Date(timeIntervalSince1970: 1_782_000_000)
 
-    private func printOp(wanting deviceType: String?) -> Operation {
+    private func printOp(
+        _ id: String, wanting deviceType: String?, status: OperationStatus, startedAt: Date
+    ) -> Operation {
         Operation(
-            id: "op-print", entityCode: bench, kind: OperationKind.print.rawValue,
-            status: OperationStatus.active, source: OperationSource.poll,
-            startedAt: start, completesAt: start.addingTimeInterval(2_400),
-            lastConfirmedAt: start,
+            id: id, entityCode: bench, kind: OperationKind.print.rawValue,
+            status: status, source: OperationSource.poll,
+            startedAt: startedAt, completesAt: startedAt.addingTimeInterval(2_400),
+            lastConfirmedAt: startedAt,
             detail: deviceType.map {
                 .object(["params": .object(["device_type": .string($0)])])
             } ?? .object([:])
@@ -47,113 +47,104 @@ private typealias Operation = GameModels.Operation
         )
     }
 
-    private func seed(_ op: Operation) async throws -> any DatabaseWriter {
+    /// Seeds ops in the given (always answer-defeating) order.
+    private func seed(_ ops: [Operation]) async throws -> any DatabaseWriter {
         let database = try GameDatabase.bootstrap()
-        try await database.write { db in try Operation.insert { op }.execute(db) }
+        try await database.write { db in for op in ops { try Operation.insert { op }.execute(db) } }
         return database
     }
 
-    private func stored(_ database: any DatabaseWriter) async throws -> Operation? {
-        try await database.read { db in try Operation.where { $0.id.eq("op-print") }.fetchOne(db) }
+    private func status(_ database: any DatabaseWriter, _ id: String) async throws -> OperationStatus? {
+        try await database.read { db in try Operation.where { $0.id.eq(id) }.fetchOne(db) }?.status
     }
 
-    /// The live incident: a relay run's print op was closed by a `defence_grid`
-    /// completion off the same bench, so the run stopped believing its print was
-    /// in flight and waited out its deadline for a relay still in the queue.
-    @Test func aForeignTypeCompletionClosesNothing() async throws {
-        let database = try await seed(printOp(wanting: "ftl_relay"))
+    /// The live incident: a `defence_grid` completion belongs to a live sibling
+    /// job, not the older `ftl_relay` print — selection must find it rather
+    /// than falling back to age.
+    @Test func aMatchingTypeClosesItsOwnJobEvenWhenYounger() async throws {
+        let older = printOp("op-relay", wanting: "ftl_relay", status: .active, startedAt: start)
+        let younger = printOp("op-grid", wanting: "defence_grid", status: .enqueued, startedAt: start.addingTimeInterval(60))
+        let database = try await seed([older, younger])
 
         let closed = await withDependencies { $0.defaultDatabase = database } operation: {
             await Reconciler().applyOperationEvent(completion("defence_grid", newCode: "79A4FD5C"))
         }
 
-        let op = try await stored(database)
-        #expect(closed == false)
-        #expect(op?.status == OperationStatus.active)
-        #expect(op?.detail["result"] == nil)
+        #expect(closed)
+        #expect(try await status(database, "op-grid") == .completed)
+        #expect(try await status(database, "op-relay") == .active)
     }
 
-    /// The job's own completion still closes it and still records the code the
-    /// dispatch response withheld.
-    @Test func theRequestedTypeStillCloses() async throws {
-        let database = try await seed(printOp(wanting: "ftl_relay"))
+    /// The job's own completion closes it and records the code the dispatch
+    /// response withheld, even with an older untyped sibling on the bench.
+    @Test func theRequestedTypeStillClosesOverAnOlderSibling() async throws {
+        let older = printOp("op-other", wanting: nil, status: .active, startedAt: start)
+        let younger = printOp("op-relay", wanting: "ftl_relay", status: .enqueued, startedAt: start.addingTimeInterval(60))
+        let database = try await seed([older, younger])
 
         let closed = await withDependencies { $0.defaultDatabase = database } operation: {
             await Reconciler().applyOperationEvent(completion("ftl_relay", newCode: "9161CE8B"))
         }
 
-        let op = try await stored(database)
+        let op = try await database.read { db in try Operation.where { $0.id.eq("op-relay") }.fetchOne(db) }
         #expect(closed)
         #expect(op?.status == OperationStatus.completed)
         #expect(op?.detail["result"]?["new_device_code"]?.stringValue == "9161CE8B")
+        #expect(try await status(database, "op-other") == .active)
     }
 
-    /// An op that never recorded what it asked for cannot be contradicted, so
-    /// it keeps closing on the device code alone.
-    @Test func anUntypedJobIsUnaffected() async throws {
-        let database = try await seed(printOp(wanting: nil))
+    /// Neither live op names what arrived, so selection falls back to age —
+    /// the older job closes, not the younger, merely-mismatched one.
+    @Test func noMatchFallsBackToTheOlderJob() async throws {
+        let older = printOp("op-old", wanting: nil, status: .active, startedAt: start)
+        let younger = printOp("op-mismatched", wanting: "mining_drone", status: .enqueued, startedAt: start.addingTimeInterval(60))
+        let database = try await seed([younger, older])
 
         let closed = await withDependencies { $0.defaultDatabase = database } operation: {
             await Reconciler().applyOperationEvent(completion("defence_grid", newCode: "79A4FD5C"))
         }
 
         #expect(closed)
-        #expect(try await stored(database)?.status == OperationStatus.completed)
+        #expect(try await status(database, "op-old") == .completed)
+        #expect(try await status(database, "op-mismatched") == .enqueued)
     }
 
     /// **The path production takes.** `GameSync.deviceRoute` routes every event
-    /// carrying a parseable `createdAt` through `applyDeviceEvent`, which holds
-    /// its own copy of the close; `applyOperationEvent` is the malformed-date
-    /// fallback. Both copies must refuse the same completions.
-    @Test func theEventPathRefusesAForeignType() async throws {
-        let database = try await seed(printOp(wanting: "ftl_relay"))
+    /// carrying a parseable `createdAt` through `applyDeviceEvent`; both copies
+    /// must select the same op.
+    @Test func theEventPathSelectsTheMatchingJob() async throws {
+        let older = printOp("op-relay", wanting: "ftl_relay", status: .active, startedAt: start)
+        let younger = printOp("op-grid", wanting: "defence_grid", status: .enqueued, startedAt: start.addingTimeInterval(60))
+        let database = try await seed([older, younger])
 
         let closed = await withDependencies { $0.defaultDatabase = database } operation: {
             await Reconciler().applyDeviceEvent(
-                deviceCode: bench, event: completion("mining_drone", newCode: "2ADECE40"),
+                deviceCode: bench, event: completion("defence_grid", newCode: "2ADECE40"),
                 location: nil, stow: nil, eventTime: start.addingTimeInterval(600)
             )
         }
 
-        let op = try await stored(database)
-        #expect(closed == false)
-        #expect(op?.status == OperationStatus.active)
-        #expect(op?.detail["result"] == nil)
-    }
-
-    /// …and still closes the job that asked for what arrived.
-    @Test func theEventPathClosesTheRequestedType() async throws {
-        let database = try await seed(printOp(wanting: "ftl_relay"))
-
-        let closed = await withDependencies { $0.defaultDatabase = database } operation: {
-            await Reconciler().applyDeviceEvent(
-                deviceCode: bench, event: completion("ftl_relay", newCode: "8EC8A25D"),
-                location: nil, stow: nil, eventTime: start.addingTimeInterval(600)
-            )
-        }
-
-        let op = try await stored(database)
         #expect(closed)
-        #expect(op?.status == OperationStatus.completed)
-        #expect(op?.detail["result"]?["new_device_code"]?.stringValue == "8EC8A25D")
+        #expect(try await status(database, "op-grid") == .completed)
+        #expect(try await status(database, "op-relay") == .active)
     }
 
     /// The poll path names no device type — its settled-device read is its own
-    /// proof — so it remains the backstop that clears a job whose completion
-    /// event the guard above declined.
-    @Test func thePollPathStillCloses() async throws {
-        let database = try await seed(printOp(wanting: "ftl_relay"))
+    /// proof — so it remains the backstop that closes the oldest live job.
+    @Test func thePollPathClosesTheOldestLiveJob() async throws {
+        let older = printOp("op-old", wanting: "ftl_relay", status: .active, startedAt: start)
+        let younger = printOp("op-new", wanting: "ftl_relay", status: .enqueued, startedAt: start.addingTimeInterval(60))
+        let database = try await seed([younger, older])
 
         let closed = await withDependencies {
             $0.defaultDatabase = database
             $0.date = .constant(start.addingTimeInterval(3_000))
         } operation: {
-            await Reconciler().completeOpenOperation(
-                on: bench, source: .poll, eventTime: nil, result: nil
-            )
+            await Reconciler().completeOpenOperation(on: bench, source: .poll, eventTime: nil, result: nil)
         }
 
         #expect(closed)
-        #expect(try await stored(database)?.status == OperationStatus.completed)
+        #expect(try await status(database, "op-old") == .completed)
+        #expect(try await status(database, "op-new") == .enqueued)
     }
 }

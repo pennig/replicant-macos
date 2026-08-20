@@ -199,4 +199,92 @@ private typealias Operation = GameModels.Operation
         let device = try await row(database)
         #expect(device?.updatedAt == now, "stamped with the client clock, not eventTime")
     }
+
+    private func printOp(
+        _ id: String, entityCode: String, status: OperationStatus, startedAt: Date, completesAt: Date?
+    ) -> Operation {
+        Operation(
+            id: id, entityCode: entityCode, kind: OperationKind.print.rawValue,
+            status: status, source: OperationSource.poll,
+            startedAt: startedAt, completesAt: completesAt,
+            lastConfirmedAt: startedAt, detail: .object([:])
+        )
+    }
+
+    private func status(_ database: any DatabaseWriter, _ id: String) async throws -> OperationStatus? {
+        try await database.read { db in try Operation.where { $0.id.eq(id) }.fetchOne(db) }?.status
+    }
+
+    /// A bench running three print jobs closes the oldest — not whichever row
+    /// an unordered fetch happened to surface. Inserted out of the answer's
+    /// order (C, A, B), so an unordered pick could not pass by luck.
+    @Test func printCompletionClosesTheOldestLiveJob() async throws {
+        let database = try GameDatabase.bootstrap()
+        let t0 = Date(timeIntervalSince1970: 1_782_000_000)
+        let opA = printOp("OP-A", entityCode: "B1", status: .active, startedAt: t0.addingTimeInterval(-120), completesAt: t0.addingTimeInterval(60))
+        let opB = printOp("OP-B", entityCode: "B1", status: .enqueued, startedAt: t0.addingTimeInterval(-60), completesAt: nil)
+        let opC = printOp("OP-C", entityCode: "B1", status: .enqueued, startedAt: t0.addingTimeInterval(-30), completesAt: nil)
+        try await database.write { db in
+            try Operation.insert { opC }.execute(db)
+            try Operation.insert { opA }.execute(db)
+            try Operation.insert { opB }.execute(db)
+        }
+
+        let event = GameEventEnvelope(
+            id: "1-0", category: "print", event: "print.completed",
+            deviceCode: "B1", payload: ["new_device_code": .string("N1")],
+            createdAt: t0.ISO8601Format()
+        )
+
+        let closed = await withDependencies { $0.defaultDatabase = database } operation: {
+            await Reconciler().applyDeviceEvent(
+                deviceCode: "B1", event: event, location: nil, stow: nil, eventTime: t0
+            )
+        }
+
+        #expect(closed)
+        #expect(try await status(database, "OP-A") == .completed)
+        #expect(try await status(database, "OP-B") == .enqueued)
+        #expect(try await status(database, "OP-C") == .enqueued)
+    }
+
+    /// A bench running an active job plus an enqueued sibling (inserted
+    /// first, defeating an unordered pick) must not promote the sibling when
+    /// a poll repeats the running job's own activity — a second active row throws.
+    @Test func pollDoesNotPromoteTheEnqueuedSiblingOverTheRunningJob() async throws {
+        let database = try GameDatabase.bootstrap()
+        let t0 = Date(timeIntervalSince1970: 1_782_000_000)
+        let activeStart = t0.addingTimeInterval(-120)
+        let activeCompletesAt = activeStart.addingTimeInterval(600)
+        let opActive = printOp("OP-ACTIVE", entityCode: "B1", status: .active, startedAt: activeStart, completesAt: activeCompletesAt)
+        let opEnqueued = printOp("OP-ENQUEUED", entityCode: "B1", status: .enqueued, startedAt: t0.addingTimeInterval(-60), completesAt: nil)
+        try await database.write { db in
+            try Operation.insert { opEnqueued }.execute(db)
+            try Operation.insert { opActive }.execute(db)
+        }
+
+        let device = Device(
+            deviceCode: "B1", deviceType: "heaven_vessel", replicantCode: "R1", status: "printing",
+            location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [], tags: [],
+            detail: .object([
+                "printing": .object([
+                    "started_at": .string(activeStart.ISO8601Format()),
+                    "completes_at": .string(activeCompletesAt.ISO8601Format()),
+                ])
+            ]),
+            updatedAt: activeStart, firstSeenAt: activeStart
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(device)
+        }
+
+        #expect(try await status(database, "OP-ACTIVE") == .active)
+        #expect(try await status(database, "OP-ENQUEUED") == .enqueued)
+    }
 }

@@ -511,6 +511,50 @@ private func budgetGameClient(remaining: Int) -> GameClient {
         #expect(stored?.source == OperationSource.poll)
     }
 
+    /// The sweep closes ITSELF — not an older, unrelated live sibling on the
+    /// same device (inserted first) that a bare oldest-first fallback would
+    /// otherwise pick.
+    @Test func continuousOpClosesItselfNotAnOlderSibling() async throws {
+        let database = try GameDatabase.bootstrap()
+        let olderSibling = Operation(
+            id: "op-enq", entityCode: "D", kind: OperationKind.print.rawValue,
+            status: OperationStatus.enqueued, source: OperationSource.poll,
+            startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+            lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+        )
+        let activeMine = Operation(
+            id: "m1", entityCode: "D", kind: OperationKind.mine.rawValue,
+            status: OperationStatus.active, source: OperationSource.poll,
+            startedAt: Date(timeIntervalSince1970: 1_000), completesAt: nil,
+            lastConfirmedAt: Date(timeIntervalSince1970: 1_000), detail: .object([:])
+        )
+        try await database.write { db in
+            try Operation.insert { olderSibling }.execute(db)
+            try Operation.insert { activeMine }.execute(db)
+        }
+        let now = Date(timeIntervalSince1970: 5_000)
+        let reconciler = Reconciler()
+        let coordinator = PollCoordinator(reconciler: reconciler)
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.gameClient = budgetGameClient(remaining: 100)
+            $0.devicesClient.read = { code in device(code, status: "idle") }
+            $0.deviceRefresher = DeviceRefreshClient { code, priority in
+                await coordinator.refresh(code, priority: priority)
+            }
+        } operation: {
+            let scheduler = DeadlineScheduler(reconciler: reconciler)
+            await scheduler.sweepContinuousOps(now: now)
+        }
+
+        let ops = try await database.read { db in try Operation.where { $0.entityCode.eq("D") }.fetchAll(db) }
+        let byId = Dictionary(uniqueKeysWithValues: ops.map { ($0.id, $0.status) })
+        #expect(byId["m1"] == OperationStatus.completed)
+        #expect(byId["op-enq"] == OperationStatus.enqueued)
+    }
+
     /// The sweep must NOT complete a mine that's still running — a legitimately
     /// long mine stays open (only a settled device ends it).
     @Test func continuousOpOnStillMiningDeviceStaysOpen() async throws {
@@ -537,6 +581,43 @@ private func budgetGameClient(remaining: Int) -> GameClient {
 
         let stored = try await database.read { db in try Operation.where { $0.id.eq("m1") }.fetchOne(db) }
         #expect(stored?.status == OperationStatus.active)
+    }
+
+    /// A due op closes ITSELF, by id — not the oldest live op, which here is
+    /// the OLDER enqueued sibling (inserted first, defeating an unordered
+    /// pick): a bare oldest-first fallback would pick the wrong one.
+    @Test func deadlineClosesItsOwnOperation() async throws {
+        let database = try GameDatabase.bootstrap()
+        let deadline = Date(timeIntervalSince1970: 1_000)
+        let opB: Operation = {
+            var op = activeOp("OP-B", device: "B1", completesAt: nil, startedAt: deadline.addingTimeInterval(-120))
+            op.status = .enqueued
+            return op
+        }()
+        let opA = activeOp("OP-A", device: "B1", completesAt: deadline, startedAt: deadline.addingTimeInterval(-60))
+        try await database.write { db in
+            try Operation.insert { opB }.execute(db)
+            try Operation.insert { opA }.execute(db)
+            try Device.upsert { device("B1", status: "idle") }.execute(db)
+        }
+
+        let now = deadline.addingTimeInterval(1)
+        let reconciler = Reconciler()
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            // Bypasses the shared coordinator's own ingest-driven close; the
+            // seeded row above is the settled read `processDue` itself consults.
+            $0.deviceRefresher = DeviceRefreshClient { _, _ in nil }
+        } operation: {
+            let scheduler = DeadlineScheduler(reconciler: reconciler)
+            await scheduler.processDue(now: now)
+        }
+
+        let ops = try await database.read { db in try Operation.where { $0.entityCode.eq("B1") }.fetchAll(db) }
+        let byId = Dictionary(uniqueKeysWithValues: ops.map { ($0.id, $0.status) })
+        #expect(byId["OP-A"] == OperationStatus.completed)
+        #expect(byId["OP-B"] == OperationStatus.enqueued)
     }
 
     /// If a stream event already completed the op, the deadline does nothing —
