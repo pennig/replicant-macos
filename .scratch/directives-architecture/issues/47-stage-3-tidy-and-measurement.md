@@ -94,4 +94,4 @@ Net: **3 of 5 policy rows are fully unified to one answer** (bench capability, b
 
 Every `runEnded` present, zero crashed (started-but-unterminated) tests on `DirectiveEngineTests`, confirmed by diffing `testStarted` against `testEnded ∪ testSkipped`. Re-run in full a second time after the last content edits (Reconciler's dated-history removal, the `CommandDedupTests` doc-budget trim) — identical counts both times.
 
-**Status: resolved.** Commit sha: (recorded in the follow-up commit that fills this line in, per this repo's own pattern of a trailing docs commit — see `c842fc2` for tickets 34-40).
+**Status: resolved.** Commit: `50c0561` — `chore(directives): Stage 3 tidy-up — doc comments, orphans, the measurement`.
