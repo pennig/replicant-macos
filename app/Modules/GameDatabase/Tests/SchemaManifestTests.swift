@@ -73,6 +73,7 @@ import Testing
         "Add 'freighterCodes' to 'directives'",
         "Add index on 'haulYields.collectedAt'",
         "Add 'directive_log_by_directive_kind' index",
+        "Relax 'operations' open index to active only",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

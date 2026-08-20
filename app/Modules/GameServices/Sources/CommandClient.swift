@@ -245,20 +245,21 @@ extension CommandClient: DependencyKey {
                     let confirmedAt = date.now
 
                     try? await database.write { db in
-                        // Supersede any *other* open op on this device first (so
-                        // the open-uniqueness index has room), then confirm this
-                        // one. Whole-row upserts keep the typed JSON/optional
-                        // columns straightforward.
-                        let openOps = try Operation
-                            .where {
-                                $0.entityCode.eq(deviceCode)
-                                    && $0.status.in(OperationStatus.liveCases)
+                        // A device travels to one place and mines one body, so a
+                        // new command replaces whatever it was doing. Prints
+                        // queue behind the bench's other jobs instead.
+                        if kind != .print {
+                            let openOps = try Operation
+                                .where {
+                                    $0.entityCode.eq(deviceCode)
+                                        && $0.status.in(OperationStatus.liveCases)
+                                }
+                                .fetchAll(db)
+                            for var other in openOps where other.id != opID {
+                                other.status = .superseded
+                                other.lastConfirmedAt = confirmedAt
+                                try Operation.upsert { other }.execute(db)
                             }
-                            .fetchAll(db)
-                        for var other in openOps where other.id != opID {
-                            other.status = .superseded
-                            other.lastConfirmedAt = confirmedAt
-                            try Operation.upsert { other }.execute(db)
                         }
 
                         if var op = try Operation.where({ $0.id.eq(opID) }).fetchOne(db) {

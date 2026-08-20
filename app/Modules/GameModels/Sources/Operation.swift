@@ -296,6 +296,19 @@ extension Operation {
         try #sql(#"ALTER TABLE "operations" ADD COLUMN "paramsDigest" TEXT"#).execute(db)
         try #sql(#"CREATE INDEX "operation_by_directive" ON "operations" ("directiveID", "startedAt")"#).execute(db)
     }
+
+    /// One ACTIVE operation per device; enqueued prints queue behind it.
+    public static let relaxOpenIndex = SchemaMigration("Relax 'operations' open index to active only") { db in
+        try #sql(#"DROP INDEX IF EXISTS "operation_one_open_per_device""#).execute(db)
+        try #sql(
+            """
+            CREATE UNIQUE INDEX "operation_one_active_per_device"
+              ON "operations" ("entityCode")
+              WHERE "status" = 'active'
+            """
+        )
+        .execute(db)
+    }
 }
 
 extension Operation {

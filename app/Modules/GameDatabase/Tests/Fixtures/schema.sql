@@ -21,9 +21,9 @@ CREATE INDEX "haul_yields_by_controller"
 
 CREATE INDEX "operation_by_directive" ON "operations" ("directiveID", "startedAt");
 
-CREATE UNIQUE INDEX "operation_one_open_per_device"
+CREATE UNIQUE INDEX "operation_one_active_per_device"
   ON "operations" ("entityCode")
-  WHERE "status" IN ('enqueued', 'active');
+  WHERE "status" = 'active';
 
 CREATE TABLE "blueprints" (
   "deviceType" TEXT PRIMARY KEY NOT NULL,

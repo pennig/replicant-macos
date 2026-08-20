@@ -48,4 +48,42 @@ import UniverseModels
             _ = try EventLog.all.fetchAll(db)
         }
     }
+
+    /// The relaxed `operation_one_active_per_device` index only restricts
+    /// `active`; two `enqueued` rows on one device — a bench with a queue — are
+    /// both allowed to persist.
+    @Test func twoEnqueuedPrintsOnOneDeviceBothPersist() throws {
+        let database = try GameDatabase.bootstrap()
+        try database.write { db in
+            try GameModels.Operation.insert { testOperation("O1", device: "B1", status: .enqueued) }.execute(db)
+            try GameModels.Operation.insert { testOperation("O2", device: "B1", status: .enqueued) }.execute(db)
+        }
+        let count = try database.read {
+            try GameModels.Operation.where { $0.entityCode.eq("B1") }.fetchCount($0)
+        }
+        #expect(count == 2)
+    }
+
+    /// A second `active` row on the same device still violates the relaxed
+    /// index — the invariant it retains after Phase B.
+    @Test func twoActiveOpsOnOneDeviceAreRejected() throws {
+        let database = try GameDatabase.bootstrap()
+        try database.write { db in
+            try GameModels.Operation.insert { testOperation("O1", device: "B1", status: .active) }.execute(db)
+        }
+        #expect(throws: (any Error).self) {
+            try database.write { db in
+                try GameModels.Operation.insert { testOperation("O2", device: "B1", status: .active) }.execute(db)
+            }
+        }
+    }
+}
+
+private func testOperation(_ id: String, device: String, status: OperationStatus) -> GameModels.Operation {
+    GameModels.Operation(
+        id: id, entityCode: device, kind: OperationKind.print.rawValue,
+        status: status, source: OperationSource.poll,
+        startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+        lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+    )
 }

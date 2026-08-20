@@ -217,6 +217,33 @@ private typealias Operation = GameModels.Operation
         #expect(openCount == 1)   // exactly one open op survives (the new travel)
     }
 
+    /// A second print on a bench queues behind the first. Travel still
+    /// supersedes, because a device travels to one place at a time.
+    @Test func secondPrintDoesNotSupersedeTheFirst() async throws {
+        let database = try GameDatabase.bootstrap()
+        let body = #"{"status":"printing"}"#
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, body) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "printing") }
+        } operation: {
+            _ = await CommandClient.liveValue.dispatch(.print, "B1", CommandParams(deviceType: "mining_drone"))
+            _ = await CommandClient.liveValue.dispatch(.print, "B1", CommandParams(deviceType: "ftl_relay"))
+        }
+
+        let live = try await database.read { db in
+            try Operation.where { $0.entityCode.eq("B1") && $0.status.in(OperationStatus.liveCases) }
+                .fetchAll(db)
+        }
+
+        #expect(live.count == 2)
+        #expect(live.filter { $0.status == .active }.count <= 1)
+    }
+
     /// Mining is continuous — its 200 carries no deadline, so the op confirms
     /// active with a nil `completesAt` (it runs until stopped, not toward an ETA).
     @Test func mineConfirmsActiveWithoutDeadline() async throws {
