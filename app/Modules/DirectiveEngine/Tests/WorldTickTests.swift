@@ -4,8 +4,8 @@
 //
 //  The point of the whole task: one transaction per tick, however many
 //  directives are running — and the per-directive `WorldSnapshot` composed
-//  back out of it. `ReadCounter` proves the transaction count, not the log.
-//  The tick LOOP that drives every executor from that read is here too.
+//  back out of it. `ReadCounter` proves the transaction count AND the
+//  per-table statement count; the tick LOOP is here too.
 //
 
 import API
@@ -23,12 +23,13 @@ import Testing
 import UniverseModels
 @testable import DirectiveEngine
 
-/// Counts transactions actually opened, shared across every reader
-/// `wrapping(_:)` produces — a fresh count per call would hide a second
-/// transaction opened through a second wrapped instance.
+/// Counts transactions AND individual SQL statements (via GRDB's `db.trace`)
+/// across every reader `wrapping(_:)` produces, so a hoisted per-directive
+/// whole-table read is visible even though it opens no NEW transaction.
 final class ReadCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
+    private var statementSQL: [String] = []
 
     var reads: Int {
         lock.lock()
@@ -36,9 +37,24 @@ final class ReadCounter: @unchecked Sendable {
         return count
     }
 
+    /// How many traced statements' unexpanded SQL contains `marker` — e.g.
+    /// `FROM "devices"` to isolate one whole-table read from the rest of a
+    /// tick's statements.
+    func statements(matching marker: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return statementSQL.filter { $0.contains(marker) }.count
+    }
+
     fileprivate func increment() {
         lock.lock()
         count += 1
+        lock.unlock()
+    }
+
+    fileprivate func recordStatement(_ sql: String) {
+        lock.lock()
+        statementSQL.append(sql)
         lock.unlock()
     }
 
@@ -49,6 +65,19 @@ final class ReadCounter: @unchecked Sendable {
     func wrapping(_ base: any DatabaseWriter) -> any DatabaseWriter {
         CountingWriter(base: base, counter: self)
     }
+}
+
+/// Installs `counter`'s statement trace on `db` for the duration of `value`,
+/// then removes it — shared by `CountingReader` and `CountingWriter`'s
+/// identical `read<T: Sendable>` bodies.
+private func tracedRead<T>(
+    _ db: Database, counter: ReadCounter, _ value: (Database) throws -> T
+) throws -> T {
+    db.trace(options: .statement) { event in
+        if case .statement(let statement) = event { counter.recordStatement(statement.sql) }
+    }
+    defer { db.trace(options: []) }
+    return try value(db)
 }
 
 /// Forwards every `DatabaseReader` requirement to `base` uncounted except the
@@ -75,7 +104,7 @@ private final class CountingReader: DatabaseReader, @unchecked Sendable {
 
     func read<T: Sendable>(_ value: @Sendable (Database) throws -> T) async throws -> T {
         counter.increment()
-        return try await base.read(value)
+        return try await base.read { db in try tracedRead(db, counter: counter, value) }
     }
 
     func asyncRead(_ value: @escaping @Sendable (Result<Database, Error>) -> Void) {
@@ -131,7 +160,7 @@ private final class CountingWriter: DatabaseWriter, @unchecked Sendable {
 
     func read<T: Sendable>(_ value: @Sendable (Database) throws -> T) async throws -> T {
         counter.increment()
-        return try await base.read(value)
+        return try await base.read { db in try tracedRead(db, counter: counter, value) }
     }
 
     func asyncRead(_ value: @escaping @Sendable (Result<Database, Error>) -> Void) {
@@ -204,9 +233,9 @@ private final class CountingWriter: DatabaseWriter, @unchecked Sendable {
 }
 
 @Suite struct WorldTickReads {
-    /// The whole point: one transaction, however many directives are
-    /// running. Counting reads is what makes the 22x-per-tick regression
-    /// impossible to reintroduce without a red test.
+    /// One transaction, however many directives are running — but a
+    /// per-directive whole-table refetch INSIDE that one transaction would
+    /// pass this unchanged; see `aWholeTableReadIsNotRepeatedPerDirective`.
     @Test func opensExactlyOneReadTransaction() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
@@ -243,6 +272,50 @@ private final class CountingWriter: DatabaseWriter, @unchecked Sendable {
         )
         #expect(tick.running.map(\.id) == ["D1"])
         #expect(counter.reads == 1)
+    }
+
+    /// The gap `opensExactlyOneReadTransaction` cannot see: `Device.all.fetchAll`
+    /// must run once per tick, not once per directive, though both shapes open
+    /// the same transaction. Excludes `DirectiveSlice`'s per-directive log query.
+    @Test func aWholeTableReadIsNotRepeatedPerDirective() async throws {
+        let small = try await statementCounts(directives: 2, markers: [Self.devicesMarker])
+        let large = try await statementCounts(directives: 8, markers: [Self.devicesMarker])
+        #expect(small[Self.devicesMarker] == 1, "the devices table is read exactly once per tick")
+        #expect(large[Self.devicesMarker] == 1, "…and stays that way as the roster grows")
+    }
+
+    private static let devicesMarker = "FROM \"devices\""
+
+    /// Widened to every OTHER whole-table field `WorldCore.read`/`WorldView.read`
+    /// fetch — `locationFootprints` (28k rows) and `stars` matter most hoisted.
+    /// Some legitimately read twice per tick; the property is constancy, not `==1`.
+    @Test func noOtherWorldCoreTableReadScalesWithTheRoster() async throws {
+        let markers = [
+            "FROM \"locationFootprints\"", "FROM \"locationEvents\"", "FROM \"stars\"",
+            "FROM \"blueprints\"", "FROM \"theatrePins\"", "FROM \"theatres\"",
+            "FROM \"replicants\"", "FROM \"operations\"", "FROM \"directives\"",
+        ]
+        let small = try await statementCounts(directives: 2, markers: markers)
+        let large = try await statementCounts(directives: 8, markers: markers)
+        for marker in markers {
+            #expect(small[marker] == large[marker], "\(marker) must not scale with the roster")
+        }
+    }
+
+    private func statementCounts(directives: Int, markers: [String]) async throws -> [String: Int] {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            for i in 1...directives {
+                try Directive.insert {
+                    directiveFixture(id: "D\(i)", deviceCode: "V\(i)", targets: ["SOL"])
+                }.execute(db)
+            }
+        }
+        let counter = ReadCounter()
+        _ = try await WorldTick.read(
+            from: counter.wrapping(database), now: Date(timeIntervalSince1970: 100), generation: 1
+        )
+        return Dictionary(uniqueKeysWithValues: markers.map { ($0, counter.statements(matching: $0)) })
     }
 }
 
