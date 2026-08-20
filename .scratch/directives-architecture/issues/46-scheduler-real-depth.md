@@ -49,3 +49,46 @@ widening `onOrder` (and `benches`' owner/active-job derivation) onto
 fixtures (`benches`/`onOrder` fall back to a one-op reading off `openOperations`
 so those fixtures keep behaving as before); production always populates it, so
 the widened read is live everywhere that matters.
+
+
+---
+
+## Comments
+
+| Commit | Message |
+|---|---|
+| `ba124b1` | `feat(directives): the scheduler queues behind a busy bench` |
+| `a7f56b9` | `fix(directives): read unreported queue size conservatively, retire 21 stale busy-bench assertions` |
+
+**`queueSize <= 0` reads as ONE slot (the platen only), never as unbounded.**
+Settled against the live database: 8 of 13 print-capable production devices
+report `queueSize: 0` — vessels and fabricators, not real depot autofactories,
+which report `10`. Reading zero as unbounded would let the scheduler pile
+queued work onto a vessel, reintroducing the over-print failure this stage
+exists to prevent. Pinned by two single-bench tests
+(`unreportedQueueSizeStillAdmitsIdle`, `unreportedQueueSizeCapsAtOne`) and two
+mutation probes.
+
+**The 21 pre-existing tests asserting the old "any occupied bench excludes"
+semantic were classified one at a time, not made green in bulk** — 11
+genuinely asserted the removed semantic and are rewritten with the fixture's
+`queueSize` made realistic and the assertion updated to the new dispatch/refresh
+value; 6 were already correct for an unrelated reason (single-slot deadline
+tests, or demand already netted to zero by `onOrder`) and needed no change;
+4 are still-valid multi-bench at-capacity scenarios reframed with an explicit
+`queueSize: 1` rather than an accident of the unset default
+(`RestockRunTests.allBusyWaits`, `EventCourierPrintTests.allBusyWaits`,
+`MineFleetPrintTests.allBusyWaits`, `MineFleetPrintSubstituteTests.allHubsQueuedYieldsNoBench`).
+One, `RelayRunAcquireSchedulerTests.acquireDoesNotOrderTwice`, had a real
+fixture gap — `PrintJob.stillPrinting` checks `ctx.ownedOperation(for:
+ctx.directive.deviceCode)`, the CARRIER's code, while the fixture populated
+the op on the BENCH's code, so the owner-scoped guard the test's own doc
+claimed to pin was never reached. Fixed the fixture (`dispatched:` now
+populated), not the assertion. Full per-test table:
+`.superpowers/sdd/plan-stage-3/task-14-report.md`.
+
+**The classification table was audited twice.** The first pass had two
+misattributions — one row's rewrite was double-listed as also "unchanged,"
+and one at-capacity reframe was missing from every category — both caught in
+review and corrected by re-checking every row against `git diff` directly
+rather than from memory.

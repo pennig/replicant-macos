@@ -261,9 +261,8 @@ struct PrintSchedulerQueueingTests {
     }
 
     /// `Device.init`'s `schema.queueSize ?? 0` makes zero the server's own
-    /// "never reported" sentinel. Read conservatively — one slot, the platen
-    /// only — never as unbounded: most zero-reporting print-capable devices
-    /// in the live fleet are vessels and fabricators, not real depots.
+    /// "never reported" sentinel — read as one slot, never unbounded, since
+    /// most zero-reporting print-capable devices are vessels, not depots.
     @Test("an unreported queue size still admits an idle bench")
     func unreportedQueueSizeStillAdmitsIdle() {
         let world = snapshot([bench("B1", capacity: 0)])

@@ -632,9 +632,8 @@ struct RestockRunTests {
     }
 
     /// Every bench busy is the system working, not a fault — two hubs, each
-    /// already AT capacity on another run's print, hold in `printing` rather
-    /// than being treated as unreachable. `queueSize: 1` makes the capacity
-    /// explicit rather than an accident of an unset default.
+    /// already AT capacity (`queueSize: 1`, explicit rather than an accident
+    /// of the unset default) on another run's print, hold in `printing`.
     @Test("an all-busy depot holds, it does not stall")
     func allBusyWaits() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])

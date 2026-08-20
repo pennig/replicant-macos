@@ -215,9 +215,8 @@ struct EventCourierPrintTests {
     }
 
     /// Every bench busy is the system working, not a fault — two printers,
-    /// each already AT capacity on another directive's job, must wait.
-    /// `queueSize: 1` makes the capacity explicit rather than an accident of
-    /// an unset default.
+    /// each already AT capacity (`queueSize: 1`, explicit rather than an
+    /// accident of the unset default) on another directive's job, must wait.
     @Test("an all-busy depot waits, it does not stall")
     func allBusyWaits() {
         let openOperations: [String: GameModels.Operation] = [
