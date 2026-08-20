@@ -153,16 +153,28 @@ public struct Reconciler: Sendable {
                     // for the adopted active op in the same transaction.
                     try Operation.upsert { stale }.execute(db)
                 }
+                let startedAt = activity.startedAt ?? device.updatedAt
+                // A batched print's later jobs are adopted, not promoted — the
+                // one op the dispatch owned closed with job 1.
+                let owner = activity.kind == .print
+                    ? Self.batchOwner(
+                        printing: device.printingSnapshot?.deviceType,
+                        startedAt: startedAt,
+                        among: try Self.printOps(on: device.deviceCode, in: db)
+                    )
+                    : nil
                 let adopted = Operation(
                     id: uuid().uuidString,
                     entityCode: device.deviceCode,
                     kind: activity.kind.rawValue,
                     status: .active,
                     source: OperationSource.poll,
-                    startedAt: activity.startedAt ?? device.updatedAt,
+                    startedAt: startedAt,
                     completesAt: activity.completesAt,
                     lastConfirmedAt: device.updatedAt,
-                    detail: .object([:])
+                    detail: .object([:]),
+                    directiveID: owner?.directiveID,
+                    step: owner?.step
                 )
                 try Operation.insert { adopted }.execute(db)
                 if let staleActiveOp {
@@ -442,6 +454,37 @@ public struct Reconciler: Sendable {
         }
         .order { ($0.startedAt, $0.id) }
         .fetchAll(db)
+    }
+
+    /// The bench's print ops whatever their status, oldest first — `batchOwner`
+    /// reads closed ones, which `liveOps` excludes.
+    private static func printOps(on deviceCode: String, in db: Database) throws -> [GameModels.Operation] {
+        try Operation.where {
+            $0.entityCode.eq(deviceCode) && $0.kind.eq(OperationKind.print.rawValue)
+        }
+        .order { ($0.startedAt, $0.id) }
+        .fetchAll(db)
+    }
+
+    /// The run an adopted print inherits: one `enqueue_print` with `quantity: N`
+    /// records a single owned op, so jobs 2…N reach the platen with it closed.
+    /// Nil once the batch has as many jobs on the bench as it asked for units.
+    static func batchOwner(
+        printing deviceType: String?,
+        startedAt: Date,
+        among ops: [GameModels.Operation]
+    ) -> (directiveID: String, step: String?)? {
+        let batch = ops.last {
+            $0.directiveID != nil
+                && ($0.printedQuantity ?? 1) > 1
+                && $0.printedDeviceType == deviceType
+                && $0.startedAt <= startedAt
+        }
+        guard let batch, let directiveID = batch.directiveID else { return nil }
+        // Every job after the first is an untyped adopted row, so counting those
+        // since the batch started says how far through its units the bench is.
+        let ran = 1 + ops.count { $0.startedAt >= batch.startedAt && $0.printedDeviceType == nil }
+        return ran < (batch.printedQuantity ?? 1) ? (directiveID, batch.step) : nil
     }
 
     /// Which live op a completion closes: the one whose `params.device_type`

@@ -12,14 +12,23 @@
 import SwiftUI
 
 public struct OperationProgressView: View {
+    /// How much of the readout to draw. `.compact` is the bar alone, at list-row
+    /// scale; `.standard` stacks the ETA caption beneath it.
+    public enum Style: Sendable {
+        case standard
+        case compact
+    }
+
     private let startedAt: Date
     private let completesAt: Date
     private let tint: Color
+    private let style: Style
 
-    public init(startedAt: Date, completesAt: Date, tint: Color = .rcAccent) {
+    public init(startedAt: Date, completesAt: Date, tint: Color = .rcAccent, style: Style = .standard) {
         self.startedAt = startedAt
         self.completesAt = completesAt
         self.tint = tint
+        self.style = style
     }
 
     /// Once the bar reaches the finish line it stays there. The backstop poller
@@ -33,12 +42,20 @@ public struct OperationProgressView: View {
     public var body: some View {
         TimelineView(.periodic(from: startedAt, by: 1)) { context in
             let pending = reachedEnd || context.date >= completesAt
-            VStack(alignment: .leading, spacing: Space.xs) {
-                ProgressView(value: pending ? 1 : ProgressMath.fraction(now: context.date, start: startedAt, end: completesAt))
-                    .tint(tint)
-                Text(pending ? "Arriving…" : ProgressMath.etaText(now: context.date, end: completesAt))
-                    .font(.rcMonoSmall)
-                    .foregroundStyle(.rcTextSecondary)
+            let bar = ProgressView(value: pending ? 1 : ProgressMath.fraction(now: context.date, start: startedAt, end: completesAt))
+                .tint(tint)
+            Group {
+                switch style {
+                case .standard:
+                    VStack(alignment: .leading, spacing: Space.xs) {
+                        bar
+                        Text(pending ? "Arriving…" : ProgressMath.etaText(now: context.date, end: completesAt))
+                            .font(.rcMonoSmall)
+                            .foregroundStyle(.rcTextSecondary)
+                    }
+                case .compact:
+                    bar.controlSize(.small)
+                }
             }
             .onChange(of: pending, initial: true) { _, isPending in
                 if isPending { reachedEnd = true }
