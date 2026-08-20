@@ -17,9 +17,12 @@ import UniverseModels
 @Suite struct WorldCoreEquivalence {
     /// The extraction is a refactor: a core read inside the same transaction
     /// must produce exactly the fields the composed snapshot exposes. This is
-    /// the test that makes Tasks 4-8 safe to attempt.
+    /// the test that makes Tasks 4-8 safe to attempt. One row per table (two
+    /// for the relay + star `components` needs), so every comparison is a
+    /// real check rather than empty-to-empty.
     @Test func matchesTheSnapshotItComposes() async throws {
         let database = try GameDatabase.bootstrap()
+        let directive = directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
         try await database.write { db in
             try Device.insert {
                 Device(
@@ -40,12 +43,35 @@ import UniverseModels
                     fetchedAt: Date(timeIntervalSince1970: 0)
                 )
             }.execute(db)
+            try Directive.insert { directive }.execute(db)
+            try GameModels.Operation.insert {
+                GameModels.Operation(
+                    id: "OP1", entityCode: "V1", kind: OperationKind.travel.rawValue,
+                    status: .active, source: .optimistic,
+                    startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+                    lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+                )
+            }.execute(db)
+            try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
+            try seedRelay(db, code: "REL1", location: "SOL-3")
+            try TheatrePin.insert {
+                TheatrePin(location: "SOL-3", createdAt: Date(timeIntervalSince1970: 0))
+            }.execute(db)
+            try Blueprint.insert {
+                Blueprint(
+                    deviceType: "transport_hauler", shortDescription: "", fullDescription: "",
+                    printTime: 600, features: [], directives: [],
+                    resources: ResourceCost(structural: 200), stowCapacity: 0, cargoCapacity: 0,
+                    attachCapacity: 0, queueSize: 0, strength: 1, currentHubs: nil
+                )
+            }.execute(db)
+            try seedLocationEvent(db, designation: "EVT1", location: "SOL-3")
+            try seedReplicant(db, code: "REP1", star: "SOL", hostedDeviceCode: "V1")
         }
 
         let core = try await database.read { db in try WorldCore.read(from: db) }
         let world = try await WorldSnapshot.read(
-            from: database, now: Date(timeIntervalSince1970: 100),
-            directive: directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
+            from: database, now: Date(timeIntervalSince1970: 100), directive: directive
         )
 
         #expect(core.devices == world.devices)
@@ -54,12 +80,15 @@ import UniverseModels
         #expect(core.queuedOperations == world.queuedOperations)
         #expect(core.starPositions == world.starPositions)
         #expect(core.components == world.components)
+        #expect(!core.components.isEmpty)
         #expect(core.blueprintBills == world.blueprintBills)
         #expect(core.blueprintComponents == world.blueprintComponents)
         #expect(core.blueprintPrintTimes == world.blueprintPrintTimes)
         #expect(core.theatres == world.theatres)
+        #expect(!core.theatres.isEmpty)
         #expect(core.locationEvents == world.locationEvents)
         #expect(core.replicantHostDevices == world.replicantHostDevices)
         #expect(core.peers == world.peers)
+        #expect(!core.peers.isEmpty)
     }
 }

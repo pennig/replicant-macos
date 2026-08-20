@@ -13,6 +13,16 @@ import GameModels
 import SQLiteData
 import UniverseModels
 
+/// `(startedAt, id)` tie-broken — shared by `WorldCore.init` and
+/// `WorldSnapshot.init` so the rule lives in exactly one place.
+func queuedOperationsSorted(
+    _ operations: [String: [GameModels.Operation]]
+) -> [String: [GameModels.Operation]] {
+    operations.mapValues {
+        $0.sorted { $0.startedAt == $1.startedAt ? $0.id < $1.id : $0.startedAt < $1.startedAt }
+    }
+}
+
 /// The directive-independent half of `WorldSnapshot` — every field a step
 /// machine would otherwise re-fetch once per directive, read here once.
 public struct WorldCore: Equatable, Sendable {
@@ -47,9 +57,7 @@ public struct WorldCore: Equatable, Sendable {
     ) {
         self.devices = devices
         self.openOperations = openOperations
-        self.queuedOperations = queuedOperations.mapValues {
-            $0.sorted { $0.startedAt == $1.startedAt ? $0.id < $1.id : $0.startedAt < $1.startedAt }
-        }
+        self.queuedOperations = queuedOperationsSorted(queuedOperations)
         self.footprints = footprints
         self.starPositions = starPositions
         self.components = components

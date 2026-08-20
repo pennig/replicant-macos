@@ -158,9 +158,7 @@ public struct WorldSnapshot: Equatable, Sendable {
     ) {
         self.devices = devices
         self.openOperations = openOperations
-        self.queuedOperations = queuedOperations.mapValues {
-            $0.sorted { $0.startedAt == $1.startedAt ? $0.id < $1.id : $0.startedAt < $1.startedAt }
-        }
+        self.queuedOperations = queuedOperationsSorted(queuedOperations)
         self.log = log
         self.auditLog = auditLog
         self.dispatchedOperations = dispatchedOperations
