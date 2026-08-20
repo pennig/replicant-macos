@@ -37,9 +37,8 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Reco
 /// `device.deployed` speak to stowage, and every other device event must leave
 /// the column untouched rather than reading its own silence as "not stowed".
 /// Both events name the other end of the link — `stowed_in_device_code` and
-/// `deployed_from_device_code` respectively (docs event catalogue, checked
-/// 2026-07-26) — which is what makes settling the column from the event alone
-/// possible.
+/// `deployed_from_device_code` respectively — which is what makes settling
+/// the column from the event alone possible.
 public enum StowChange: Equatable, Sendable {
     /// `device.stowed` — the device is now aboard this carrier.
     case stowed(inDeviceCode: String)
@@ -154,8 +153,8 @@ public struct Reconciler: Sendable {
                     stale.status = .completed
                     stale.source = OperationSource.poll
                     stale.lastConfirmedAt = device.updatedAt
-                    // Complete first so the open-uniqueness index has room for
-                    // the adopted active op in the same transaction.
+                    // Complete first so the active-uniqueness index has room
+                    // for the adopted active op in the same transaction.
                     try Operation.upsert { stale }.execute(db)
                 }
                 let adopted = Operation(
@@ -465,20 +464,28 @@ public struct Reconciler: Sendable {
         // Narrow to ops this completion could plausibly belong to — a bench
         // runs a queue deeper than one op, so a mismatch is another job's event.
         var candidates = ops
-        if let allowedKinds { candidates = candidates.filter { allowedKinds.contains($0.kind) } }
+        if let allowedKinds {
+            candidates = candidates.filter { allowedKinds.contains($0.kind) }
+            guard !candidates.isEmpty else {
+                logger.notice("ignored completion on \(deviceCode, privacy: .public): no live op matches kind \(allowedKinds.sorted().joined(separator: "/"), privacy: .public) — stale/replayed event")
+                return nil
+            }
+        }
         if let eventTime {
             candidates = candidates.filter {
                 eventTime >= $0.startedAt.addingTimeInterval(-Self.eventTimeSkewTolerance)
             }
-        }
-        guard !candidates.isEmpty else {
-            logger.notice("ignored completion on \(deviceCode, privacy: .public): no live op matches this event's kind/timing — stale/replayed event")
-            return nil
+            guard !candidates.isEmpty else {
+                logger.notice("ignored completion on \(deviceCode, privacy: .public): event time \(eventTime.ISO8601Format(), privacy: .public) predates every live op's start — stale/replayed event")
+                return nil
+            }
         }
 
-        if let produced = result?["device_type"]?.stringValue,
-           let matched = candidates.first(where: { $0.printedDeviceType == produced }) {
-            return matched
+        if let produced = result?["device_type"]?.stringValue {
+            if let matched = candidates.first(where: { $0.printedDeviceType == produced }) {
+                return matched
+            }
+            logger.notice("completion on \(deviceCode, privacy: .public): produced \(produced, privacy: .public) matches no live op's params — closing the oldest as another job's event")
         }
         return candidates.first
     }

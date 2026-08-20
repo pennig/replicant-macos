@@ -2,19 +2,12 @@
 //  Operation.swift
 //  Replicould — shared dependency clients
 //
-//  A long-running server action as a first-class local row (IMPLEMENTATION_PLAN
-//  §4). One `Operation` tracks the lifecycle of a command on a device — from the
-//  instant the user fires it (optimistic) through confirmation (active/enqueued)
-//  to completion — so every screen showing the device reflects its task by
-//  observing SQLite, and the deadline scheduler (Phase 4) has rows to watch.
-//
-//  Correlation is by `entityCode` (the device code): there is at most one open
-//  operation per device, enforced by a partial unique index. The provisional
-//  `optimistic` state is deliberately excluded from that index so firing a
-//  command never conflicts with a still-running prior op — the prior op is only
-//  superseded once the new one is *confirmed* (so a 4xx rejection leaves the
-//  prior op untouched).
-//
+//  A server action as a local row: optimistic → active/enqueued → completion,
+//  observed via SQLite by every screen showing the device. Correlation is by
+//  `entityCode`; at most one ACTIVE op per device is enforced by a partial
+//  unique index, enqueued prints queue behind it, and `optimistic` sits
+//  outside it so a fired command never conflicts with a prior op it may
+//  supersede.
 
 import Foundation
 import SQLiteData
@@ -98,9 +91,9 @@ public enum OperationStatus: String, Sendable, CaseIterable, QueryBindable {
     /// construction.
     public static let openCases: [OperationStatus] = [.optimistic, .enqueued, .active]
 
-    /// The subset the partial unique index enforces as "one open per device".
-    /// Excludes `optimistic` by design, so dispatch can stage a row without
-    /// conflicting with the op it may replace.
+    /// `openCases` minus `optimistic` — a row confirmed by the server and not
+    /// yet terminal. Only `.active` is unique per device; `.enqueued` prints
+    /// may share a bench.
     public static let liveCases: [OperationStatus] = [.enqueued, .active]
 
     public var isOpen: Bool { Self.openCases.contains(self) }
@@ -257,8 +250,8 @@ public enum OperationSource: String, Sendable, QueryBindable {
 // MARK: - Schema
 
 extension Operation {
-    /// Creates the `operations` table plus the partial unique index that
-    /// enforces at most one open operation per device.
+    /// Creates the `operations` table and its original one-open-per-device
+    /// index, later relaxed by `relaxOpenIndex`.
     public static let createOperations = SchemaMigration("Create 'operations' table") { db in
         try #sql(
             """
@@ -276,9 +269,8 @@ extension Operation {
             """
         )
         .execute(db)
-        // One open operation per device. `optimistic` is intentionally not in
-        // this set, so dispatch can stage a row without conflicting with the
-        // op it may replace.
+        // The original one-open-per-device index, later relaxed by
+        // `relaxOpenIndex` to active-only.
         try #sql(
             """
             CREATE UNIQUE INDEX "operation_one_open_per_device"

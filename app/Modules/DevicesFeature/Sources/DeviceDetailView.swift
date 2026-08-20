@@ -29,7 +29,9 @@ private typealias Operation = GameModels.Operation
 
 public struct DeviceDetailView: View {
     @Bindable var store: StoreOf<DevicesFeature>
-    @FetchAll(Operation.order { $0.startedAt.desc() }) private var operations
+    // `DeviceOperations.card`/`queuedBehind` re-filter and re-sort per device,
+    // so this fetch needs no order of its own.
+    @FetchAll(Operation.all) private var operations
     @FetchAll(Replicant.all) private var replicants
     @Environment(\.scenePhase) private var scenePhase
 

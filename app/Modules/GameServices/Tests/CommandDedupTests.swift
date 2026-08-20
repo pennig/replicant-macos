@@ -169,6 +169,52 @@ struct CommandDedupTests {
         #expect(secondResult == .deferred(.duplicate), "a completed attempt must still read as a duplicate")
     }
 
+    /// Two identical prints in one step on one bench are refused, same as any
+    /// other repeat — no mission in this plan dispatches two: `MineFleetPrint`
+    /// orders `quantity: n` in one job, `RestockRun` orders against `onOrder`.
+    @Test func twoIdenticalPrintsInOneStepAreDeduplicated() async throws {
+        let database = try GameDatabase.bootstrap()
+        let owner = CommandOwner(directiveID: "D-7", step: "stocking", since: Self.t0)
+        let params = CommandParams(deviceType: "service_bot", quantity: 2, printTags: ["auto:mine"])
+        let governor = CommandGovernor()
+
+        let first = await withDependencies {
+            $0.defaultDatabase = database
+            $0.gameClient = budgetGameClient()
+            $0.commandClient.dispatchOwned = { _, _, _, _ in .accepted(operationID: "OP1") }
+        } operation: {
+            await governor.dispatch(.print, on: "B1", params: params, owner: owner)
+        }
+        #expect(first == .dispatched(.accepted(operationID: "OP1")))
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "OP1", entityCode: "B1", kind: OperationKind.print.rawValue,
+                    status: .enqueued, source: .optimistic,
+                    startedAt: Self.t0.addingTimeInterval(1), completesAt: nil,
+                    lastConfirmedAt: Self.t0.addingTimeInterval(1),
+                    detail: .object([:]), directiveID: "D-7", step: "stocking",
+                    paramsDigest: params.dedupKey
+                )
+            }.execute(db)
+        }
+
+        let second = await withDependencies {
+            $0.defaultDatabase = database
+            $0.gameClient = budgetGameClient()
+            $0.commandClient.dispatchOwned = unimplemented(
+                "commandClient.dispatchOwned", placeholder: .accepted(operationID: nil)
+            )
+        } operation: {
+            await governor.dispatch(.print, on: "B1", params: params, owner: owner)
+        }
+        #expect(second == .deferred(.duplicate))
+        let liveCount = try await database.read { db in
+            try Operation.where { $0.entityCode.eq("B1") && $0.status.in(OperationStatus.liveCases) }.fetchCount(db)
+        }
+        #expect(liveCount == 1)
+    }
+
     /// A `nil` owner (a manually-issued command) is never de-duped — the query
     /// only runs when a directive owns the dispatch.
     @Test func unownedDispatchIsNeverDeduped() async throws {

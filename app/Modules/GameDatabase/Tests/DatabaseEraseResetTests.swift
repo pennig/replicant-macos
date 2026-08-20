@@ -40,13 +40,13 @@ import UniverseModels
         // The rows are gone...
         #expect(try database.read { try Star.fetchCount($0) } == 0)
 
-        // ...and all 21 migrations replayed to the SAME schema a fresh
-        // bootstrap produces — not just "some" schema. This also pins erase-
-        // before-migrate ordering: reversed, `migrate` on an
-        // already-up-to-date database is a no-op and the following `erase()`
-        // would drop `grdb_migrations` too, leaving no schema at all (and the
-        // `fetchCount` above would have thrown "no such table" rather than
-        // returning 0).
+        // ...and every migration in `GameDatabase.manifest` replayed to the
+        // SAME schema a fresh bootstrap produces — not just "some" schema.
+        // This also pins erase-before-migrate ordering: reversed, `migrate`
+        // on an already-up-to-date database is a no-op and the following
+        // `erase()` would drop `grdb_migrations` too, leaving no schema at
+        // all (and the `fetchCount` above would have thrown "no such table"
+        // rather than returning 0).
         let actual = try SchemaDump.dump(database)
         let golden = try String(contentsOf: SchemaDump.goldenFixtureURL, encoding: .utf8)
         #expect(actual == golden)

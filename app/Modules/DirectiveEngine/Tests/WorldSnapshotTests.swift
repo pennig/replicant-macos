@@ -270,9 +270,9 @@ struct WorldSnapshotTests {
         #expect(world.queuedOperations["B1"]?.count == 1)
     }
 
-    /// A bench's live ops come back oldest first — Task 11's completion picker
-    /// and Task 14's queue-depth read both rely on this order, not insertion
-    /// order.
+    /// A bench's live ops come back oldest first, not insertion order — the
+    /// invariant a "pick the oldest matching op" completion rule and a
+    /// "position = index" queue-depth read both depend on.
     @Test func queuedOpsAreOldestFirst() {
         let older = op("OP-1", device: "B1", status: .active, startedAt: Date(timeIntervalSince1970: -120))
         let newer = op("OP-2", device: "B1", status: .active, startedAt: Date(timeIntervalSince1970: -60))

@@ -28,7 +28,7 @@ public struct WorldSnapshot: Equatable, Sendable {
     public let openOperations: [String: GameModels.Operation]
     /// Every live operation per device, oldest first — `(startedAt, id)`
     /// tie-broken, since two ops in one transaction can share a `startedAt`.
-    /// One entry per device until the print index relaxes; several after.
+    /// Several entries when a bench has jobs queued behind the active one.
     public let queuedOperations: [String: [GameModels.Operation]]
     /// This directive's newest `logWindow` timeline entries, ascending.
     /// Completion detection reads the `directive.completed` ROW here rather

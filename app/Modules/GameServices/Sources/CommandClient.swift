@@ -6,8 +6,9 @@
 //  one write path: insert an optimistic `Operation` (instant UI via @FetchAll) →
 //  POST the command → on success confirm the op (active with a deadline for
 //  self-describing actions like travel, or enqueued for ones like print),
-//  supersede any prior open op, and take one authoritative post-command device
-//  read; on a 4xx, reject the optimistic op (the prior op is left untouched).
+//  supersede any prior active op (prints queue behind it instead), and take
+//  one authoritative post-command device read; on a 4xx, reject the
+//  optimistic op (the prior op is left untouched).
 //  No auto-retry. The UI never inspects the response — it observes the tables.
 //
 //  This file is the family-agnostic spine: the dispatch lifecycle, the
@@ -205,9 +206,8 @@ extension CommandClient: DependencyKey {
             let opID = uuid().uuidString
             let started = date.now
 
-            // 1) Optimistic insert — instant UI. `optimistic` is excluded from
-            //    the open-uniqueness index, so this never conflicts with a prior
-            //    op that this command might replace.
+            // 1) Optimistic insert — instant UI. `optimistic` sits outside the
+            //    active-uniqueness index, so it never conflicts with a prior op.
             let optimistic = Operation(
                 id: opID, entityCode: deviceCode, kind: kind.rawValue,
                 status: .optimistic,

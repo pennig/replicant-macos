@@ -39,8 +39,8 @@ enum OperationRetention {
     ///
     /// * **Terminal only.** An open op is never pruned however old. An ancient
     ///   `active` row means something genuinely went wrong and is worth seeing,
-    ///   and deleting one would also punch a hole in the "one open op per
-    ///   device" partial unique index that dispatch relies on.
+    ///   and deleting one would also punch a hole in the one-active-per-device
+    ///   partial unique index that dispatch relies on.
     /// * **Older than the window**, measured from `startedAt` — the one
     ///   timestamp every op has, set once and never rewritten (`lastConfirmedAt`
     ///   moves under re-arms, so a re-armed op would never age out).

@@ -41,7 +41,7 @@ Consumer walk, one call site at a time (current line numbers; the ticket's preda
 
 | Site | Verdict |
 |---|---|
-| `Steps/PrintJob.stillPrinting` | unaffected — reads `dispatchedOperations` (`.status.isOpen`) and `ctx.ownedOperation`, never `world.openOperations` directly; already widened by an earlier ticket |
+| `Steps/PrintJob.stillPrinting` | unaffected — it DOES reach `world.openOperations`, transitively, via `ctx.ownedOperation` → `world.openOperation(for:owner:)`; the reason it is unaffected is that `mine` (built on the status-unfiltered `dispatchedOperations`) short-circuits `\|\|` first whenever the narrowing would hide anything |
 | `Steps/TravelTo.swift:56` | unchanged — travel never goes `.enqueued` (`CommandClient.completion(for:)` maps `.travel` to `.deadline` → `.active`) |
 | `EventRun.swift:518,617,804,839,903` | unchanged — all non-print device-busy checks (collect/deposit/attach/arrival) |
 | `MineRun.swift:378`, `RepairFleet.swift:85,104` | unchanged — travel/recall busy checks |

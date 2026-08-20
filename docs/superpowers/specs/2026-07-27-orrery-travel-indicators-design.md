@@ -86,6 +86,8 @@ All three surfaces then read the same derivation:
 - `NewStarMapView.ships` — gains an `@FetchAll` over `Operation`, matching the
   device's open op (the `operation_one_open_per_device` unique index guarantees
   at most one, so the match is unambiguous).
+  - Stage 3 relaxed this to `operation_one_active_per_device` — prints can now
+    queue behind the active op; travel/mine are unaffected (`Operation.swift`).
 - `ActiveTaskCard.itinerary` — replaces its inline rule with the shared call.
 - `SidebarProgress.row` — replaces its `??` chain with the shared call.
 
