@@ -2,26 +2,12 @@
 //  CommandClient.swift
 //  Replicould — GameServices (shared clients + command engine)
 //
-//  The action-dispatch template (IMPLEMENTATION_PLAN §5.1). Firing a command is
-//  one write path: insert an optimistic `Operation` (instant UI via @FetchAll) →
-//  POST the command → on success confirm the op (active with a deadline for
-//  self-describing actions like travel, or enqueued for ones like print),
-//  supersede any prior active op (prints queue behind it instead), and take
-//  one authoritative post-command device read; on a 4xx, reject the
-//  optimistic op (the prior op is left untouched).
-//  No auto-retry. The UI never inspects the response — it observes the tables.
+//  The action-dispatch template: insert an optimistic `Operation`, POST,
+//  confirm on success (active/enqueued; prints queue instead of
+//  superseding), then read the device authoritatively. A 4xx rejects the
+//  optimistic op and leaves any prior op untouched. No auto-retry.
 //
-//  This file is the family-agnostic spine: the dispatch lifecycle, the
-//  completion classification, and response/error plumbing. Everything a
-//  specific command family owns — its request body, its post-dispatch side
-//  effects — lives in that family's `CommandClient+<Family>.swift` file, so a
-//  new family is a new file plus one routing line in `makeBody`, not another
-//  hundred lines here.
-//
-//  Lives beside the `Operation` table and `Reconciler` (shared infrastructure)
-//  rather than in a feature, so both the Devices feature and tests can drive
-//  it. Exposed via `@Dependency(\.commandClient)`.
-//
+//  Family-agnostic spine — per-family bodies live in `CommandClient+<Family>.swift`.
 
 import API
 import Dependencies

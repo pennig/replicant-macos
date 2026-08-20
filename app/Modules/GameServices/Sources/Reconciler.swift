@@ -30,15 +30,9 @@ import Utils
 
 private let logger = Logger(subsystem: "name.pennig.replicould", category: "Reconciler")
 
-/// What a device event asserts about the device's stowage.
-///
-/// Deliberately a three-state question (`.stowed` / `.deployed` / no opinion at
-/// all, expressed as `nil` by the caller): only `device.stowed` and
-/// `device.deployed` speak to stowage, and every other device event must leave
-/// the column untouched rather than reading its own silence as "not stowed".
-/// Both events name the other end of the link — `stowed_in_device_code` and
-/// `deployed_from_device_code` respectively — which is what makes settling
-/// the column from the event alone possible.
+/// What a device event asserts about the device's stowage — `.stowed`,
+/// `.deployed`, or no opinion (`nil`). Only `device.stowed`/`device.deployed`
+/// speak to it; every other event must leave the column untouched.
 public enum StowChange: Equatable, Sendable {
     /// `device.stowed` — the device is now aboard this carrier.
     case stowed(inDeviceCode: String)
