@@ -132,3 +132,77 @@ private func sliceDirective() -> Directive {
         #expect(world.auditLog.isEmpty)
     }
 }
+
+@Suite struct DispatchedOperationsNarrowing {
+    private func operation(_ id: String, kind: OperationKind, status: OperationStatus) -> Operation {
+        Operation(
+            id: id, entityCode: "V1", kind: kind.rawValue, status: status,
+            source: OperationSource.optimistic,
+            startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+            lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:]),
+            directiveID: "D1"
+        )
+    }
+
+    /// The kinds every mission consumer actually filters for survive; the rest
+    /// are dead weight that grows for the life of the directive.
+    @Test func keepsPrintAndTravelAndDropsOtherKinds() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Operation.insert { operation("OP-P", kind: .print, status: .completed) }.execute(db)
+            try Operation.insert { operation("OP-T", kind: .travel, status: .completed) }.execute(db)
+            try Operation.insert { operation("OP-L", kind: OperationKind(rawValue: "launch"), status: .completed) }.execute(db)
+            try Operation.insert { operation("OP-R", kind: OperationKind(rawValue: "recall"), status: .completed) }.execute(db)
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: sliceDirective()
+        )
+        #expect(world.dispatchedOperations.keys.sorted() == ["OP-P", "OP-T"])
+    }
+
+    /// A print keeps every status, `.superseded` included: `printDiagnosis`
+    /// distinguishes "superseded" from "never dispatched", and
+    /// `printedRelayCode` reads the COMPLETED print to name the clone hours
+    /// after it closed. The kind filter must never become a status filter.
+    @Test func keepsPrintsOfEveryStatus() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Operation.insert { operation("OP-DONE", kind: .print, status: .completed) }.execute(db)
+            try Operation.insert { operation("OP-OPEN", kind: .print, status: .active) }.execute(db)
+            try Operation.insert { operation("OP-SUP", kind: .print, status: .superseded) }.execute(db)
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: sliceDirective()
+        )
+        #expect(world.dispatchedOperations.keys.sorted() == ["OP-DONE", "OP-OPEN", "OP-SUP"])
+    }
+
+    /// The whole reason the two sets stay separate: a terminal `launch` is
+    /// dropped by the kind filter, but the audit pass still has to close it, so
+    /// the ops named by an unmatched dispatch come back regardless of kind.
+    @Test func keepsAnyKindNamedByAnUnmatchedDispatch() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Operation.insert { operation("OP-L", kind: OperationKind(rawValue: "launch"), status: .completed) }.execute(db)
+            try DirectiveLogEntry.insert { dispatchEntry("L1", op: "OP-L", at: 1) }.execute(db)
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: sliceDirective()
+        )
+        #expect(world.dispatchedOperations["OP-L"] != nil)
+    }
+
+    /// …and once it is closed, it stops coming back.
+    @Test func dropsAnAuditedKindOnceItsCompletionIsLogged() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Operation.insert { operation("OP-L", kind: OperationKind(rawValue: "launch"), status: .completed) }.execute(db)
+            try DirectiveLogEntry.insert { dispatchEntry("L1", op: "OP-L", at: 1) }.execute(db)
+            try DirectiveLogEntry.insert { completedEntry("L2", op: "OP-L", at: 2) }.execute(db)
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: sliceDirective()
+        )
+        #expect(world.dispatchedOperations["OP-L"] == nil)
+    }
+}

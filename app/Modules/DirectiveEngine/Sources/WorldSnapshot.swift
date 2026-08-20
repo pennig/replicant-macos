@@ -41,10 +41,17 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// directive age.
     public let auditLog: [DirectiveLogEntry]
     /// The operations this directive dispatched, by operation id — **including
-    /// closed ones**, so the audit pass can notice a dispatched op reaching a
-    /// terminal state and write its `.opCompleted` entry. Scoped to the ids
-    /// named by this directive's own `.commandDispatched` log entries, so it
-    /// stays a handful of rows rather than the whole table.
+    /// closed ones**. Two sets in one lookup:
+    ///
+    /// - kinds any mission machine reads (`dispatchedKinds`), every status:
+    ///   `RelayRun.printedRelayCode` names its clone from the COMPLETED print
+    ///   hours after it closed, `printDiagnosis` needs `.superseded` to tell a
+    ///   superseded print from one never dispatched, and
+    ///   `Steps/TravelTo.lastTravelCompletion` post-dates a device row against
+    ///   its last completed travel;
+    /// - whatever `auditLog` still has open, of ANY kind, so the audit pass can
+    ///   notice a dispatched op reaching a terminal state and write its
+    ///   `.opCompleted` entry.
     ///
     /// Never fold these into `openOperations`: a mission asking "is this device
     /// busy?" reads that lookup, and a closed op inside it reads as in-flight.
@@ -136,6 +143,13 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// deepest `world.log` walk-back — stays under a few hundred entries even
     /// with many interleaved controllers; 500 leaves headroom.
     public static let logWindow = 500
+
+    /// The operation kinds `dispatchedOperations` carries for the mission
+    /// machines. Every consumer outside the audit pass filters to exactly one
+    /// of these (`EventRun`, `RelayRun`, `Steps/PrintJob` on `print`;
+    /// `Steps/TravelTo` on `travel`), so anything else is fetched, decoded and
+    /// discarded. Widen this only alongside a consumer that reads the new kind.
+    static let dispatchedKinds = [OperationKind.print.rawValue, OperationKind.travel.rawValue]
 
     public init(
         devices: [String: Device],
@@ -284,27 +298,39 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .order { $0.occurredAt }
                 .fetchAll(db)
 
-            // The owner column is the source of truth; the log is a fallback
-            // for rows written before it existed. One query, so the ids never
-            // cross into Swift to come back as a host-parameter list.
+            // The ids this directive is on record as dispatching. One query, so
+            // the ids never cross into Swift to come back as a host-parameter
+            // list.
+            let dispatchedIDs = DirectiveLogEntry
+                .where {
+                    $0.directiveID.eq(directiveID)
+                        && $0.kind.eq(DirectiveLogKind.commandDispatched)
+                        && $0.operationID.isNot(nil)
+                }
+                .select { $0.operationID ?? "" }
+
+            // The mission half: only the kinds a machine reads. The owner
+            // column is the source of truth; the log is a fallback for rows
+            // written before it existed.
+            let missionOps = try GameModels.Operation
+                .where { operation in
+                    (operation.directiveID.eq(directiveID) || operation.id.in(dispatchedIDs))
+                        && operation.kind.in(Self.dispatchedKinds)
+                }
+                .fetchAll(db)
+
+            // The audit half: whatever `auditLog` still needs closed, of ANY
+            // kind. Kept out of the kind filter deliberately — filtering it
+            // would silently stop `recordCompletedOps` writing `.opCompleted`
+            // for `launch`, `recall`, `deploy` and every other kind. This is
+            // the single reason the two halves cannot be merged into one query.
+            let auditOperationIDs = auditLog.compactMap(\.operationID)
+            let auditOps = auditOperationIDs.isEmpty
+                ? []
+                : try GameModels.Operation.where { $0.id.in(auditOperationIDs) }.fetchAll(db)
+
             let dispatched = Dictionary(
-                try GameModels.Operation
-                    .where { operation in
-                        operation.directiveID.eq(directiveID)
-                            || operation.id.in(
-                                DirectiveLogEntry
-                                    .where {
-                                        $0.directiveID.eq(directiveID)
-                                            && $0.kind.eq(DirectiveLogKind.commandDispatched)
-                                            && $0.operationID.isNot(nil)
-                                    }
-                                    // Coalesced only to drop the optional;
-                                    // the filter above excludes the nulls.
-                                    .select { $0.operationID ?? "" }
-                            )
-                    }
-                    .fetchAll(db)
-                    .map { ($0.id, $0) },
+                (missionOps + auditOps).map { ($0.id, $0) },
                 uniquingKeysWith: { first, _ in first }
             )
 
