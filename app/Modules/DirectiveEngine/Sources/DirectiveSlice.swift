@@ -61,15 +61,19 @@ public struct DirectiveSlice: Equatable, Sendable {
         // `Brain.report`'s identical cast.
         let ids: [String?] = directives.map(\.id)
 
-        // Newest first, then grouped and truncated per directive in Swift —
-        // a per-directive LIMIT cannot be expressed in one plain query.
-        let logsByDirective = Dictionary(
-            grouping: try DirectiveLogEntry
-                .where { $0.directiveID.in(ids) }
-                .order { $0.occurredAt.desc() }
-                .fetchAll(db),
-            by: { $0.directiveID ?? "" }
-        )
+        // One bounded query per directive: a single batched query can't
+        // express a per-directive LIMIT without reading every row across all.
+        var logsByDirective: [String: [DirectiveLogEntry]] = [:]
+        for directive in directives {
+            logsByDirective[directive.id] = try Array(
+                DirectiveLogEntry
+                    .where { $0.directiveID.eq(directive.id) }
+                    .order { $0.occurredAt.desc() }
+                    .limit(WorldSnapshot.logWindow)
+                    .fetchAll(db)
+                    .reversed()
+            )
+        }
 
         // Every directive's own dispatch entries, materialized once — the
         // mission-half split and the audit anti-join below both read this.
@@ -83,7 +87,6 @@ public struct DirectiveSlice: Equatable, Sendable {
             .fetchAll(db)
         let dispatchByDirective = Dictionary(grouping: dispatchRows) { $0.directiveID ?? "" }
         let dispatchedIDsByDirective = dispatchByDirective.mapValues { Set($0.compactMap(\.operationID)) }
-        let unionedDispatchedIDs = Array(Set(dispatchRows.compactMap(\.operationID)))
 
         // Per directive, in Swift — a completion logged by one directive
         // must never exclude another directive's dispatch of the same id.
@@ -108,21 +111,24 @@ public struct DirectiveSlice: Equatable, Sendable {
             }
         }
 
+        // Ids the batch dispatched — one unexecuted subquery, never a
+        // host-parameter list in Swift.
+        let dispatchedIDsSubquery = DirectiveLogEntry
+            .where {
+                $0.directiveID.in(ids)
+                    && $0.kind.eq(DirectiveLogKind.commandDispatched)
+                    && $0.operationID.isNot(nil)
+            }
+            .select { $0.operationID ?? "" }
+
         // Mission half: kinds a machine reads. Owner column is truth; log
         // is the fallback for rows written before it existed.
-        let missionOps: [GameModels.Operation]
-        if unionedDispatchedIDs.isEmpty {
-            missionOps = try GameModels.Operation
-                .where { $0.directiveID.in(ids) && $0.kind.in(WorldSnapshot.dispatchedKinds) }
-                .fetchAll(db)
-        } else {
-            missionOps = try GameModels.Operation
-                .where { operation in
-                    (operation.directiveID.in(ids) || operation.id.in(unionedDispatchedIDs))
-                        && operation.kind.in(WorldSnapshot.dispatchedKinds)
-                }
-                .fetchAll(db)
-        }
+        let missionOps = try GameModels.Operation
+            .where { operation in
+                (operation.directiveID.in(ids) || operation.id.in(dispatchedIDsSubquery))
+                    && operation.kind.in(WorldSnapshot.dispatchedKinds)
+            }
+            .fetchAll(db)
         let missionOpsByDirective = Dictionary(grouping: missionOps) { $0.directiveID ?? "" }
         let missionOpsByID = Dictionary(missionOps.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
@@ -170,7 +176,7 @@ public struct DirectiveSlice: Equatable, Sendable {
         var result: [String: DirectiveSlice] = [:]
         for directive in directives {
             let directiveID = directive.id
-            let log = Array((logsByDirective[directiveID] ?? []).prefix(WorldSnapshot.logWindow).reversed())
+            let log = logsByDirective[directiveID] ?? []
 
             var dispatched = missionOpsByDirective[directiveID] ?? []
             for opID in dispatchedIDsByDirective[directiveID] ?? [] {

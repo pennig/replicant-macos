@@ -328,6 +328,43 @@ private func sliceDirective() -> Directive {
         }
     }
 
+    /// The per-directive bound survives batching: a directive over
+    /// `logWindow` is truncated to its OWN newest entries, and a sibling
+    /// with only a few entries never borrows from that directive's budget.
+    @Test func logWindowIsBoundedPerDirectiveNotAcrossTheBatch() async throws {
+        let database = try GameDatabase.bootstrap()
+        let big = directiveFixture(id: "D1", deviceCode: "V1")
+        let small = directiveFixture(id: "D2", deviceCode: "V2")
+        let total = WorldSnapshot.logWindow + 1
+        try await database.write { db in
+            for index in 0..<total {
+                try DirectiveLogEntry.insert {
+                    DirectiveLogEntry(
+                        id: "BIG-\(index)", directiveID: "D1", deviceCode: nil, kind: .stepStarted,
+                        summary: "big \(index)", step: nil, operationID: nil, eventID: nil,
+                        occurredAt: Date(timeIntervalSince1970: Double(index))
+                    )
+                }.execute(db)
+            }
+            for index in 0..<3 {
+                try DirectiveLogEntry.insert {
+                    DirectiveLogEntry(
+                        id: "SMALL-\(index)", directiveID: "D2", deviceCode: nil, kind: .stepStarted,
+                        summary: "small \(index)", step: nil, operationID: nil, eventID: nil,
+                        occurredAt: Date(timeIntervalSince1970: Double(index))
+                    )
+                }.execute(db)
+            }
+        }
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [big, small])
+            #expect(batched["D1"]?.log.count == WorldSnapshot.logWindow)
+            #expect(batched["D1"]?.log.first?.id == "BIG-1")
+            #expect(batched["D2"]?.log.map(\.id) == ["SMALL-0", "SMALL-1", "SMALL-2"])
+        }
+    }
+
     /// Each directive's unmatched-dispatch worklist is its own, never a
     /// peer's, even though the batched anti-join runs as one query.
     @Test func auditLogIsScopedPerDirective() async throws {
@@ -390,10 +427,9 @@ private func sliceDirective() -> Directive {
         }
     }
 
-    /// The subtle split: the mission half is scoped by owner column OR by
-    /// what THIS directive's own dispatch log names, and the kind-agnostic
-    /// audit half is scoped by what THIS directive's own auditLog names —
-    /// getting either wrong hands one directive another's operations.
+    /// The subtle split: mission half by owner column OR this directive's
+    /// own dispatch log; kind-agnostic audit half by this directive's own
+    /// auditLog. Getting either wrong hands one directive another's ops.
     @Test func dispatchedOperationsIsScopedPerDirective() async throws {
         let database = try GameDatabase.bootstrap()
         let a = directiveFixture(id: "D1", deviceCode: "V1")
