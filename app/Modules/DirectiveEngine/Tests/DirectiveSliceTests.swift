@@ -358,6 +358,38 @@ private func sliceDirective() -> Directive {
         }
     }
 
+    /// The anti-join is per directive, never scoped to the batch: a
+    /// completion logged by D2 for an id D1 ALSO named must not close D1's
+    /// own unmatched dispatch of that same id.
+    @Test func aSiblingsCompletionOfTheSameOperationIDNeverClosesMyDispatch() async throws {
+        let database = try GameDatabase.bootstrap()
+        let a = directiveFixture(id: "D1", deviceCode: "V1")
+        let b = directiveFixture(id: "D2", deviceCode: "V2")
+        try await database.write { db in
+            try DirectiveLogEntry.insert { dispatchEntry("LA", op: "OP-SHARED", at: 1) }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "LB", directiveID: "D2", deviceCode: nil, kind: .commandDispatched,
+                    summary: "b", step: nil, operationID: "OP-SHARED", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "LC", directiveID: "D2", deviceCode: nil, kind: .opCompleted,
+                    summary: "b done", step: nil, operationID: "OP-SHARED", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 2)
+                )
+            }.execute(db)
+        }
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [a, b])
+            #expect(batched["D1"]?.auditLog.map(\.id) == ["LA"])
+            #expect(batched["D2"]?.auditLog.isEmpty == true)
+        }
+    }
+
     /// The subtle split: the mission half is scoped by owner column OR by
     /// what THIS directive's own dispatch log names, and the kind-agnostic
     /// audit half is scoped by what THIS directive's own auditLog names —

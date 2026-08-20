@@ -71,42 +71,42 @@ public struct DirectiveSlice: Equatable, Sendable {
             by: { $0.directiveID ?? "" }
         )
 
-        // Matched in SQL, not Swift — see
-        // `app/.claude/memory/dispatched-operations-two-set-union.md`.
-        let auditByDirective = Dictionary(
-            grouping: try DirectiveLogEntry
-                .where { entry in
-                    entry.directiveID.in(ids)
-                        && entry.kind.eq(DirectiveLogKind.commandDispatched)
-                        && entry.operationID.isNot(nil)
-                        && (entry.operationID ?? "").notIn(
-                            DirectiveLogEntry
-                                .where {
-                                    $0.directiveID.in(ids)
-                                        && $0.kind.eq(DirectiveLogKind.opCompleted)
-                                        && $0.operationID.isNot(nil)
-                                }
-                                .select { $0.operationID ?? "" }
-                        )
-                }
-                .order { $0.occurredAt }
-                .fetchAll(db),
-            by: { $0.directiveID ?? "" }
-        )
-
-        // Ids each directive dispatched, materialized once: the mission
-        // half's per-directive split needs its OWN set, not the union.
-        let dispatchEntries = try DirectiveLogEntry
+        // Every directive's own dispatch entries, materialized once — the
+        // mission-half split and the audit anti-join below both read this.
+        let dispatchRows = try DirectiveLogEntry
             .where {
                 $0.directiveID.in(ids)
                     && $0.kind.eq(DirectiveLogKind.commandDispatched)
                     && $0.operationID.isNot(nil)
             }
-            .select { ($0.directiveID ?? "", $0.operationID ?? "") }
+            .order { $0.occurredAt }
             .fetchAll(db)
-        let dispatchedIDsByDirective = Dictionary(grouping: dispatchEntries) { $0.0 }
-            .mapValues { Set($0.map { $0.1 }) }
-        let unionedDispatchedIDs = Array(Set(dispatchEntries.map { $0.1 }))
+        let dispatchByDirective = Dictionary(grouping: dispatchRows) { $0.directiveID ?? "" }
+        let dispatchedIDsByDirective = dispatchByDirective.mapValues { Set($0.compactMap(\.operationID)) }
+        let unionedDispatchedIDs = Array(Set(dispatchRows.compactMap(\.operationID)))
+
+        // Per directive, in Swift — a completion logged by one directive
+        // must never exclude another directive's dispatch of the same id.
+        let completedIDsByDirective = Dictionary(
+            grouping: try DirectiveLogEntry
+                .where {
+                    $0.directiveID.in(ids)
+                        && $0.kind.eq(DirectiveLogKind.opCompleted)
+                        && $0.operationID.isNot(nil)
+                }
+                .fetchAll(db),
+            by: { $0.directiveID ?? "" }
+        ).mapValues { Set($0.compactMap(\.operationID)) }
+        // Matched per directive, not in one SQL statement — see
+        // `app/.claude/memory/dispatched-operations-two-set-union.md`.
+        var auditByDirective: [String: [DirectiveLogEntry]] = [:]
+        for directive in directives {
+            let completed = completedIDsByDirective[directive.id] ?? []
+            auditByDirective[directive.id] = (dispatchByDirective[directive.id] ?? []).filter {
+                guard let opID = $0.operationID else { return false }
+                return !completed.contains(opID)
+            }
+        }
 
         // Mission half: kinds a machine reads. Owner column is truth; log
         // is the fallback for rows written before it existed.
