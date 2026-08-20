@@ -296,16 +296,13 @@ enum DirectiveExecutor {
         @Dependency(\.date) var date
         @Dependency(\.uuid) var uuid
 
-        // Op ids already accounted for. Reads `auditLog`, not the windowed
-        // `log`, so an old dispatch this pass still needs stays resolvable.
-        let alreadyLogged = Set(world.auditLog.compactMap { entry in
-            entry.kind == .opCompleted ? entry.operationID : nil
-        })
-
+        // Reads `auditLog`, not the windowed `log`, so an old dispatch this
+        // pass still needs stays resolvable. The already-closed exclusion now
+        // happens in SQL — `auditLog` never contains a dispatch that already
+        // has an `.opCompleted` counterpart.
         var entries: [DirectiveLogEntry] = []
         for dispatch in world.auditLog where dispatch.kind == .commandDispatched {
             guard let operationID = dispatch.operationID,
-                  !alreadyLogged.contains(operationID),
                   let operation = world.dispatchedOperations[operationID],
                   operation.status.isTerminal
             else { continue }

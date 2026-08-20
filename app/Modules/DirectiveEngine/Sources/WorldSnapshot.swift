@@ -34,9 +34,11 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// Completion detection reads the `directive.completed` ROW here rather
     /// than the event, which is what keeps missions replay-immune.
     public let log: [DirectiveLogEntry]
-    /// Every `.opCompleted` entry and every `.commandDispatched` entry that
-    /// NAMES an operation — unlike `log`, never windowed, so an op dispatched
-    /// long before `log`'s cutoff still resolves in the audit pass.
+    /// Every `.commandDispatched` entry that NAMES an operation and has no
+    /// `.opCompleted` counterpart yet — the audit pass's worklist, matched in
+    /// SQL. Unlike `log`, never windowed by count: an op dispatched long before
+    /// `log`'s cutoff still resolves here. Bounded by ops in flight, not by
+    /// directive age.
     public let auditLog: [DirectiveLogEntry]
     /// The operations this directive dispatched, by operation id — **including
     /// closed ones**, so the audit pass can notice a dispatched op reaching a
@@ -258,14 +260,26 @@ public struct WorldSnapshot: Equatable, Sendable {
                 .fetchAll(db)
                 .reversed())
 
-            // Unbounded and kind-scoped, unlike `log`. A dispatch naming no
-            // operation is excluded: `recordCompletedOps` rejects one anyway.
+            // Only dispatches with no `.opCompleted` counterpart — the rows the
+            // audit pass can still act on. Matching in SQL rather than fetching
+            // the whole history and diffing it in Swift: settled dispatches are
+            // the overwhelming majority (7,954 rows to find 4) and re-reading
+            // them every tick is pure waste. Unbounded only in the pending
+            // sense, which is bounded by how many ops are actually in flight.
             let auditLog = try DirectiveLogEntry
-                .where {
-                    $0.directiveID.eq(directiveID)
-                        && ($0.kind.eq(DirectiveLogKind.opCompleted)
-                            || ($0.kind.eq(DirectiveLogKind.commandDispatched)
-                                && $0.operationID.isNot(nil)))
+                .where { entry in
+                    entry.directiveID.eq(directiveID)
+                        && entry.kind.eq(DirectiveLogKind.commandDispatched)
+                        && entry.operationID.isNot(nil)
+                        && (entry.operationID ?? "").notIn(
+                            DirectiveLogEntry
+                                .where {
+                                    $0.directiveID.eq(directiveID)
+                                        && $0.kind.eq(DirectiveLogKind.opCompleted)
+                                        && $0.operationID.isNot(nil)
+                                }
+                                .select { $0.operationID ?? "" }
+                        )
                 }
                 .order { $0.occurredAt }
                 .fetchAll(db)
