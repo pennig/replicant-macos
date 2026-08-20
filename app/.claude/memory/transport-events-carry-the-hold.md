@@ -42,3 +42,46 @@ read settled the row — the newer read must win, or a replay walks the hold
 backwards. Same lesson as [[confirm-steps-need-fresh-evidence]].
 
 Pinned by `ReconcilerCargoEventTests`, all five proved by mutation.
+
+## Still open: the duplicate order is narrowed, not closed
+
+This patch shortens the blind window from "until the next full device read"
+(15 minutes, observed) to "until the report arrives" (296ms, observed). It does
+not make the duplicate impossible. A `transport.collected` delayed past the
+tick interval — roughly 5s, the gap between `loading` re-entries in the live
+log — and `EventRun.loading` re-orders exactly as before, because the row still
+reads `cargoUsed == 0` and the second guard beside it is `world.openOperation(
+for:)`, which is structurally nil.
+
+**The structural fix is to give `collect_resources` a tracked `Operation`,** so
+that guard becomes real and a dispatched-but-unconfirmed collect blocks the
+next one on its own evidence rather than on a field the server has to tell us
+about. Same remedy as [[same-step-dispatch-needs-tracked-op]] prescribes for
+`.simple` verbs generally.
+
+**Why it was not done in the same change.** `confirmLoad` is built on the
+opposite premise, and says so: `attach` and `collect_resources` are immediate,
+so no op is ever open and the loop's bound is a ROUND COUNT
+(`MissionLogBudget.dispatchRounds`) rather than an op. Introducing an op means
+re-deriving that bound and the `ConfirmRow` ladder beneath it, and `attach`
+shares the shape, so it is one change to two verbs and three steps — not a
+patch. Weigh it against the residual before starting: post-fix, the window is
+sub-second and needs a stream stall to bite.
+
+**How to know it recurred.** The signature is a `loading` stall whose requested
+amount exactly EQUALS the amount already aboard — the outbound divider cuts
+from capacity, so a recompute names the same number:
+
+```sql
+SELECT substr(directiveID,1,8), step, occurredAt, detail
+FROM directiveLogEntries WHERE detail LIKE '%cargo capacity%'
+ORDER BY occurredAt DESC;
+```
+
+`have N, requesting N` is this bug. `have 0, requesting M` where M exceeds the
+convoy is the different, already-fixed payload-too-large case in
+[[stall-triage-2026-08-19]]. If `have N, requesting N` appears again, check
+first whether the `transport.collected` arrived at all (`eventLogs`, keyed on
+the freighter) — a missing report is a routing regression in this note's fix,
+while a report that arrived and was still too late is the case that finally
+earns the tracked op.
