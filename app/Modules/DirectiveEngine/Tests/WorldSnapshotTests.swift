@@ -215,10 +215,9 @@ struct WorldSnapshotTests {
         #expect(world.systems.isEmpty)
     }
 
-    /// Devices and the one open op per device are keyed for O(1) lookup, and a
-    /// CLOSED op is absent — a step machine asking "is this device busy?" must
-    /// never see a completed op as in progress.
-    @Test func readsDevicesAndOnlyOpenOperations() async throws {
+    /// Devices are keyed for O(1) lookup and `world.now` is the read's clock;
+    /// a CLOSED op is absent from both `openOperation` and `queuedOperations`.
+    @Test func readsDevicesAndDropsClosedOperations() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Device.insert { device("VES1") }.execute(db)
@@ -231,11 +230,44 @@ struct WorldSnapshotTests {
 
         #expect(world.devices.keys.sorted() == ["AMI1", "VES1"])
         #expect(world.device("VES1")?.deviceCode == "VES1")
-        #expect(world.openOperation(for: "VES1")?.id == "OP1")
         #expect(world.openOperation(for: "AMI1") == nil)
-        #expect(world.now == now)
-        #expect(world.queuedOperations["VES1"]?.map(\.id) == ["OP1"])
         #expect(world.queuedOperations["AMI1"] == nil)
+        #expect(world.now == now)
+    }
+
+    /// The active op is the only one `openOperation` sees; a queued sibling on
+    /// the SAME device shows only through `queuedOperations` — the narrowing
+    /// this ticket makes, proved by a device carrying both at once.
+    @Test("the active op is keyed per device; queued ops are not")
+    func activeOpIsKeyedPerDevice() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Operation.insert { op("OP-1", device: "B1", status: .active) }.execute(db)
+            try Operation.insert {
+                op("OP-2", device: "B1", status: .enqueued, startedAt: Date(timeIntervalSince1970: 1))
+            }.execute(db)
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: directive()
+        )
+
+        #expect(world.openOperation(for: "B1")?.id == "OP-1")
+        #expect(world.queuedOperations["B1"]?.map(\.id) == ["OP-1", "OP-2"])
+    }
+
+    /// A bench with nothing on the platen but jobs waiting has no active op.
+    @Test("a bench with only queued jobs has no active op")
+    func queuedOnlyHasNoActiveOp() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Operation.insert { op("OP-2", device: "B1", status: .enqueued) }.execute(db)
+        }
+        let world = try await WorldSnapshot.read(
+            from: database, now: Date(timeIntervalSince1970: 100), directive: directive()
+        )
+
+        #expect(world.openOperation(for: "B1") == nil)
+        #expect(world.queuedOperations["B1"]?.count == 1)
     }
 
     /// A bench's live ops come back oldest first — Task 11's completion picker
@@ -267,16 +299,17 @@ struct WorldSnapshotTests {
         #expect(world.queuedOperations["B1"]?.map(\.id) == ["OP-A", "OP-B"])
     }
 
-    /// An optimistic op counts as open: it is a command the app has staged but
-    /// the server has not confirmed, and re-issuing that step would double-post.
-    @Test func optimisticOpsCountAsOpen() async throws {
+    /// An optimistic op is staged, not active: `openOperation` never returns
+    /// it, though `queuedOperations` carries it.
+    @Test func optimisticOpsDoNotCountAsActive() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Device.insert { device("VES1") }.execute(db)
             try Operation.insert { op("OP1", device: "VES1", status: .optimistic) }.execute(db)
         }
         let world = try await WorldSnapshot.read(from: database, now: Date(timeIntervalSince1970: 0), directive: directive())
-        #expect(world.openOperation(for: "VES1")?.id == "OP1")
+        #expect(world.openOperation(for: "VES1") == nil)
+        #expect(world.queuedOperations["VES1"]?.map(\.id) == ["OP1"])
     }
 
     /// A mission asking "is MY op open" must not read a co-tenant's job on the

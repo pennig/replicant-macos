@@ -23,9 +23,8 @@ import UniverseModels
 public struct WorldSnapshot: Equatable, Sendable {
     /// The fleet, by device code.
     public let devices: [String: Device]
-    /// The single OPEN operation per device, by device code. Closed ops are
-    /// excluded: a step machine asks "is this device busy?", and a completed op
-    /// is not busy.
+    /// The active operation per device, by device code — the job actually on
+    /// the platen. A queued job is not here; ask `queuedOperations` for those.
     public let openOperations: [String: GameModels.Operation]
     /// Every live operation per device, oldest first — `(startedAt, id)`
     /// tie-broken, since two ops in one transaction can share a `startedAt`.
@@ -185,7 +184,7 @@ public struct WorldSnapshot: Equatable, Sendable {
 
     /// The row for the device `code` names, or nil when the fleet read has none.
     public func device(_ code: String) -> Device? { devices[code] }
-    /// The single OPEN operation for the device `code` names, if it has one.
+    /// The active operation for the device `code` names, if it has one.
     public func openOperation(for code: String) -> GameModels.Operation? { openOperations[code] }
     /// The device's live op only when it belongs to `owner`; a nil `owner`
     /// keeps `openOperation(for:)`'s meaning, and an op with no owner of its
@@ -388,7 +387,9 @@ public struct WorldSnapshot: Equatable, Sendable {
 
             return WorldSnapshot(
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
-                openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
+                openOperations: Dictionary(
+                    uniqueKeysWithValues: operations.filter { $0.status == .active }.map { ($0.entityCode, $0) }
+                ),
                 queuedOperations: Dictionary(grouping: operations, by: \.entityCode),
                 log: log,
                 auditLog: auditLog,
