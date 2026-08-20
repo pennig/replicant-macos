@@ -37,4 +37,11 @@ rows on the oldest directive to find 4 actionable ones. An anti-join
 
 Widen `dispatchedKinds` only alongside a new consumer that reads the added kind.
 
+**Why `dispatchedOperations` must never be folded into `openOperations`.** The two overlap on every
+still-open op, but `dispatchedOperations` deliberately also carries CLOSED ones — that's the entire point
+of the audit half. `openOperations` is the lookup a mission reads to ask "is this device busy right now?"
+(`WorldSnapshot.openOperation(for:)`). Merge the two and a closed op sitting in that lookup reads as still
+in-flight, so a device that finished its job would keep reading as busy. They stay two separate properties
+for exactly this reason.
+
 Related: [[directive-log-window-and-timeline]] (a different bound, on `log`), [[operations-table-retention]].
