@@ -32,19 +32,24 @@ public struct PrintingSnapshot: Equatable, Sendable {
     public var progressPercent: Double?
     /// Seconds remaining, as reported by the server.
     public var etaSeconds: Double?
+    /// Tags the finished device inherits — the same handles `print_queue`
+    /// entries carry, so a job reads the same before and after it reaches the platen.
+    public var tags: [String]
 
     public init(
         deviceType: String? = nil,
         startedAt: Date? = nil,
         completesAt: Date? = nil,
         progressPercent: Double? = nil,
-        etaSeconds: Double? = nil
+        etaSeconds: Double? = nil,
+        tags: [String] = []
     ) {
         self.deviceType = deviceType
         self.startedAt = startedAt
         self.completesAt = completesAt
         self.progressPercent = progressPercent
         self.etaSeconds = etaSeconds
+        self.tags = tags
     }
 }
 
@@ -58,7 +63,8 @@ extension PrintingSnapshot {
             startedAt: value?["started_at"]?.stringValue.flatMap(DiversionSnapshot.parseDate),
             completesAt: value?["completes_at"]?.stringValue.flatMap(DiversionSnapshot.parseDate),
             progressPercent: value?["progress_percent"]?.numberValue,
-            etaSeconds: value?["eta_seconds"]?.numberValue
+            etaSeconds: value?["eta_seconds"]?.numberValue,
+            tags: value?["tags"]?.arrayValue?.compactMap(\.stringValue) ?? []
         )
     }
 }

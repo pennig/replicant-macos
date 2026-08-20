@@ -28,11 +28,42 @@ import Utils
         ])
     }
 
+    /// A real `printing` block from a bench working a directive-ordered job —
+    /// the same shape as `printingBlock`, plus the tags the new device inherits.
+    private var taggedPrintingBlock: JSONValue {
+        .object([
+            "tags": .array([.string("auto:event:ainalram-belt-1")]),
+            "completes_at": .string("2026-08-20T09:19:27-05:00"),
+            "device_type": .string("thermal_lance"),
+            "eta_seconds": .number(973),
+            "started_at": .string("2026-08-20T09:01:40-05:00"),
+            "progress_percent": .number(8.8),
+        ])
+    }
+
     @Test func parsesEveryField() throws {
         let p = try #require(PrintingSnapshot(printingBlock: printingBlock))
         #expect(p.deviceType == "autofactory")
         #expect(p.progressPercent == 17.4)
         #expect(p.etaSeconds == 1983.5)
+    }
+
+    @Test func parsesTagsTheNewDeviceWillInherit() throws {
+        let p = try #require(PrintingSnapshot(printingBlock: taggedPrintingBlock))
+        #expect(p.tags == ["auto:event:ainalram-belt-1"])
+    }
+
+    /// The block is the server's, so a missing or malformed `tags` key names no
+    /// tags rather than failing the whole parse.
+    @Test func missingTagsNamesNoTags() throws {
+        #expect(try #require(PrintingSnapshot(printingBlock: printingBlock)).tags.isEmpty)
+        let malformed = JSONValue.object(["device_type": .string("autofactory"), "tags": .string("nope")])
+        #expect(try #require(PrintingSnapshot(printingBlock: malformed)).tags.isEmpty)
+    }
+
+    @Test func deviceReadsActivePrintTags() throws {
+        let device = makeDevice(detail: .object(["printing": taggedPrintingBlock]))
+        #expect(device.printingSnapshot?.tags == ["auto:event:ainalram-belt-1"])
     }
 
     @Test func parsesTimestampsAsOffset() throws {
