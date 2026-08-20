@@ -245,3 +245,184 @@ private func sliceDirective() -> Directive {
         #expect(!composed.siteAssays.isEmpty)
     }
 }
+
+@Suite struct DirectiveSliceBatching {
+    /// Batched must equal individual for every directive, or the tick is
+    /// quietly handing missions a different world than they get today.
+    @Test func batchedMatchesIndividualForEachDirective() async throws {
+        let database = try GameDatabase.bootstrap()
+        let a = directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
+        let b = directiveFixture(id: "D2", deviceCode: "V2", targets: ["VEGA"])
+        try await database.write { db in
+            try DirectiveLogEntry.insert { dispatchEntry("L1", op: "OP-A", at: 1) }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "L2", directiveID: "D2", deviceCode: nil, kind: .commandDispatched,
+                    summary: "theirs", step: nil, operationID: "OP-B", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 2)
+                )
+            }.execute(db)
+        }
+
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [a, b])
+            #expect(batched["D1"] == (try DirectiveSlice.read(from: db, core: core, directive: a)))
+            #expect(batched["D2"] == (try DirectiveSlice.read(from: db, core: core, directive: b)))
+        }
+    }
+
+    /// An empty directive list must not emit `IN ()` or read anything.
+    @Test func readsNothingForNoDirectives() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            #expect(try DirectiveSlice.readAll(from: db, core: core, directives: []).isEmpty)
+        }
+    }
+}
+
+@Suite struct DirectiveSliceBatchIsolation {
+    private func operation(
+        _ id: String, kind: OperationKind, status: OperationStatus = .completed, directiveID: String? = nil
+    ) -> Operation {
+        Operation(
+            id: id, entityCode: "V1", kind: kind.rawValue, status: status,
+            source: OperationSource.optimistic,
+            startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+            lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:]),
+            directiveID: directiveID
+        )
+    }
+
+    /// The naive bug this task exists to catch: a batched query answering
+    /// with a missing key, or with a SIBLING directive's rows, for a
+    /// directive owning none of its own.
+    @Test func logIsScopedPerDirectiveNotUnionedOrMissing() async throws {
+        let database = try GameDatabase.bootstrap()
+        let a = directiveFixture(id: "D1", deviceCode: "V1")
+        let b = directiveFixture(id: "D2", deviceCode: "V2")
+        let c = directiveFixture(id: "D3", deviceCode: "V3")
+        try await database.write { db in
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "LA", directiveID: "D1", deviceCode: nil, kind: .stepStarted,
+                    summary: "a", step: nil, operationID: nil, eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "LB", directiveID: "D2", deviceCode: nil, kind: .stepStarted,
+                    summary: "b", step: nil, operationID: nil, eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+        }
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [a, b, c])
+            #expect(batched["D1"]?.log.map(\.id) == ["LA"])
+            #expect(batched["D2"]?.log.map(\.id) == ["LB"])
+            #expect(batched["D3"] == .empty)
+        }
+    }
+
+    /// Each directive's unmatched-dispatch worklist is its own, never a
+    /// peer's, even though the batched anti-join runs as one query.
+    @Test func auditLogIsScopedPerDirective() async throws {
+        let database = try GameDatabase.bootstrap()
+        let a = directiveFixture(id: "D1", deviceCode: "V1")
+        let b = directiveFixture(id: "D2", deviceCode: "V2")
+        try await database.write { db in
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "LA", directiveID: "D1", deviceCode: nil, kind: .commandDispatched,
+                    summary: "a", step: nil, operationID: "OP-A", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "LB", directiveID: "D2", deviceCode: nil, kind: .commandDispatched,
+                    summary: "b", step: nil, operationID: "OP-B", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+        }
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [a, b])
+            #expect(batched["D1"]?.auditLog.map(\.id) == ["LA"])
+            #expect(batched["D2"]?.auditLog.map(\.id) == ["LB"])
+        }
+    }
+
+    /// The subtle split: the mission half is scoped by owner column OR by
+    /// what THIS directive's own dispatch log names, and the kind-agnostic
+    /// audit half is scoped by what THIS directive's own auditLog names —
+    /// getting either wrong hands one directive another's operations.
+    @Test func dispatchedOperationsIsScopedPerDirective() async throws {
+        let database = try GameDatabase.bootstrap()
+        let a = directiveFixture(id: "D1", deviceCode: "V1")
+        let b = directiveFixture(id: "D2", deviceCode: "V2")
+        try await database.write { db in
+            // Mission half, owner column: each directive's own printed op.
+            try Operation.insert { operation("OP-A1", kind: .print, directiveID: "D1") }.execute(db)
+            try Operation.insert { operation("OP-B1", kind: .print, directiveID: "D2") }.execute(db)
+            // Mission half, log fallback: no owner column, named only by
+            // that directive's own dispatch entry.
+            try Operation.insert { operation("OP-A2", kind: .travel) }.execute(db)
+            try DirectiveLogEntry.insert { dispatchEntry("LA2", op: "OP-A2", at: 1) }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "LB2", directiveID: "D2", deviceCode: nil, kind: .commandDispatched,
+                    summary: "b2", step: nil, operationID: "OP-B2", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 1)
+                )
+            }.execute(db)
+            try Operation.insert { operation("OP-B2", kind: .travel) }.execute(db)
+            // Audit half, kind-agnostic: an unmatched dispatch of a kind the
+            // mission half would drop, one per directive.
+            try Operation.insert { operation("OP-A3", kind: OperationKind(rawValue: "launch")) }.execute(db)
+            try DirectiveLogEntry.insert { dispatchEntry("LA3", op: "OP-A3", at: 2) }.execute(db)
+            try Operation.insert { operation("OP-B3", kind: OperationKind(rawValue: "recall")) }.execute(db)
+            try DirectiveLogEntry.insert {
+                DirectiveLogEntry(
+                    id: "LB3", directiveID: "D2", deviceCode: nil, kind: .commandDispatched,
+                    summary: "b3", step: nil, operationID: "OP-B3", eventID: nil,
+                    occurredAt: Date(timeIntervalSince1970: 2)
+                )
+            }.execute(db)
+        }
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [a, b])
+            #expect(batched["D1"]?.dispatchedOperations.keys.sorted() == ["OP-A1", "OP-A2", "OP-A3"])
+            #expect(batched["D2"]?.dispatchedOperations.keys.sorted() == ["OP-B1", "OP-B2", "OP-B3"])
+        }
+    }
+
+    /// A blob decoded for one directive's target must not appear on a
+    /// directive whose own `decoded`/`wanted` sets never named it, even
+    /// though the two fetches run once across the whole batch.
+    @Test func systemsAndSiteAssaysAreScopedPerDirective() async throws {
+        let database = try GameDatabase.bootstrap()
+        let a = directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
+        let b = directiveFixture(id: "D2", deviceCode: "V2", targets: ["VEGA"])
+        try await database.write { db in
+            try seedSystemDetail(db, system: "SOL", scanned: true)
+            try seedSystemDetail(db, system: "VEGA", scanned: true)
+            try seedSalvageAssay(db, id: "SITE-SOL", system: "SOL", totals: ["metal": 10])
+            try seedSalvageAssay(db, id: "SITE-VEGA", system: "VEGA", totals: ["metal": 20])
+        }
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [a, b])
+            #expect(batched["D1"]?.systems.keys.sorted() == ["SOL"])
+            #expect(batched["D2"]?.systems.keys.sorted() == ["VEGA"])
+            #expect(batched["D1"]?.siteAssays.keys.sorted() == ["SITE-SOL"])
+            #expect(batched["D2"]?.siteAssays.keys.sorted() == ["SITE-VEGA"])
+        }
+    }
+}
