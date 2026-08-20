@@ -229,129 +229,37 @@ public struct WorldSnapshot: Equatable, Sendable {
         now: Date,
         directive: Directive
     ) async throws -> WorldSnapshot {
-        // Assays are scoped to every target — one small row each, and a roam
-        // planner ranks across the whole tour.
-        let baseWanted = Set(directive.targets)
-            .union(directive.originDesignation.map { [$0] } ?? [])
-        // Blobs are scoped to the CURRENT target only. Every reader of
-        // `systems` asks about `directive.currentTarget`, never a later one,
-        // and a roaming run's target list grows without bound — at a few
-        // hundred targets, decoding one blob each dominated the whole read.
-        let baseDecoded = Set(directive.currentTarget.map { [$0] } ?? [])
-            .union(directive.originDesignation.map { [$0] } ?? [])
-        let directiveID = directive.id
-        let vesselCode = directive.deviceCode
-
-        return try await database.read { db in
+        try await database.read { db in
             let core = try WorldCore.read(from: db)
-
-            // Newest `logWindow` first, then restored to ascending order — the
-            // order every caller (`.reversed()` walks included) already expects.
-            let log = try Array(DirectiveLogEntry
-                .where { $0.directiveID.eq(directiveID) }
-                .order { $0.occurredAt.desc() }
-                .limit(Self.logWindow)
-                .fetchAll(db)
-                .reversed())
-
-            // Matched in SQL, not Swift — see
-            // `app/.claude/memory/dispatched-operations-two-set-union.md`.
-            let auditLog = try DirectiveLogEntry
-                .where { entry in
-                    entry.directiveID.eq(directiveID)
-                        && entry.kind.eq(DirectiveLogKind.commandDispatched)
-                        && entry.operationID.isNot(nil)
-                        && (entry.operationID ?? "").notIn(
-                            DirectiveLogEntry
-                                .where {
-                                    $0.directiveID.eq(directiveID)
-                                        && $0.kind.eq(DirectiveLogKind.opCompleted)
-                                        && $0.operationID.isNot(nil)
-                                }
-                                .select { $0.operationID ?? "" }
-                        )
-                }
-                .order { $0.occurredAt }
-                .fetchAll(db)
-
-            // Ids this directive dispatched — one query, never a
-            // host-parameter list in Swift.
-            let dispatchedIDs = DirectiveLogEntry
-                .where {
-                    $0.directiveID.eq(directiveID)
-                        && $0.kind.eq(DirectiveLogKind.commandDispatched)
-                        && $0.operationID.isNot(nil)
-                }
-                .select { $0.operationID ?? "" }
-
-            // Mission half: kinds a machine reads. Owner column is truth; log
-            // is the fallback for rows written before it existed.
-            let missionOps = try GameModels.Operation
-                .where { operation in
-                    (operation.directiveID.eq(directiveID) || operation.id.in(dispatchedIDs))
-                        && operation.kind.in(Self.dispatchedKinds)
-                }
-                .fetchAll(db)
-
-            // Audit half, kept kind-agnostic on purpose. See
-            // `app/.claude/memory/dispatched-operations-two-set-union.md`.
-            let auditOperationIDs = auditLog.compactMap(\.operationID)
-            let auditOps = auditOperationIDs.isEmpty
-                ? []
-                : try GameModels.Operation.where { $0.id.in(auditOperationIDs) }.fetchAll(db)
-
-            let dispatched = Dictionary(
-                (missionOps + auditOps).map { ($0.id, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-
-            var wanted = baseWanted
-            var decoded = baseDecoded
-            if let vessel = core.devices[vesselCode],
-               let location = vessel.location {
-                // The arrival check reads the system the vessel is in now.
-                wanted.insert(SiteAssay.system(of: location))
-                decoded.insert(SiteAssay.system(of: location))
-            }
-            let details = try SystemDetail
-                .where { $0.designation.in(Array(decoded)) }
-                .fetchAll(db)
-            let systems = details.reduce(into: [String: StarSystem]()) { systems, detail in
-                // A blob that fails to decode is treated as absent: the mission
-                // then can't prove the target is scanned and surveys it again,
-                // which is the safe direction to be wrong in.
-                if let system = try? detail.system() { systems[detail.designation] = system }
-            }
-
-            // Same `wanted` scope as the system blobs above — never the whole
-            // table. `SiteAssay.system` is exactly the leading-segment
-            // designation `wanted` is built from (`SiteAssay.system(of:)`).
-            let assays = try SiteAssay
-                .where { $0.system.in(Array(wanted)) }
-                .fetchAll(db)
-            let siteAssays = Dictionary(assays.map { ($0.id, $0.totals) }, uniquingKeysWith: { _, last in last })
-
-            return WorldSnapshot(
-                devices: core.devices,
-                openOperations: core.openOperations,
-                queuedOperations: core.queuedOperations,
-                log: log,
-                auditLog: auditLog,
-                dispatchedOperations: dispatched,
-                systems: systems,
-                siteAssays: siteAssays,
-                footprints: core.footprints,
-                starPositions: core.starPositions,
-                components: core.components,
-                blueprintBills: core.blueprintBills,
-                blueprintComponents: core.blueprintComponents,
-                blueprintPrintTimes: core.blueprintPrintTimes,
-                theatres: core.theatres,
-                locationEvents: core.locationEvents,
-                replicantHostDevices: core.replicantHostDevices,
-                peers: core.peers,
-                now: now
-            )
+            let slice = try DirectiveSlice.read(from: db, core: core, directive: directive)
+            return WorldSnapshot(core: core, slice: slice, now: now)
         }
+    }
+
+    /// Composes the two halves of a world read into the public shape — the
+    /// point where `WorldCore` and `DirectiveSlice` become indistinguishable
+    /// from a direct `read`.
+    init(core: WorldCore, slice: DirectiveSlice, now: Date) {
+        self.init(
+            devices: core.devices,
+            openOperations: core.openOperations,
+            queuedOperations: core.queuedOperations,
+            log: slice.log,
+            auditLog: slice.auditLog,
+            dispatchedOperations: slice.dispatchedOperations,
+            systems: slice.systems,
+            siteAssays: slice.siteAssays,
+            footprints: core.footprints,
+            starPositions: core.starPositions,
+            components: core.components,
+            blueprintBills: core.blueprintBills,
+            blueprintComponents: core.blueprintComponents,
+            blueprintPrintTimes: core.blueprintPrintTimes,
+            theatres: core.theatres,
+            locationEvents: core.locationEvents,
+            replicantHostDevices: core.replicantHostDevices,
+            peers: core.peers,
+            now: now
+        )
     }
 }

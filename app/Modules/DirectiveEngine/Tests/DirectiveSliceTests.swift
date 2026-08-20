@@ -206,3 +206,42 @@ private func sliceDirective() -> Directive {
         #expect(world.dispatchedOperations["OP-L"] == nil)
     }
 }
+
+@Suite struct DirectiveSliceComposition {
+    /// The composed snapshot is the core plus the slice and nothing else — the
+    /// invariant every later task leans on. Seeds real rows for all five
+    /// scoped fields, not just the one log entry the brief's template covers.
+    @Test func composesTheSameSnapshotAsTheDirectRead() async throws {
+        let database = try GameDatabase.bootstrap()
+        let directive = sliceDirective()
+        try await database.write { db in
+            try DirectiveLogEntry.insert { dispatchEntry("L1", op: "OP-A", at: 1) }.execute(db)
+            try Operation.insert {
+                Operation(
+                    id: "OP-A", entityCode: "V1", kind: OperationKind.print.rawValue,
+                    status: .active, source: .optimistic,
+                    startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+                    lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:]),
+                    directiveID: "D1"
+                )
+            }.execute(db)
+            try seedSystemDetail(db, system: "SOL", scanned: true)
+            try seedSalvageAssay(db, id: "SITE-SOL", system: "SOL", totals: ["metal": 100])
+        }
+        let now = Date(timeIntervalSince1970: 100)
+
+        let composed = try await database.read { db -> WorldSnapshot in
+            let core = try WorldCore.read(from: db)
+            let slice = try DirectiveSlice.read(from: db, core: core, directive: directive)
+            return WorldSnapshot(core: core, slice: slice, now: now)
+        }
+        let direct = try await WorldSnapshot.read(from: database, now: now, directive: directive)
+
+        #expect(composed == direct)
+        #expect(!composed.log.isEmpty)
+        #expect(!composed.auditLog.isEmpty)
+        #expect(!composed.dispatchedOperations.isEmpty)
+        #expect(!composed.systems.isEmpty)
+        #expect(!composed.siteAssays.isEmpty)
+    }
+}
