@@ -97,14 +97,14 @@ private struct PrintQueueRow: View {
                 }
 
                 if let printing, let target = printing.deviceType {
-                    // Active job — what's on the platen, plus a compact server-value
-                    // progress bar (the live interpolated bar lives in the detail).
+                    // Active job — what's on the platen, plus a bar interpolated
+                    // between reads so progress advances without a refresh.
                     HStack(spacing: Space.s) {
                         Image(systemName: "printer.fill")
                             .font(.system(size: IconSize.s))
                             .foregroundStyle(.rcAccent)
                         Text(PrintQueuePresentation.displayName(target))
-                            .font(.rcMonoSmall)
+                            .font(.rcCaption)
                             .foregroundStyle(.rcTextSecondary)
                             .lineLimit(1)
                         Spacer(minLength: Space.xs)
@@ -116,7 +116,10 @@ private struct PrintQueueRow: View {
                             .foregroundStyle(.rcTextTertiary)
                             .lineLimit(1)
                     }
-                    if let pct = printing.progressPercent {
+                    if let started = printing.startedAt, let completes = printing.completesAt {
+                        OperationProgressView(startedAt: started, completesAt: completes, style: .compact)
+                            .id(PrintQueuePresentation.jobID(deviceCode: device.deviceCode, printing: printing))
+                    } else if let pct = printing.progressPercent {
                         ProgressView(value: min(max(pct / 100, 0), 1))
                             .tint(.rcAccent)
                             .controlSize(.small)

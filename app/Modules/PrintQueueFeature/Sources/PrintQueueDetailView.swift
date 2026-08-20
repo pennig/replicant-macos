@@ -158,11 +158,20 @@ public struct PrintQueueDetailView: View {
                         .foregroundStyle(Color.rcTextTertiary)
                 }
 
+                // The tags the finished device inherits, rendered as the queue
+                // rows below render a waiting job's.
+                if !printing.tags.isEmpty {
+                    Text(printing.tags.joined(separator: ", "))
+                        .font(.rcCaption)
+                        .foregroundStyle(.rcTextTertiary)
+                        .lineLimit(1)
+                }
+
                 // Live interpolated bar when the job reports both endpoints; else
                 // fall back to the server's progress percent.
                 if let started = printing.startedAt, let completes = printing.completesAt {
                     OperationProgressView(startedAt: started, completesAt: completes)
-                        .id(device.deviceCode + (printing.deviceType ?? ""))
+                        .id(PrintQueuePresentation.jobID(deviceCode: device.deviceCode, printing: printing))
                 } else if let pct = printing.progressPercent {
                     VStack(alignment: .leading, spacing: Space.xs) {
                         ProgressView(value: min(max(pct / 100, 0), 1))
@@ -399,5 +408,12 @@ enum PrintQueuePresentation {
     /// helper so the special-casing rules live in one place.
     static func displayName(_ raw: String) -> String {
         BlueprintPresentation.displayName(raw)
+    }
+
+    /// Identity for the progress bar's per-job state: the bench and the instant
+    /// this job reached the platen, so a repeat print of the same type is a new
+    /// job and the bar's end latch resets with it.
+    static func jobID(deviceCode: String, printing: PrintingSnapshot) -> String {
+        "\(deviceCode)|\(printing.deviceType ?? "")|\(printing.startedAt?.timeIntervalSinceReferenceDate ?? 0)"
     }
 }
