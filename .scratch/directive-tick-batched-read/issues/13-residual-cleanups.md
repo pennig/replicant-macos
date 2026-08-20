@@ -58,6 +58,15 @@ cycle. Before the branch, one directive's failed read stalled one directive. The
 tick self-heals on the next cycle, so this is a robustness fix rather than a live
 fault. Chunk the `IN` lists.
 
+## The `PausedDirectiveDelta` suite doc still carries the false framing
+
+`WorldTickTests.swift:684-686` asserts "a pause landing mid-tick is honoured on
+the NEXT tick, up to 5s later". The tests underneath it now prove otherwise: the
+pause is erased by the whole-row write and must be re-applied. The final fix wave
+corrected the two test docs but was never pointed at the suite-level one above
+them, so this is the first thing a reader meets and the last place still saying
+it. One-line fix; see ticket 10 for the underlying defect.
+
 ## Two comments whose guarantees became temporal
 
 - `DirectiveExecutor.swift:285-287` still argues `.opCompleted` writes are
