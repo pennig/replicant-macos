@@ -95,9 +95,8 @@ import UniverseModels
         #expect(core.peers == world.peers)
         #expect(!core.peers.isEmpty)
 
-        // `theatreRecords`, `meshSystems` and `replicants` have no counterpart
-        // on `WorldSnapshot` — `WorldView.read(from:core:now:)` is their only
-        // consumer — so a non-emptiness check is what stands in for `==` here.
+        // `theatreRecords`, `meshSystems`, `replicants` have no `WorldSnapshot`
+        // counterpart, so non-emptiness stands in for `==` here.
         #expect(!core.theatreRecords.isEmpty)
         #expect(!core.meshSystems.isEmpty)
         #expect(!core.replicants.isEmpty)

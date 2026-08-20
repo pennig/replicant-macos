@@ -298,6 +298,7 @@ private final class CountingWriter: DatabaseWriter, @unchecked Sendable {
         let small = try await statementCounts(directives: 2, markers: markers)
         let large = try await statementCounts(directives: 8, markers: markers)
         for marker in markers {
+            #expect(small[marker]! > 0, "\(marker) must actually be read")
             #expect(small[marker] == large[marker], "\(marker) must not scale with the roster")
         }
     }

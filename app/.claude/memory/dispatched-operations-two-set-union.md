@@ -49,11 +49,15 @@ DirectiveLogEntry.where { entry in
 
 `ClosingCompletion` is a `Table.as(_:)` self-join alias — without it the inner query's unaliased
 `"directiveLogEntries"` shadows the outer reference and the correlation silently breaks. This is exact
-per directive with no batch-wide assumption, dropping either half of the correlation reopens the
-same-operation-id bug (`aSiblingsCompletionOfTheSameOperationIDNeverClosesMyDispatch` pins it, and stays
-red under that mutation). `directive_log_by_directive_kind` (`directiveID, kind, operationID`) makes both
-the outer scan and the inner subquery an indexed `SEARCH`, the inner one a covering-index point lookup —
-`EXPLAIN QUERY PLAN` confirms neither side is a table scan.
+per directive with no batch-wide assumption, and each half of the correlation has its own defender:
+dropping `directiveID` reopens the same-operation-id bug and turns
+`aSiblingsCompletionOfTheSameOperationIDNeverClosesMyDispatch` red; dropping `operationID` instead lets
+ANY completion on a directive close ALL of that directive's open dispatches, which
+`excludesDispatchesThatAlreadyHaveACompletion` catches (its D1 fixture carries a settled pair alongside
+a still-pending dispatch, so an operationID-blind anti-join wrongly closes the pending one too).
+`directive_log_by_directive_kind` (`directiveID, kind, operationID`) makes both the outer scan and the
+inner subquery an indexed `SEARCH`, the inner one a covering-index point lookup — `EXPLAIN QUERY PLAN`
+confirms neither side is a table scan.
 
 The eliminated completion fetch was ~1,772 rows, now returned as the 3-row worklist directly.
 
