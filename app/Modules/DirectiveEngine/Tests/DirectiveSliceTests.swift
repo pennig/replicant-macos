@@ -529,3 +529,27 @@ private func sliceDirective() -> Directive {
         }
     }
 }
+
+@Suite struct DirectiveSliceInListChunking {
+    /// A single directive's `targets` crossing `inListChunkSize` — a live
+    /// roaming directive already carries 564 — so the `SiteAssay` fetch must
+    /// span two chunks. Seeding an assay in each proves both are actually
+    /// read and merged, not just the first.
+    @Test func targetsSpanningTwoChunksAreAllReadAndMerged() async throws {
+        let database = try GameDatabase.bootstrap()
+        let targetCount = DirectiveSlice.inListChunkSize + 50
+        let targets = (0..<targetCount).map { "SYS\($0)" }
+        let directive = directiveFixture(id: "D1", deviceCode: "V1", targets: targets)
+        try await database.write { db in
+            try seedSalvageAssay(db, id: "SITE-FIRST", system: targets[0], totals: ["metal": 1])
+            try seedSalvageAssay(
+                db, id: "SITE-SECOND-CHUNK", system: targets[targetCount - 1], totals: ["metal": 2]
+            )
+        }
+        try await database.read { db in
+            let core = try WorldCore.read(from: db)
+            let batched = try DirectiveSlice.readAll(from: db, core: core, directives: [directive])
+            #expect(batched["D1"]?.siteAssays.keys.sorted() == ["SITE-FIRST", "SITE-SECOND-CHUNK"])
+        }
+    }
+}

@@ -72,6 +72,10 @@ actor DirectiveEngineCore {
     private var brainTick: (task: Task<Void, Never>, generation: UInt64)?
     /// One evaluation loop per running directive, keyed by directive id.
     private var executors: [String: Task<Void, Never>] = [:]
+    /// The tick loop's monotonic counter — an actor field, not a loop-local, so
+    /// a stop()→start() cycle never reuses a generation a pre-stop brain task
+    /// could still resolve against.
+    private var tickGeneration: UInt64 = 0
     /// Where each executor waits for its tick. Buffering the NEWEST alone is
     /// what keeps a directive's evaluations serial: a tick arriving mid-
     /// evaluation replaces the pending one rather than starting a second.
@@ -105,13 +109,18 @@ actor DirectiveEngineCore {
         @Dependency(\.continuousClock) var clock
         let tick = self.tick
         tickLoop = Task { [weak self] in
-            var generation: UInt64 = 0
             while !Task.isCancelled {
-                generation &+= 1
-                await self?.runTick(generation: generation)
+                await self?.runNextTick()
                 try? await clock.sleep(for: tick)
             }
         }
+    }
+
+    /// Bumps `tickGeneration` and runs one tick — split out of `start()`'s loop
+    /// so the counter lives on the actor, not the loop closure.
+    private func runNextTick() async {
+        tickGeneration &+= 1
+        await runTick(generation: tickGeneration)
     }
 
     /// Cancel every loop and clear the why-view's feed. Must complete before the

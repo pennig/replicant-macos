@@ -71,7 +71,9 @@ existing tests are the regression net.
 2. **Executors stay concurrent.** One `Task` per directive as today; each takes
    its slice, runs its machine, and applies its own write in its own
    transaction. Per-directive cancellation, error isolation and write
-   concurrency are unchanged.
+   concurrency are unchanged — true of *evaluation*. The READ is not: it moves
+   from 22 independent per-directive transactions to one shared tick read, so a
+   directive no longer sees its own private instant of the world.
 3. **The brain shares the batch.** `WorldView` is derived from the same
    transaction rather than re-reading eight of the same tables, so the brain and
    the directives decide from an identical world.

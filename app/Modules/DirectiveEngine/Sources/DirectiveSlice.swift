@@ -46,6 +46,26 @@ public struct DirectiveSlice: Equatable, Sendable {
         log: [], auditLog: [], dispatchedOperations: [:], systems: [:], siteAssays: [:]
     )
 
+    /// Bind size for every `.in(...)` list built from directive targets —
+    /// comfortably under SQLite's legacy 999-variable limit. Not `private`,
+    /// so a test can size its fixture off the real value.
+    static let inListChunkSize = 500
+
+    /// Runs `fetch` once per `inListChunkSize`-sized slice of `values`,
+    /// concatenating the results — keeps one `.in(...)` binding under SQLite's
+    /// variable-count limit no matter how large the union of targets grows.
+    private static func fetchChunked<Row>(
+        _ values: Set<String>, fetch: (_ chunk: [String]) throws -> [Row]
+    ) throws -> [Row] {
+        let ordered = Array(values)
+        var rows: [Row] = []
+        for start in stride(from: 0, to: ordered.count, by: inListChunkSize) {
+            let chunk = Array(ordered[start..<min(start + inListChunkSize, ordered.count)])
+            rows.append(contentsOf: try fetch(chunk))
+        }
+        return rows
+    }
+
     /// One directive-scoped read of the fields the shared `core` cannot
     /// answer. Call inside the same `database.read { db in … }` block as
     /// `WorldCore.read`, same as `WorldView.read`.
@@ -166,7 +186,9 @@ public struct DirectiveSlice: Equatable, Sendable {
             allDecoded.formUnion(decoded)
         }
 
-        let details = try SystemDetail.where { $0.designation.in(Array(allDecoded)) }.fetchAll(db)
+        let details = try fetchChunked(allDecoded) { chunk in
+            try SystemDetail.where { $0.designation.in(chunk) }.fetchAll(db)
+        }
         // A blob that fails to decode is treated as absent: the mission
         // then can't prove the target is scanned and surveys it again,
         // which is the safe direction to be wrong in.
@@ -174,7 +196,9 @@ public struct DirectiveSlice: Equatable, Sendable {
             if let system = try? detail.system() { systems[detail.designation] = system }
         }
 
-        let assays = try SiteAssay.where { $0.system.in(Array(allWanted)) }.fetchAll(db)
+        let assays = try fetchChunked(allWanted) { chunk in
+            try SiteAssay.where { $0.system.in(chunk) }.fetchAll(db)
+        }
 
         var result: [String: DirectiveSlice] = [:]
         for directive in directives {

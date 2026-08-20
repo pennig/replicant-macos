@@ -284,8 +284,8 @@ enum DirectiveExecutor {
     /// timeline gap, and the summary names which it was.
     ///
     /// Idempotent through the log itself — an op id already carrying an
-    /// `.opCompleted` entry is skipped, and the engine runs one executor per
-    /// directive, so there is no second writer to race.
+    /// `.opCompleted` entry is skipped. Reading the worklist at tick time makes
+    /// this a narrow-window guarantee, not a structural one: worst case is a duplicate row.
     ///
     /// Known gap, accepted: a directive that leaves `.running` before its last
     /// dispatched op closes gets no entry for that op, because `evaluateOnce`

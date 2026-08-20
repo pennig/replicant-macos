@@ -2,7 +2,7 @@
 //  WorldCoreTests.swift
 //  Replicould — DirectiveEngine
 //
-//  The global half of a world read — the 13 fields identical for every
+//  The global half of a world read — the 16 fields identical for every
 //  directive, and therefore the half worth reading once per tick.
 //
 
@@ -65,6 +65,12 @@ import UniverseModels
             }.execute(db)
             try seedLocationEvent(db, designation: "EVT1", location: "SOL-3")
             try seedReplicant(db, code: "REP1", star: "SOL", hostedDeviceCode: "V1")
+            try TheatreRecord.insert {
+                TheatreRecord(
+                    depot: "SOL-3", system: "SOL", origin: "pinned",
+                    establishedAt: Date(timeIntervalSince1970: 0)
+                )
+            }.execute(db)
         }
 
         let core = try await database.read { db in try WorldCore.read(from: db) }
@@ -88,5 +94,12 @@ import UniverseModels
         #expect(core.replicantHostDevices == world.replicantHostDevices)
         #expect(core.peers == world.peers)
         #expect(!core.peers.isEmpty)
+
+        // `theatreRecords`, `meshSystems` and `replicants` have no counterpart
+        // on `WorldSnapshot` — `WorldView.read(from:core:now:)` is their only
+        // consumer — so a non-emptiness check is what stands in for `==` here.
+        #expect(!core.theatreRecords.isEmpty)
+        #expect(!core.meshSystems.isEmpty)
+        #expect(!core.replicants.isEmpty)
     }
 }

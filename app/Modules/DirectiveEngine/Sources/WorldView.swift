@@ -150,8 +150,8 @@ public struct WorldView: Equatable, Sendable {
     }
 
     /// The tick's view: `core`'s overlapping tables reused, plus only what
-    /// `core` cannot supply — salvage, theatre records, belts/survey,
-    /// replicant stars, theatre stock — read from the same `db` `core` came from.
+    /// `core` cannot supply — salvage, belts/survey, theatre stock — read from
+    /// the same `db` `core` came from.
     public static func read(from db: Database, core: WorldCore, now: Date) throws -> WorldView {
         // Sorted, same key `read(from:now:)` sorts by — a dictionary's
         // iteration order is undefined, and whole-array equality is not.
@@ -167,15 +167,11 @@ public struct WorldView: Equatable, Sendable {
             totals[assay.system, default: 0] += assay.totals.values.reduce(0, +)
         }
 
-        let theatreRecords = try TheatreRecord.order { $0.depot }.fetchAll(db)
-
         let surveyed = try SystemDetail
             .where { $0.systemScanned }
             .select { $0.designation }
             .fetchAll(db)
         let belts = try Self.beltsBySystem(in: db)
-
-        let replicants = try Replicant.all.fetchAll(db)
 
         let operationalDepots = Set(core.theatres.filter(\.isOperational).map(\.depot))
         let inventoryRows = operationalDepots.isEmpty ? [] : try LocationInventory
@@ -186,16 +182,16 @@ public struct WorldView: Equatable, Sendable {
         return WorldView(
             devices: core.devices,
             starPositions: core.starPositions,
-            meshSystems: SalvageTargetPlanner.meshSystems(in: Array(core.devices.values)),
+            meshSystems: core.meshSystems,
             salvageUnits: salvage,
             eventSystems: Set(events.filter(\.isActive).map { SiteAssay.system(of: $0.location) }),
             theatres: core.theatres,
-            theatreRecords: theatreRecords,
+            theatreRecords: core.theatreRecords,
             components: core.components,
             beltsBySystem: belts,
             surveyedSystems: Set(surveyed),
             replicantSystems: Set(
-                replicants.compactMap { $0.currentStar.map { SiteAssay.system(of: $0) } }
+                core.replicants.compactMap { $0.currentStar.map { SiteAssay.system(of: $0) } }
             ),
             replicantHostDevices: core.replicantHostDevices,
             stockpileUnits: stockpileUnits,

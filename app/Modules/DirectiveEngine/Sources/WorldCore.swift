@@ -3,7 +3,7 @@
 //  Replicould — DirectiveEngine
 //
 //  The half of a world read that does not depend on which directive is asking:
-//  13 fields, identical for all of them, and therefore read ONCE per tick
+//  16 fields, identical for all of them, and therefore read ONCE per tick
 //  rather than once per directive. Splitting this out is what took the engine
 //  from 22 whole-table reads every five seconds to one.
 //
@@ -39,6 +39,15 @@ public struct WorldCore: Equatable, Sendable {
     public let locationEvents: [String: LocationEvent]
     public let replicantHostDevices: Set<String>
     public let peers: [Directive]
+    /// The persisted depot per system — `WorldView.read(from:core:now:)` reuses
+    /// this instead of re-fetching the same table.
+    public let theatreRecords: [TheatreRecord]
+    /// Systems holding a relaying relay, from `SalvageTargetPlanner.meshSystems(in:)`
+    /// over `devices` — computed here once rather than recomputed per reader.
+    public let meshSystems: Set<String>
+    /// The account's replicant roster, raw — `replicantHostDevices` above is
+    /// derived from it; `WorldView` needs the rows themselves for `currentStar`.
+    public let replicants: [Replicant]
 
     public init(
         devices: [String: Device],
@@ -53,7 +62,10 @@ public struct WorldCore: Equatable, Sendable {
         theatres: [Theatre],
         locationEvents: [String: LocationEvent],
         replicantHostDevices: Set<String>,
-        peers: [Directive]
+        peers: [Directive],
+        theatreRecords: [TheatreRecord],
+        meshSystems: Set<String>,
+        replicants: [Replicant]
     ) {
         self.devices = devices
         self.openOperations = openOperations
@@ -68,6 +80,9 @@ public struct WorldCore: Equatable, Sendable {
         self.locationEvents = locationEvents
         self.replicantHostDevices = replicantHostDevices
         self.peers = peers
+        self.theatreRecords = theatreRecords
+        self.meshSystems = meshSystems
+        self.replicants = replicants
     }
 
     /// One consistent read of everything a world read needs regardless of
@@ -128,9 +143,10 @@ public struct WorldCore: Equatable, Sendable {
         // Same `TheatreRegistry` call `WorldView.read` makes — two lists
         // of theatres in one process would be a real hazard.
         let pins = try TheatrePin.all.fetchAll(db)
+        let theatreRecords = try TheatreRecord.order { $0.depot }.fetchAll(db)
         let theatres = TheatreRegistry.recognise(
             devices: devices, pins: pins,
-            records: try TheatreRecord.order { $0.depot }.fetchAll(db), meshSystems: mesh,
+            records: theatreRecords, meshSystems: mesh,
             components: components, stockByLocation: footprints.mapValues(\.resources)
         )
 
@@ -140,9 +156,8 @@ public struct WorldCore: Equatable, Sendable {
         let locationEvents = Dictionary(
             eventRows.map { ($0.designation, $0) }, uniquingKeysWith: { _, last in last }
         )
-        let replicantHostDevices = Set(
-            try Replicant.all.fetchAll(db).compactMap(\.hostedDeviceCode)
-        )
+        let replicants = try Replicant.all.fetchAll(db)
+        let replicantHostDevices = Set(replicants.compactMap(\.hostedDeviceCode))
 
         return WorldCore(
             devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
@@ -160,7 +175,10 @@ public struct WorldCore: Equatable, Sendable {
             theatres: theatres,
             locationEvents: locationEvents,
             replicantHostDevices: replicantHostDevices,
-            peers: peers
+            peers: peers,
+            theatreRecords: theatreRecords,
+            meshSystems: mesh,
+            replicants: replicants
         )
     }
 }

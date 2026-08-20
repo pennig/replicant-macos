@@ -18,6 +18,9 @@ import UniverseModels
 /// directive's own `slice`, and the roster itself. `snapshot(for:)` composes
 /// the public `WorldSnapshot` a step machine actually evaluates against.
 public struct WorldTick: Sendable {
+    /// The tick loop's counter at read time — the same value
+    /// `DirectiveEngineCore` uses as its brain-tick slot's key. Not compared
+    /// anywhere else in production; staleness is `bufferingNewest(1)`'s job.
     public let generation: UInt64
     public let core: WorldCore
     public let slices: [String: DirectiveSlice]
