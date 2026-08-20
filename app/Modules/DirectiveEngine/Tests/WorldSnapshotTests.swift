@@ -30,12 +30,13 @@ private func device(_ code: String, updatedAt: Date = Date(timeIntervalSince1970
 }
 
 private func op(
-    _ id: String, device: String, status: OperationStatus, directiveID: String? = nil
+    _ id: String, device: String, status: OperationStatus, directiveID: String? = nil,
+    startedAt: Date = Date(timeIntervalSince1970: 0)
 ) -> Operation {
     Operation(
         id: id, entityCode: device, kind: OperationKind.travel.rawValue,
         status: status, source: OperationSource.optimistic,
-        startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+        startedAt: startedAt, completesAt: nil,
         lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:]),
         directiveID: directiveID
     )
@@ -233,6 +234,37 @@ struct WorldSnapshotTests {
         #expect(world.openOperation(for: "VES1")?.id == "OP1")
         #expect(world.openOperation(for: "AMI1") == nil)
         #expect(world.now == now)
+        #expect(world.queuedOperations["VES1"]?.map(\.id) == ["OP1"])
+        #expect(world.queuedOperations["AMI1"] == nil)
+    }
+
+    /// A bench's live ops come back oldest first — Task 11's completion picker
+    /// and Task 14's queue-depth read both rely on this order, not insertion
+    /// order.
+    @Test func queuedOpsAreOldestFirst() {
+        let older = op("OP-1", device: "B1", status: .active, startedAt: Date(timeIntervalSince1970: -120))
+        let newer = op("OP-2", device: "B1", status: .active, startedAt: Date(timeIntervalSince1970: -60))
+        let world = WorldSnapshot(
+            devices: [:], openOperations: [:],
+            queuedOperations: ["B1": [newer, older]],
+            now: Date(timeIntervalSince1970: 0)
+        )
+        #expect(world.queuedOperations["B1"]?.map(\.id) == ["OP-1", "OP-2"])
+    }
+
+    /// `startedAt` is a client clock stamped at dispatch, and two ops written
+    /// in one transaction can share it — `id` breaks the tie so the order
+    /// stays stable across reads.
+    @Test func queuedOpsTieBreakOnIDWhenStartedAtTies() {
+        let shared = Date(timeIntervalSince1970: 0)
+        let opA = op("OP-A", device: "B1", status: .active, startedAt: shared)
+        let opB = op("OP-B", device: "B1", status: .active, startedAt: shared)
+        let world = WorldSnapshot(
+            devices: [:], openOperations: [:],
+            queuedOperations: ["B1": [opB, opA]],
+            now: Date(timeIntervalSince1970: 0)
+        )
+        #expect(world.queuedOperations["B1"]?.map(\.id) == ["OP-A", "OP-B"])
     }
 
     /// An optimistic op counts as open: it is a command the app has staged but

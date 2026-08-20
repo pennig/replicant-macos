@@ -27,6 +27,10 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// excluded: a step machine asks "is this device busy?", and a completed op
     /// is not busy.
     public let openOperations: [String: GameModels.Operation]
+    /// Every live operation per device, oldest first — `(startedAt, id)`
+    /// tie-broken, since two ops in one transaction can share a `startedAt`.
+    /// One entry per device until the print index relaxes; several after.
+    public let queuedOperations: [String: [GameModels.Operation]]
     /// This directive's newest `logWindow` timeline entries, ascending.
     /// Completion detection reads the `directive.completed` ROW here rather
     /// than the event, which is what keeps missions replay-immune.
@@ -135,6 +139,7 @@ public struct WorldSnapshot: Equatable, Sendable {
     public init(
         devices: [String: Device],
         openOperations: [String: GameModels.Operation],
+        queuedOperations: [String: [GameModels.Operation]] = [:],
         log: [DirectiveLogEntry] = [],
         auditLog: [DirectiveLogEntry] = [],
         dispatchedOperations: [String: GameModels.Operation] = [:],
@@ -154,6 +159,9 @@ public struct WorldSnapshot: Equatable, Sendable {
     ) {
         self.devices = devices
         self.openOperations = openOperations
+        self.queuedOperations = queuedOperations.mapValues {
+            $0.sorted { $0.startedAt == $1.startedAt ? $0.id < $1.id : $0.startedAt < $1.startedAt }
+        }
         self.log = log
         self.auditLog = auditLog
         self.dispatchedOperations = dispatchedOperations
@@ -381,6 +389,7 @@ public struct WorldSnapshot: Equatable, Sendable {
             return WorldSnapshot(
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: Dictionary(operations.map { ($0.entityCode, $0) }, uniquingKeysWith: { _, last in last }),
+                queuedOperations: Dictionary(grouping: operations, by: \.entityCode),
                 log: log,
                 auditLog: auditLog,
                 dispatchedOperations: dispatched,
