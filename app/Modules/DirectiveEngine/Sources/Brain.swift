@@ -450,7 +450,7 @@ struct Brain: Sendable {
                 }
                 // The independently-mobile leases — in here beside the carrier,
                 // since a snapshot check predates this tick's launches.
-                if let freighter = directive.leasedFreighters.first(where: reserved.contains) {
+                if let freighter = directive.freighterCodes.first(where: reserved.contains) {
                     logger.notice(
                         """
                         \(kind.rawValue, privacy: .public) declined: \

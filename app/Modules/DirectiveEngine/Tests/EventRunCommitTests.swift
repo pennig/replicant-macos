@@ -170,7 +170,7 @@ struct EventRunCommitTests {
     private func verdict(rewards: [String: Int], hold: Int?, used: Int = 0) -> EventRun.Sweep {
         EventRun.sweep(
             metEvent(met: true, replicant: true, status: "completed", rewards: rewards),
-            into: onSite(now, hold: hold, used: used).first { $0.deviceCode == "FREIGHT" }!
+            across: onSite(now, hold: hold, used: used).filter { $0.deviceType == "cargo_freighter" }
         )
     }
 
@@ -221,7 +221,21 @@ struct EventRunCommitTests {
     func sweepTrichotomy() {
         #expect(verdict(rewards: [:], hold: 500) == .nothingPaid)
         #expect(verdict(rewards: ["rares": 400], hold: 500, used: 500) == .willNotFit(["rares": 400]))
-        #expect(verdict(rewards: ["rares": 400], hold: 500) == .lift(["rares": 400]))
-        #expect(verdict(rewards: ["rares": 800], hold: 500) == .lift(["rares": 500]))
+        #expect(verdict(rewards: ["rares": 400], hold: 500).lifted == ["rares": 400])
+        #expect(verdict(rewards: ["rares": 800], hold: 500).lifted == ["rares": 500])
+        #expect(verdict(rewards: ["rares": 800], hold: 500).left == ["rares": 300])
+    }
+}
+
+/// Reading a `.lift` without restating the whole payload at every assertion.
+private extension EventRun.Sweep {
+    var lifted: [String: Int]? {
+        if case let .lift(berth, _) = self { return berth.take }
+        return nil
+    }
+
+    var left: [String: Int]? {
+        if case let .lift(_, unswept) = self { return unswept }
+        return nil
     }
 }

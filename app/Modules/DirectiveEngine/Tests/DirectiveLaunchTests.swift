@@ -97,12 +97,12 @@ struct DirectiveLaunchTests {
     @Test func anEventRunCarriesTheTheatreScopedEventTagAndBothHulls() {
         let row = Directive.launch(
             .init(kind: .eventRun, deviceCode: "CARRIER-1", theatre: theatre, targets: ["SOL-3"],
-                  returnToOrigin: true, originDesignation: theatre.system, freighterCode: "FREIGHT-1"),
+                  returnToOrigin: true, originDesignation: theatre.system, freighterCodes: ["FREIGHT-1"]),
             id: "D7", now: now
         )
         #expect(row.step == EventRun().firstStep)
         #expect(row.fleetTag == EventRun.fleetTag(forTheatre: theatre.depot).string)
-        #expect(row.freighterCode == "FREIGHT-1")
+        #expect(row.freighterCodes == ["FREIGHT-1"])
     }
 
     @Test func aRelayRunIsUntagged() {

@@ -114,7 +114,7 @@ private func stagedConvoy() -> [Device] {
 }
 
 private func liveEventRun(
-    id: String, carrier: String, freighter: String?, target: String,
+    id: String, carrier: String, freighters: [String], target: String,
     status: DirectiveStatus = .running
 ) -> Directive {
     Directive(
@@ -124,7 +124,7 @@ private func liveEventRun(
         targets: [target], targetIndex: 0, step: EventRun.Step.departing.rawValue,
         stepStartedAt: .distantPast, returnToOrigin: true, originDesignation: "HUB",
         attentionReason: nil, createdAt: .distantPast, updatedAt: .distantPast,
-        theatreDepot: eventDepot, freighterCode: freighter
+        theatreDepot: eventDepot, freighterCodes: freighters
     )
 }
 
@@ -311,7 +311,7 @@ struct BrainEventReadinessTests {
     @Test("a live run's event, carrier and freighter are all excluded at once")
     func liveRunExcludesEveryLeaseItHolds() {
         let live = liveEventRun(
-            id: "d1", carrier: "CARRIER-A", freighter: "FREIGHT-A", target: "X-1-EVT-001"
+            id: "d1", carrier: "CARRIER-A", freighters: ["FREIGHT-A"], target: "X-1-EVT-001"
         )
         let readiness = Brain.eventReadiness(
             view: eventView(
@@ -334,7 +334,7 @@ struct BrainEventReadinessTests {
     @Test("an event a live run already targets is not re-launched")
     func excludesLiveTarget() {
         let live = liveEventRun(
-            id: "d1", carrier: "CARRIER-A", freighter: "FREIGHT-A", target: "X-1-EVT-001"
+            id: "d1", carrier: "CARRIER-A", freighters: ["FREIGHT-A"], target: "X-1-EVT-001"
         )
         let readiness = Brain.eventReadiness(
             view: eventView(
@@ -349,7 +349,7 @@ struct BrainEventReadinessTests {
     @Test("a halted run still owns its convoy")
     func haltedRunStillHoldsItsLeases() {
         let live = liveEventRun(
-            id: "d1", carrier: "CARRIER-A", freighter: "FREIGHT-A", target: "X-1-EVT-001",
+            id: "d1", carrier: "CARRIER-A", freighters: ["FREIGHT-A"], target: "X-1-EVT-001",
             status: .needsAttention
         )
         let readiness = Brain.eventReadiness(
@@ -506,7 +506,7 @@ struct BrainEventReservationTests {
         let reserved = Brain.reservedDevices(
             directives: [
                 liveEventRun(
-                    id: "d1", carrier: "CARRIER-A", freighter: "FREIGHT-A", target: "X-1-EVT-001"
+                    id: "d1", carrier: "CARRIER-A", freighters: ["FREIGHT-A"], target: "X-1-EVT-001"
                 )
             ],
             devices: devices
@@ -523,7 +523,7 @@ struct BrainEventReservationTests {
         let reserved = Brain.reservedDevices(
             directives: [
                 liveEventRun(
-                    id: "d1", carrier: "CARRIER-A", freighter: "FREIGHT-A",
+                    id: "d1", carrier: "CARRIER-A", freighters: ["FREIGHT-A"],
                     target: "X-1-EVT-001", status: .completed
                 )
             ],
@@ -538,7 +538,7 @@ struct BrainEventReservationTests {
         #expect(!Brain.brainManagedKinds.contains(.eventCourierPrint))
 
         var stalled = liveEventRun(
-            id: "d1", carrier: "CARRIER-A", freighter: "FREIGHT-A", target: "X-1-EVT-001",
+            id: "d1", carrier: "CARRIER-A", freighters: ["FREIGHT-A"], target: "X-1-EVT-001",
             status: .needsAttention
         )
         stalled.attentionReason = .eventCommitRejected
@@ -613,7 +613,7 @@ struct BrainEnsureEventTests {
         #expect(directives.count == 1)
         #expect(run.kind == .eventRun)
         #expect(run.deviceCode == "CARRIER-A")
-        #expect(run.freighterCode == "FREIGHT-A")
+        #expect(run.freighterCodes == ["FREIGHT-A"])
         #expect(run.targets == [eventDesignation])
         #expect(run.fleetTag == EventRun.fleetTag(forTheatre: growHubLocation).string)
         #expect(run.step == EventRun().firstStep)
@@ -671,7 +671,7 @@ struct BrainEnsureOneFreighterTests {
 
     private func run(freighter: String) -> Directive {
         liveEventRun(
-            id: "new", carrier: "CARRIER-B", freighter: freighter, target: "X-1-EVT-001"
+            id: "new", carrier: "CARRIER-B", freighters: [freighter], target: "X-1-EVT-001"
         )
     }
 

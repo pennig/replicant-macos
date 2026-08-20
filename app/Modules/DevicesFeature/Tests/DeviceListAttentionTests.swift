@@ -185,7 +185,7 @@ import Utils
     @Test func directiveJoinsOnFreighterCode() {
         let device = makeDevice("FREIGHT1")
         let directive = makeDirective(
-            kind: .eventRun, deviceCode: "CARRIER1", freighterCode: "FREIGHT1",
+            kind: .eventRun, deviceCode: "CARRIER1", freighterCodes: ["FREIGHT1"],
             reason: .commandRejected
         )
         expectNoDifference(

@@ -200,6 +200,171 @@ struct EventRunMultiFreighterTests {
         #expect(departing(placed) == .advanceStep(nextStep: EventRun.Step.confirmingArrival.rawValue))
     }
 
+    // MARK: - The convoy is the unit of room
+
+    /// The convoy at the event, `used` naming each hull's cargo. Nothing rides
+    /// the carrier but the courier, so `staging` reaches its deposit plan.
+    private func onSiteHulls(_ used: [Int]) -> [Device] {
+        var devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", location: "X-1", updatedAt: now),
+            EventRunFixtures.courier(attachedTo: "CARRIER", location: "X-1", updatedAt: now),
+        ]
+        for (index, cargo) in used.enumerated() {
+            devices.append(EventRunFixtures.device(
+                "FREIGHT-\(index + 1)", type: "cargo_freighter", location: "X-1", updatedAt: now,
+                cargoUsed: cargo, cargoCapacity: 500
+            ))
+        }
+        return devices
+    }
+
+    /// The reward goes to the hull with the MOST room, not merely the first with
+    /// any: 400 units fit whole in the second hold and a quarter in the first.
+    @Test func theSweepTakesTheRoomiestHold() {
+        let action = EventRun().nextAction(
+            directive: directive(step: .collecting, codes: ["FREIGHT-1", "FREIGHT-2"]),
+            world: EventRunFixtures.world(
+                devices: onSiteHulls([400, 0]),
+                event: EventRunFixtures.progressEvent(
+                    met: true, replicant: true, status: "completed", rewards: ["rares": 400]
+                ),
+                now: now
+            )
+        )
+        #expect(action == .dispatch(
+            kind: .collectResources, deviceCode: "FREIGHT-2",
+            params: CommandParams(resources: ["rares": 400]),
+            nextStep: EventRun.Step.recovering.rawValue
+        ))
+    }
+
+    /// A convoy whose holds cannot take the bill says so at the event with the
+    /// same words it would have used at the depot, rather than improvising a
+    /// berth on whichever hull leads the list.
+    @Test func stagingStallsRatherThanImprovisingABerth() {
+        let action = EventRun().nextAction(
+            directive: directive(step: .staging, codes: ["FREIGHT-1"]),
+            world: EventRunFixtures.world(
+                devices: onSiteHulls([0]), event: Megaproject.event(), now: now
+            )
+        )
+        #expect(action == .stall(.eventLoadExceedsHold, detail: "800 units, convoy holds 500"))
+    }
+
+    // MARK: - Unloading every hold
+
+    /// The convoy home at the depot with `used` naming each hull's cargo.
+    private func homeHulls(_ used: [Int]) -> [Device] {
+        var devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", updatedAt: now),
+            EventRunFixtures.courier(attachedTo: "CARRIER", updatedAt: now),
+        ]
+        for (index, cargo) in used.enumerated() {
+            devices.append(EventRunFixtures.device(
+                "FREIGHT-\(index + 1)", type: "cargo_freighter", updatedAt: now,
+                cargoUsed: cargo, cargoCapacity: 500
+            ))
+        }
+        return devices
+    }
+
+    /// The log of a deposit cycle in which `codes` have already been ordered.
+    private func depositLog(_ codes: [String]) -> [DirectiveLogEntry] {
+        var entries = [DirectiveLogEntry(
+            id: "L0", directiveID: "d1", deviceCode: "CARRIER", kind: .stepStarted,
+            summary: "depositing", step: EventRun.Step.depositing.rawValue,
+            operationID: nil, eventID: nil, occurredAt: now
+        )]
+        for (index, code) in codes.enumerated() {
+            entries.append(DirectiveLogEntry(
+                id: "L\(index + 1)", directiveID: "d1", deviceCode: "CARRIER",
+                kind: .commandDispatched, summary: "deposit",
+                step: EventRun.Step.confirmingDeposit.rawValue, operationID: nil, eventID: nil,
+                occurredAt: now, commandKind: OperationKind.depositResources.rawValue,
+                targetDeviceCode: code
+            ))
+        }
+        return entries
+    }
+
+    private func unloading(
+        _ step: EventRun.Step, used: [Int], ordered: [String] = [],
+        codes: [String] = ["FREIGHT-1", "FREIGHT-2"]
+    ) -> MissionAction {
+        EventRun().nextAction(
+            directive: directive(step: step, codes: codes),
+            world: EventRunFixtures.world(
+                devices: homeHulls(used), event: Megaproject.event(), now: now,
+                log: depositLog(ordered)
+            )
+        )
+    }
+
+    /// The second hold, and the bug that left it full: a round budget read off
+    /// the LADEN hulls shrinks as they empty and retires the loop early.
+    @Test func everyLadenHullIsOrderedToUnload() {
+        #expect(unloading(.depositing, used: [350, 200]) == .dispatch(
+            kind: .depositResources, deviceCode: "FREIGHT-1", params: CommandParams(),
+            nextStep: EventRun.Step.confirmingDeposit.rawValue
+        ))
+        #expect(unloading(.depositing, used: [0, 200], ordered: ["FREIGHT-1"]) == .dispatch(
+            kind: .depositResources, deviceCode: "FREIGHT-2", params: CommandParams(),
+            nextStep: EventRun.Step.confirmingDeposit.rawValue
+        ))
+    }
+
+    /// The confirm judges the hull it ordered, so an emptied one hands back for
+    /// the next rather than waiting on a convoy that is not all empty yet.
+    @Test func theConfirmHandsBackWhileAnotherHullIsStillLaden() {
+        #expect(
+            unloading(.confirmingDeposit, used: [0, 200], ordered: ["FREIGHT-1"])
+                == .advanceStep(nextStep: EventRun.Step.depositing.rawValue)
+        )
+    }
+
+    /// A hull that will not empty is the one judged, never a sibling: the stall
+    /// names the hull that was ordered and no other.
+    @Test func theOrderedHullIsTheOneJudged() {
+        var row = directive(step: .confirmingDeposit, codes: ["FREIGHT-1", "FREIGHT-2"])
+        row.stepStartedAt = now.addingTimeInterval(-EventRun.depositConfirmDeadline - 1)
+        let action = EventRun().nextAction(
+            directive: row,
+            world: EventRunFixtures.world(
+                devices: homeHulls([350, 200]), event: Megaproject.event(), now: now,
+                log: depositLog(["FREIGHT-1"])
+            )
+        )
+        #expect(action == .refreshDevices(deviceCodes: ["FREIGHT-1"], thenStall: .commandRejected))
+    }
+
+    /// Every hold empty ends the run whatever the log says.
+    @Test func anEmptyConvoyIsDone() {
+        #expect(unloading(.depositing, used: [0, 0], ordered: ["FREIGHT-1", "FREIGHT-2"]) == .done)
+    }
+
+    // MARK: - One hull is not a special case
+
+    /// A convoy of one walks the same step as a convoy of two: there is no
+    /// second code path left for the two to drift apart on.
+    @Test func aSingleHullUnloadsThroughTheSameStep() {
+        #expect(unloading(.depositing, used: [350], codes: ["FREIGHT-1"]) == .dispatch(
+            kind: .depositResources, deviceCode: "FREIGHT-1", params: CommandParams(),
+            nextStep: EventRun.Step.confirmingDeposit.rawValue
+        ))
+    }
+
+    /// A row leasing no freighter has no singular field to fall back on, so the
+    /// step buys a fleet read rather than improvising a hull.
+    @Test func aRowLeasingNoFreighterReadsTheFleet() {
+        let action = EventRun().nextAction(
+            directive: directive(step: .loading, codes: []),
+            world: EventRunFixtures.world(
+                devices: convoy([500]), event: Megaproject.event(), now: now
+            )
+        )
+        #expect(action == .refreshFleet(tag: EventRun.rootTag, thenStall: .unreachableDevice))
+    }
+
     // MARK: - Departing abreast
 
     /// The convoy mid-departure with `crossing` naming the hulls whose travel op
@@ -309,14 +474,5 @@ struct EventRunMultiFreighterTests {
     /// hold that has not landed.
     @Test func aConvoyFlyingHomeWaitsRatherThanDepositing() {
         #expect(returning(crossing: ["CARRIER", "FREIGHT-1", "FREIGHT-2"]) == .wait)
-    }
-
-    /// A row written through the single-freighter mirror still leases its hull,
-    /// so nothing that predates the list goes unreserved.
-    @Test func theMirrorAloneStillLeases() {
-        var row = EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now)
-        row.freighterCodes = []
-        row.freighterCode = "FREIGHT-1"
-        #expect(row.leasedFreighters == ["FREIGHT-1"])
     }
 }

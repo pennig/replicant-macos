@@ -152,7 +152,7 @@ struct OwnershipPortedReservationTests {
             deviceFixture(code: "FREIGHT-A", type: "cargo_freighter"),
         ])
         var live = directiveFixture(id: "d1", kind: .eventRun, deviceCode: "CARRIER-A")
-        live.freighterCode = "FREIGHT-A"
+        live.freighterCodes = ["FREIGHT-A"]
         var finished = live
         finished.status = .completed
         #expect(reserved([live], devices) == ["CARRIER-A", "FREIGHT-A"])

@@ -23,10 +23,9 @@ extension Directive {
         public var returnToOrigin: Bool
         public var originDesignation: String?
         public var controllerCode: String?
-        public var freighterCode: String?
-        /// Every cargo freighter the convoy leases, in load order. Overrides
-        /// `freighterCode`, which stays for the kinds that lease exactly one.
-        public var freighterCodes: [String]?
+        /// Every cargo freighter the convoy leases, in load order. A convoy of
+        /// one is a list of one; there is no singular form.
+        public var freighterCodes: [String]
         public var sourceRelayCode: String?
         /// A mine ferry's belt. Scopes the tag to that BELT rather than the
         /// theatre; every other `.haulRun` leaves it nil.
@@ -41,8 +40,7 @@ extension Directive {
             returnToOrigin: Bool = false,
             originDesignation: String? = nil,
             controllerCode: String? = nil,
-            freighterCode: String? = nil,
-            freighterCodes: [String]? = nil,
+            freighterCodes: [String] = [],
             sourceRelayCode: String? = nil,
             belt: String? = nil
         ) {
@@ -54,7 +52,6 @@ extension Directive {
             self.returnToOrigin = returnToOrigin
             self.originDesignation = originDesignation
             self.controllerCode = controllerCode
-            self.freighterCode = freighterCode
             self.freighterCodes = freighterCodes
             self.sourceRelayCode = sourceRelayCode
             self.belt = belt
@@ -83,7 +80,6 @@ extension Directive {
             createdAt: now,
             updatedAt: now,
             theatreDepot: launch.theatre?.depot,
-            freighterCode: launch.freighterCode,
             freighterCodes: launch.freighterCodes
         )
     }

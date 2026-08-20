@@ -163,7 +163,7 @@ enum EventRunFixtures {
             targets: ["X-1-EVT-001"], targetIndex: 0, step: step,
             stepStartedAt: now, returnToOrigin: true, originDesignation: "HUB",
             attentionReason: nil, createdAt: now, updatedAt: now,
-            theatreDepot: "HUB-1", freighterCode: "FREIGHT"
+            theatreDepot: "HUB-1", freighterCodes: ["FREIGHT"]
         )
     }
 

@@ -52,7 +52,7 @@ func makeDirective(
     status: DirectiveStatus = .needsAttention,
     deviceCode: String,
     controllerCode: String? = nil,
-    freighterCode: String? = nil,
+    freighterCodes: [String] = [],
     fleetTag: String? = nil,
     reason: DirectiveAttentionReason? = .commandRejected
 ) -> Directive {
@@ -74,6 +74,6 @@ func makeDirective(
         attentionReason: reason,
         createdAt: Date(timeIntervalSince1970: 0),
         updatedAt: Date(timeIntervalSince1970: 0),
-        freighterCode: freighterCode
+        freighterCodes: freighterCodes
     )
 }

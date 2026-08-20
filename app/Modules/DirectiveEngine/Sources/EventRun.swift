@@ -71,14 +71,13 @@ public struct EventRun: MissionStepMachine {
         directive.targets.first
     }
 
-    /// The three hulls, resolved off the row rather than re-derived.
+    /// The hulls, resolved off the row rather than re-derived. No step speaks to
+    /// one freighter: `freighters` is the only way in, however many it holds.
     public struct Convoy: Equatable, Sendable {
         public let carrier: Device
         /// Every leased freighter whose row the world holds, in load order.
         public let freighters: [Device]
         public let courier: Device?
-        /// The lead hull, for the steps that speak to one freighter at a time.
-        public var freighter: Device? { freighters.first }
     }
 
     /// A container this capability printed. An untagged one hosts some other
@@ -112,7 +111,7 @@ public struct EventRun: MissionStepMachine {
     /// Sorted before `first`, so two containers cannot resolve differently per tick.
     public static func convoy(of directive: Directive, in world: WorldSnapshot) -> Convoy? {
         guard let carrier = world.device(directive.deviceCode) else { return nil }
-        let freighters = directive.leasedFreighters.compactMap { world.device($0) }
+        let freighters = directive.freighterCodes.compactMap { world.device($0) }
         let courier = world.devices.values
             .filter {
                 guard isCourier($0, in: world) else { return false }
@@ -432,35 +431,69 @@ public struct EventRun: MissionStepMachine {
         let take: [String: Int]
     }
 
-    /// How `bill` divides across `freighters`, filling each in order, or nil
-    /// when the convoy's holds cannot take it all.
-    ///
-    /// Shares are measured against each hold's TOTAL capacity rather than its
-    /// free space, so the answer does not move as the collections land — a plan
-    /// recomputed mid-load must name the same shares it named at the start. A
-    /// hold reporting no `cargo_capacity` is unbounded here rather than empty:
-    /// the field is absent, not zero, and the server judges what it takes.
-    static func loadPlan(bill: [String: Int], across freighters: [Device]) -> [Berth]? {
+    /// One hold's share of a bill, and what no hold could take.
+    struct Division: Equatable, Sendable {
+        let berths: [Berth]
+        let unplaced: [String: Int]
+    }
+
+    /// A hold's whole capacity. The OUTBOUND measure: the launch gate leases
+    /// hulls empty, and a share cut from capacity does not move as the
+    /// collections land, so a plan recomputed mid-load names the same shares.
+    static func wholeHold(_ freighter: Device) -> Int {
+        freighter.cargoCapacity > 0 ? freighter.cargoCapacity : Int.max
+    }
+
+    /// What a hold has free. The HOMEWARD measure: a hull comes back carrying
+    /// whatever the option did not ask for, so only free space can take a reward.
+    static func freeHold(_ freighter: Device) -> Int {
+        freighter.cargoCapacity > 0 ? freighter.cargoRemaining : Int.max
+    }
+
+    /// How `bill` divides across `freighters`, filling each in order. The ONE
+    /// divider — load and sweep differ only in the `room` they measure and what
+    /// they do with `unplaced`, never in how the shares are cut. A hold
+    /// reporting no `cargo_capacity` is unbounded rather than empty: the field
+    /// is absent, not zero, and the server judges what it takes.
+    static func divide(
+        _ bill: [String: Int], across freighters: [Device], room: (Device) -> Int
+    ) -> Division {
         var remaining = bill
         var berths: [Berth] = []
         for freighter in freighters where !remaining.isEmpty {
-            var room = freighter.cargoCapacity > 0 ? freighter.cargoCapacity : Int.max
+            var free = room(freighter)
             var take: [String: Int] = [:]
             for type in remaining.keys.sorted() {
-                guard room > 0, let need = remaining[type] else { continue }
-                let units = min(need, room)
+                guard free > 0, let need = remaining[type] else { continue }
+                let units = min(need, free)
                 take[type] = units
-                room -= units
+                free -= units
                 remaining[type] = units == need ? nil : need - units
             }
             if !take.isEmpty { berths.append(Berth(freighter: freighter, take: take)) }
         }
-        return remaining.isEmpty ? berths : nil
+        return Division(berths: berths, unplaced: remaining)
+    }
+
+    /// The outbound policy on `divide`: every unit travels or none does, because
+    /// a convoy that cannot carry the option cannot finish the event.
+    static func loadPlan(bill: [String: Int], across freighters: [Device]) -> [Berth]? {
+        let division = divide(bill, across: freighters, room: wholeHold)
+        return division.unplaced.isEmpty ? division.berths : nil
     }
 
     /// Total units the convoy's holds can take, for the stall that says so.
     static func convoyHold(_ freighters: [Device]) -> Int {
         freighters.reduce(0) { $0 + $1.cargoCapacity }
+    }
+
+    /// What a step answers when `loadPlan` cannot divide `bill`. Load and stage
+    /// share it, so the same convoy cannot stall at one and improvise at the other.
+    static func holdsCannotTake(_ bill: [String: Int], _ freighters: [Device]) -> MissionAction {
+        .stall(
+            .eventLoadExceedsHold,
+            detail: "\(bill.values.reduce(0, +)) units, convoy holds \(convoyHold(freighters))"
+        )
     }
 
     /// Attach the courier, the beacon and the option's devices one per round,
@@ -505,10 +538,7 @@ public struct EventRun: MissionStepMachine {
         let bill = EventPlan.outstandingResources(option, in: event)
         if bill.isEmpty { return .advanceStep(nextStep: Step.departing.rawValue) }
         guard let plan = Self.loadPlan(bill: bill, across: convoy.freighters) else {
-            return .stall(
-                .eventLoadExceedsHold,
-                detail: "\(bill.values.reduce(0, +)) units, convoy holds \(Self.convoyHold(convoy.freighters))"
-            )
+            return Self.holdsCannotTake(bill, convoy.freighters)
         }
         // A laden hull has already taken its share: `collect_resources` is the
         // only thing that puts cargo aboard on this leg.
@@ -554,7 +584,7 @@ public struct EventRun: MissionStepMachine {
         let loose = payload.filter { $0.attachedToDeviceCode != carrier.deviceCode }
         // The hull just ordered to collect is the empty one the plan is waiting
         // on, so judge that row rather than whichever freighter leads the list.
-        let awaited = convoy.freighters.first { $0.cargoUsed == 0 } ?? convoy.freighter
+        let awaited = convoy.freighters.first { $0.cargoUsed == 0 } ?? convoy.freighters.first
         guard let next = loose.first ?? awaited else {
             return .advanceStep(nextStep: Step.loading.rawValue)
         }
@@ -684,16 +714,12 @@ public struct EventRun: MissionStepMachine {
         guard !convoy.freighters.isEmpty else {
             return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
         }
-        // The same shares the load was planned against: each hull sets down what
-        // it was filled with, so a hold carrying more than the option asked for
-        // keeps the rest. One round per laden hull bounds the loop.
         // The shares the load was planned against, so each hull sets down what it
-        // was filled with and a hold carrying more keeps the rest. Round-counted
-        // rather than read off `cargoUsed`: the deposit is what proves the hold,
-        // and the row behind it lags.
+        // was filled with. Round-counted: the deposit proves the hold, not the row.
         let bill = EventPlan.outstandingResources(option, in: event)
-        let plan = Self.loadPlan(bill: bill, across: convoy.freighters)
-            ?? [Berth(freighter: convoy.freighters[0], take: option.resources)]
+        guard let plan = Self.loadPlan(bill: bill, across: convoy.freighters) else {
+            return Self.holdsCannotTake(bill, convoy.freighters)
+        }
         let rounds = Self.stageRounds(world, .depositResources)
         if rounds < plan.count {
             return .dispatch(
@@ -754,23 +780,31 @@ public struct EventRun: MissionStepMachine {
         )
     }
 
-    /// What the closed event's reward is worth to the freighter standing on it.
+    /// What the closed event's reward is worth to the convoy standing on it.
     /// Three outcomes, not two: nothing paid and nothing liftable are the same
     /// step move but different facts, and only one of them loses resources.
     enum Sweep: Equatable, Sendable {
         /// The reward paid no resources — an XP-only event.
         case nothingPaid
-        /// A real pile the hold has no room for. It stays for a Haul Run.
+        /// A real pile no hold in the convoy has room for. It stays for a haul.
         case willNotFit([String: Int])
-        /// The clamped manifest to ask for.
-        case lift([String: Int])
+        /// The berth taking the sweep, and what no hold could take.
+        case lift(berth: Berth, unswept: [String: Int])
     }
 
-    static func sweep(_ event: LocationEvent, into freighter: Device) -> Sweep {
+    /// The homeward policy on `divide`: the roomiest hull takes what it can and
+    /// the rest stays put, because a reward too big to lift is a haul's job
+    /// rather than a stall. Ties go to the hull earlier in load order.
+    static func sweep(_ event: LocationEvent, across freighters: [Device]) -> Sweep {
         let pile = rewardPile(event)
         if pile.isEmpty { return .nothingPaid }
-        let manifest = sweepManifest(pile, into: freighter)
-        return manifest.isEmpty ? .willNotFit(pile) : .lift(manifest)
+        let roomiest = freighters.enumerated()
+            .max { (freeHold($0.element), -$0.offset) < (freeHold($1.element), -$1.offset) }?
+            .element
+        guard let roomiest else { return .willNotFit(pile) }
+        let division = divide(pile, across: [roomiest], room: freeHold)
+        guard let berth = division.berths.first else { return .willNotFit(pile) }
+        return .lift(berth: berth, unswept: division.unplaced)
     }
 
     /// What the completion paid, per resource type. An XP-only reward pays none.
@@ -780,21 +814,6 @@ public struct EventRun: MissionStepMachine {
             reward.filter { $0.amount > 0 }.map { ($0.resourceType, $0.amount) },
             uniquingKeysWith: { first, _ in first }
         )
-    }
-
-    /// `pile` in the order the hold fills, clamped to the room left. Capacity 0
-    /// is an unhydrated tail rather than a hull with no hold — this one is a
-    /// freighter — so it asks for the whole pile.
-    private static func sweepManifest(_ pile: [String: Int], into freighter: Device) -> [String: Int] {
-        var room = freighter.cargoCapacity > 0 ? freighter.cargoRemaining : Int.max
-        var manifest: [String: Int] = [:]
-        for type in pile.keys.sorted() {
-            let take = min(pile[type] ?? 0, room)
-            if take <= 0 { break }
-            manifest[type] = take
-            room -= take
-        }
-        return manifest
     }
 
     /// Take the reward home. `collect_resources` demands an explicit per-type
@@ -809,25 +828,34 @@ public struct EventRun: MissionStepMachine {
             }
             return .refreshEvents(thenStall: nil)
         }
-        // The reward goes into whichever hull still has room; what will not fit
-        // anywhere stays on the ground for a Haul Run.
-        guard let freighter = convoy.freighters.first(where: { $0.cargoRemaining > 0 })
-            ?? convoy.freighter
-        else { return .advanceStep(nextStep: Step.recovering.rawValue) }
-        if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-        switch Self.sweep(event, into: freighter) {
+        guard !convoy.freighters.isEmpty else {
+            return .refreshFleet(tag: Self.rootTag, thenStall: .unreachableDevice)
+        }
+        // Room is judged across the WHOLE convoy: a full lead hull is not the
+        // convoy being full, and only the second fact leaves a reward behind.
+        switch Self.sweep(event, across: convoy.freighters) {
         case .nothingPaid:
             return .advanceStep(nextStep: Step.recovering.rawValue)
         case .willNotFit(let pile):
-            let unswept = pile.keys.sorted().map { "\($0) \(pile[$0] ?? 0)" }.joined(separator: ", ")
-            logger.notice("event run \(directive.id, privacy: .public): hold full at \(event.location, privacy: .public) — reward left for a haul: \(unswept, privacy: .public)")
+            Self.logUnswept(pile, directive, event)
             return .advanceStep(nextStep: Step.recovering.rawValue)
-        case .lift(let manifest):
+        case .lift(let berth, let unswept):
+            if world.openOperation(for: berth.freighter.deviceCode) != nil { return .wait }
+            Self.logUnswept(unswept, directive, event)
             return .dispatch(
-                kind: .collectResources, deviceCode: freighter.deviceCode,
-                params: CommandParams(resources: manifest), nextStep: Step.recovering.rawValue
+                kind: .collectResources, deviceCode: berth.freighter.deviceCode,
+                params: CommandParams(resources: berth.take),
+                nextStep: Step.recovering.rawValue
             )
         }
+    }
+
+    private static func logUnswept(
+        _ pile: [String: Int], _ directive: Directive, _ event: LocationEvent
+    ) {
+        guard !pile.isEmpty else { return }
+        let left = pile.keys.sorted().map { "\($0) \(pile[$0] ?? 0)" }.joined(separator: ", ")
+        logger.notice("event run \(directive.id, privacy: .public): convoy full at \(event.location, privacy: .public) — reward left for a haul: \(left, privacy: .public)")
     }
 
     // MARK: - Recovery and return
@@ -906,34 +934,49 @@ public struct EventRun: MissionStepMachine {
         )
     }
 
-    /// Empty the hold at the depot. Nil resources unload it whole, which is this
-    /// hull's own sweep and nothing else: the launch gate leased it empty.
+    /// Empty every laden hold at the depot, one hull per round. Nil resources
+    /// unload a hull whole, which is its own sweep and nothing else: the launch
+    /// gate leased it empty.
     private func depositing(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
-        let laden = convoy.freighters.filter { $0.cargoUsed > 0 }
-        guard let freighter = laden.first else { return .done }
+        guard let freighter = convoy.freighters.first(where: { $0.cargoUsed > 0 })
+        else { return .done }
         if world.openOperation(for: freighter.deviceCode) != nil { return .wait }
-        guard Self.depositRounds(world) < laden.count else { return .done }
+        // One round per hull, counted against the WHOLE convoy: a bound read off
+        // the laden ones shrinks as they empty and retires the loop mid-convoy.
+        guard Self.depositRounds(world) < convoy.freighters.count else { return .done }
         return .dispatch(
             kind: .depositResources, deviceCode: freighter.deviceCode,
             params: CommandParams(), nextStep: Step.confirmingDeposit.rawValue
         )
     }
 
-    /// Judge the unload on the freighter's own row. A hold left full parks the
-    /// hull outside the next convoy's empty-hold gate, so it is worth a stall.
+    /// Judge the unload on the hull that was ordered, then hand back for the
+    /// next laden one. A hold left full parks the hull outside the next convoy's
+    /// empty-hold gate, so it is worth a stall.
     private func confirmDeposit(
         _ directive: Directive, _ convoy: Convoy, _ event: LocationEvent, _ world: WorldSnapshot
     ) -> MissionAction {
         guard !convoy.freighters.isEmpty else { return .done }
-        let emptied = convoy.freighters.allSatisfy {
-            world.isFresh($0, since: directive.stepStartedAt) && $0.cargoUsed == 0
+        // The hull just ordered, or — with nothing sent this cycle — whatever
+        // still reads laden, so a hold nobody ordered is still not forgotten.
+        let ordered: Device?
+        if case let .dispatched(_, code) = MissionLogBudget.lastDispatch(
+            world, dispatch: Step.depositing.rawValue, confirm: Step.confirmingDeposit.rawValue
+        ) {
+            ordered = convoy.freighters.first { $0.deviceCode == code }
+        } else {
+            ordered = nil
         }
-        if emptied { return .advanceStep(nextStep: Step.depositing.rawValue) }
+        guard let awaited = ordered ?? convoy.freighters.first(where: { $0.cargoUsed > 0 })
+        else { return .advanceStep(nextStep: Step.depositing.rawValue) }
+        if world.isFresh(awaited, since: directive.stepStartedAt), awaited.cargoUsed == 0 {
+            return .advanceStep(nextStep: Step.depositing.rawValue)
+        }
         let ctx = StepContext(directive: directive, world: world, step: directive.step)
         let ladder = ConfirmRow(deadline: Self.depositConfirmDeadline, onExpiry: .readThenStall(.commandRejected))
-        return switch ladder.verdict(convoy.freighters, ctx) {
+        return switch ladder.verdict([awaited], ctx) {
         case let .act(action): action
         case .judge: .wait
         }

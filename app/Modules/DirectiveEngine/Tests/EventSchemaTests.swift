@@ -18,7 +18,7 @@ struct EventSchemaTests {
                     targets: ["X-1-EVT-001"], targetIndex: 0, step: "preflight",
                     stepStartedAt: now, returnToOrigin: true, originDesignation: "HUB",
                     attentionReason: nil, createdAt: now, updatedAt: now,
-                    theatreDepot: "HUB-1", freighterCode: "FREIGHT"
+                    theatreDepot: "HUB-1", freighterCodes: ["FREIGHT"]
                 )
             }.execute(db)
             try LocationEvent.insert {
@@ -31,7 +31,7 @@ struct EventSchemaTests {
         let (directive, event) = try await database.read { db in
             (try Directive.all.fetchOne(db), try LocationEvent.all.fetchOne(db))
         }
-        #expect(directive?.freighterCode == "FREIGHT")
+        #expect(directive?.freighterCodes == ["FREIGHT"])
         #expect(event?.chosenOption == "booster")
     }
 }
