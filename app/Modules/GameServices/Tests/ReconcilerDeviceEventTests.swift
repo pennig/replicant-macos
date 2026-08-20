@@ -287,4 +287,97 @@ private typealias Operation = GameModels.Operation
         #expect(try await status(database, "OP-ACTIVE") == .active)
         #expect(try await status(database, "OP-ENQUEUED") == .enqueued)
     }
+
+    /// CRITICAL 2's inverse ordering: the enqueued sibling seeded OLDER than
+    /// the running job. `live.first { kind matches }` alone would now bind to
+    /// the enqueued row and try to promote it — a second `.active` row for
+    /// this device, which the unique index refuses. Must not throw, and must
+    /// leave both ops exactly where they were.
+    @Test func pollDoesNotPromoteAnEnqueuedSiblingSeededOlderThanTheRunningJob() async throws {
+        let database = try GameDatabase.bootstrap()
+        let t0 = Date(timeIntervalSince1970: 1_782_000_000)
+        let activeStart = t0.addingTimeInterval(-60)
+        let activeCompletesAt = activeStart.addingTimeInterval(600)
+        let opEnqueued = printOp("OP-ENQUEUED", entityCode: "B1", status: .enqueued, startedAt: t0.addingTimeInterval(-120), completesAt: nil)
+        let opActive = printOp("OP-ACTIVE", entityCode: "B1", status: .active, startedAt: activeStart, completesAt: activeCompletesAt)
+        try await database.write { db in
+            try Operation.insert { opActive }.execute(db)
+            try Operation.insert { opEnqueued }.execute(db)
+        }
+
+        let device = Device(
+            deviceCode: "B1", deviceType: "heaven_vessel", replicantCode: "R1", status: "printing",
+            location: nil, locationName: nil, operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [], tags: [],
+            detail: .object([
+                "printing": .object([
+                    "started_at": .string(activeStart.ISO8601Format()),
+                    "completes_at": .string(activeCompletesAt.ISO8601Format()),
+                ])
+            ]),
+            updatedAt: activeStart, firstSeenAt: activeStart
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(device)
+        }
+
+        #expect(try await status(database, "OP-ACTIVE") == .active)
+        #expect(try await status(database, "OP-ENQUEUED") == .enqueued)
+    }
+
+    /// CRITICAL 2's other branch: an `.active` op of a DIFFERENT kind is
+    /// still live (a stale row the reconciler hasn't closed yet) while an
+    /// `.enqueued` op of the snapshot's OWN kind already exists. Promoting
+    /// the enqueued op without first closing the stale one would also throw
+    /// — two `.active` rows for one device, whatever kinds they track.
+    @Test func pollDoesNotPromoteAnEnqueuedOpWhileADifferentKindIsStillActive() async throws {
+        let database = try GameDatabase.bootstrap()
+        let t0 = Date(timeIntervalSince1970: 1_782_000_000)
+        let travelActive = Operation(
+            id: "OP-TRAVEL", entityCode: "B1", kind: OperationKind.travel.rawValue,
+            status: .active, source: OperationSource.poll,
+            startedAt: t0.addingTimeInterval(-300), completesAt: t0.addingTimeInterval(-60),
+            lastConfirmedAt: t0.addingTimeInterval(-300), detail: .object([:])
+        )
+        let mineEnqueued = Operation(
+            id: "OP-MINE", entityCode: "B1", kind: OperationKind.mine.rawValue,
+            status: .enqueued, source: OperationSource.poll,
+            startedAt: t0.addingTimeInterval(-60), completesAt: nil,
+            lastConfirmedAt: t0.addingTimeInterval(-60), detail: .object([:])
+        )
+        try await database.write { db in
+            try Operation.insert { travelActive }.execute(db)
+            try Operation.insert { mineEnqueued }.execute(db)
+        }
+
+        let miningStart = t0.addingTimeInterval(-50)
+        let device = Device(
+            deviceCode: "B1", deviceType: "heaven_vessel", replicantCode: "R1", status: "mining",
+            location: "SOL-2", locationName: nil, operationalCapacity: 100, queueSize: 0,
+            stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+            createdAt: Date(timeIntervalSince1970: 0), availableCommands: [], features: [], tags: [],
+            detail: .object([
+                "mining": .object([
+                    "started_at": .string(miningStart.ISO8601Format()),
+                    "completes_at": .string(t0.addingTimeInterval(500).ISO8601Format()),
+                ])
+            ]),
+            updatedAt: miningStart, firstSeenAt: miningStart
+        )
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.uuid = .incrementing
+        } operation: {
+            await Reconciler().ingest(device)
+        }
+
+        #expect(try await status(database, "OP-TRAVEL") == .active)
+        #expect(try await status(database, "OP-MINE") == .enqueued)
+    }
 }

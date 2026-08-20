@@ -243,6 +243,41 @@ private typealias Operation = GameModels.Operation
         #expect(live.count == 2)
     }
 
+    /// IMPORTANT 3: a travel dispatch supersedes another live TRAVEL/MINE op,
+    /// but must never touch a queued print — the server keeps printing it
+    /// regardless, so superseding locally only makes `onOrder` blind to a job
+    /// still on the platen.
+    @Test func travelDoesNotSupersedeAQueuedPrint() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "queued-print", entityCode: "965AC2C3", kind: OperationKind.print.rawValue,
+                    status: .enqueued, source: OperationSource.poll,
+                    startedAt: Date(timeIntervalSince1970: 0), completesAt: nil,
+                    lastConfirmedAt: Date(timeIntervalSince1970: 0), detail: .object([:])
+                )
+            }.execute(db)
+        }
+        let body = #"{"status":"travelling","arrives_at":"2026-06-26T01:00:00Z"}"#
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = stubGameClient { _ in jsonResponse(200, body) }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "travelling") }
+        } operation: {
+            _ = await CommandClient.liveValue.dispatch(.travel, "965AC2C3", CommandParams(destination: "X"))
+        }
+
+        let queuedPrint = try await database.read { db in
+            try Operation.where { $0.id.eq("queued-print") }.fetchOne(db)
+        }
+        #expect(queuedPrint?.status == OperationStatus.enqueued)
+    }
+
     /// Mining is continuous — its 200 carries no deadline, so the op confirms
     /// active with a nil `completesAt` (it runs until stopped, not toward an ETA).
     @Test func mineConfirmsActiveWithoutDeadline() async throws {

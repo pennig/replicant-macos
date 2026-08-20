@@ -70,4 +70,28 @@ struct DeviceDetailOperationsTests {
         #expect(DeviceOperations.card(for: "B1", in: []) == nil)
         #expect(DeviceOperations.queuedBehind(for: "B1", in: []) == 0)
     }
+
+    /// The inverse of `cardShowsTheActiveJob`: the enqueued sibling started
+    /// FIRST. Same ordering Reconciler's promote branch had to defend
+    /// (CRITICAL 2) — the card must still show the running job, not the
+    /// chronologically-oldest queued one.
+    @Test("the card shows the active job even when the queued one is older")
+    func cardShowsTheActiveJobEvenWhenTheQueuedOneIsOlder() {
+        let queued = op(on: "B1", id: "OP-1", status: .enqueued, startedAt: now.addingTimeInterval(-120))
+        let active = op(on: "B1", id: "OP-2", status: .active, startedAt: now.addingTimeInterval(-30))
+
+        #expect(DeviceOperations.card(for: "B1", in: [queued, active])?.id == "OP-2")
+        #expect(DeviceOperations.queuedBehind(for: "B1", in: [queued, active]) == 1)
+    }
+
+    /// MINOR 7: `queuedBehind` must not count an `optimistic` dispatch — the
+    /// moment between fire and confirm isn't a queued job, and a lost confirm
+    /// must not read as "1 queued behind" forever.
+    @Test("an optimistic dispatch does not count as queued behind")
+    func optimisticDispatchDoesNotCountAsQueuedBehind() {
+        let active = op(on: "B1", id: "OP-1", status: .active, startedAt: now.addingTimeInterval(-120))
+        let dispatching = op(on: "B1", id: "OP-2", status: .optimistic, startedAt: now.addingTimeInterval(-10))
+
+        #expect(DeviceOperations.queuedBehind(for: "B1", in: [active, dispatching]) == 0)
+    }
 }

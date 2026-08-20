@@ -55,29 +55,29 @@ enum PrintScheduler {
             .filter { $0.acceptsPrintJobs && $0.location == depot && !$0.isCarrierHull }
             .sorted { $0.deviceCode < $1.deviceCode }
             .map { device in
-                let live = liveOps(for: device.deviceCode, in: world)
+                let open = openOps(for: device.deviceCode, in: world)
                 return Bench(
                     device: device,
-                    activeJob: live.first { $0.status == .active },
-                    queueDepth: depth(of: device, liveOps: live),
-                    owners: live.compactMap(\.directiveID)
+                    activeJob: open.first { $0.status == .active },
+                    queueDepth: depth(of: device, ops: open),
+                    owners: open.compactMap(\.directiveID)
                 )
             }
     }
 
-    /// This bench's live ops, oldest first: `queuedOperations` when populated,
+    /// This bench's open ops, oldest first: `queuedOperations` when populated,
     /// else a one-op fallback onto `openOperations` (which it always subsumes
     /// in a real read).
-    private static func liveOps(for deviceCode: String, in world: WorldSnapshot) -> [GameModels.Operation] {
+    private static func openOps(for deviceCode: String, in world: WorldSnapshot) -> [GameModels.Operation] {
         let queued = world.queuedOperations[deviceCode] ?? []
         return queued.isEmpty ? world.openOperation(for: deviceCode).map { [$0] } ?? [] : queued
     }
 
-    /// The bench's load: the printer's own snapshot, or the ops table's live
+    /// The bench's load: the printer's own snapshot, or the ops table's open
     /// count when that is higher — a dispatch can land before the next poll
     /// reflects it. `queueSize` is capacity, never load.
-    private static func depth(of device: Device, liveOps: [GameModels.Operation]) -> Int {
-        max(device.queuedJobCount + (device.printingSnapshot != nil ? 1 : 0), liveOps.count)
+    private static func depth(of device: Device, ops: [GameModels.Operation]) -> Int {
+        max(device.queuedJobCount + (device.printingSnapshot != nil ? 1 : 0), ops.count)
     }
 
     /// The bench that should take `order` at `depot`, or nil when none can.
@@ -107,7 +107,7 @@ enum PrintScheduler {
         for owner: String, at depot: String, in world: WorldSnapshot
     ) -> [String: Int] {
         benches(at: depot, in: world).reduce(into: [String: Int]()) { total, bench in
-            for op in liveOps(for: bench.device.deviceCode, in: world) {
+            for op in openOps(for: bench.device.deviceCode, in: world) {
                 guard op.kind == OperationKind.print.rawValue,
                       op.directiveID == owner,
                       let type = op.printedDeviceType

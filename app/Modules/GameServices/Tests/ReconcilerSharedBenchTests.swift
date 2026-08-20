@@ -109,6 +109,38 @@ private typealias Operation = GameModels.Operation
         #expect(try await status(database, "op-mismatched") == .enqueued)
     }
 
+    /// The live incident (CRITICAL 1): every live op names a type, and none
+    /// matches — falling back to age would stamp a `defence_grid` completion's
+    /// result into an unrelated `ftl_relay` job. Closes nothing instead.
+    @Test func aForeignTypeCompletionClosesNothing() async throws {
+        let op = printOp("op-relay", wanting: "ftl_relay", status: .active, startedAt: start)
+        let database = try await seed([op])
+
+        let closed = await withDependencies { $0.defaultDatabase = database } operation: {
+            await Reconciler().applyOperationEvent(completion("defence_grid", newCode: "79A4FD5C"))
+        }
+
+        #expect(closed == false)
+        #expect(try await status(database, "op-relay") == .active)
+    }
+
+    /// …and the path production actually takes (`applyDeviceEvent`) refuses
+    /// the same completion.
+    @Test func theEventPathRefusesAForeignType() async throws {
+        let op = printOp("op-relay", wanting: "ftl_relay", status: .active, startedAt: start)
+        let database = try await seed([op])
+
+        let closed = await withDependencies { $0.defaultDatabase = database } operation: {
+            await Reconciler().applyDeviceEvent(
+                deviceCode: bench, event: completion("mining_drone", newCode: "2ADECE40"),
+                location: nil, stow: nil, eventTime: start.addingTimeInterval(600)
+            )
+        }
+
+        #expect(closed == false)
+        #expect(try await status(database, "op-relay") == .active)
+    }
+
     /// **The path production takes.** `GameSync.deviceRoute` routes every event
     /// carrying a parseable `createdAt` through `applyDeviceEvent`; both copies
     /// must select the same op.

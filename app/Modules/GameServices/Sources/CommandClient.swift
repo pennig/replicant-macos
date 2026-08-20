@@ -231,13 +231,14 @@ extension CommandClient: DependencyKey {
                     let confirmedAt = date.now
 
                     try? await database.write { db in
-                        // Travel/mining act on one target at a time; a new
-                        // command replaces the old. Prints queue instead.
+                        // Travel/mining act on one target at a time and replace
+                        // the old op; prints queue instead and are never superseded.
                         if kind != .print {
                             let openOps = try Operation
                                 .where {
                                     $0.entityCode.eq(deviceCode)
                                         && $0.status.in(OperationStatus.liveCases)
+                                        && $0.kind.neq(OperationKind.print.rawValue)
                                 }
                                 .fetchAll(db)
                             for var other in openOps where other.id != opID {

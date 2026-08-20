@@ -26,9 +26,9 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// The active operation per device, by device code — the job actually on
     /// the platen. A queued job is not here; ask `queuedOperations` for those.
     public let openOperations: [String: GameModels.Operation]
-    /// Every live operation per device, oldest first — `(startedAt, id)`
-    /// tie-broken, since two ops in one transaction can share a `startedAt`.
-    /// Several entries when a bench has jobs queued behind the active one.
+    /// Every OPEN operation per device (`optimistic` included), oldest first —
+    /// `(startedAt, id)` tie-broken, since two ops in one transaction can share
+    /// a `startedAt`. Several entries when a bench has jobs queued behind the active one.
     public let queuedOperations: [String: [GameModels.Operation]]
     /// This directive's newest `logWindow` timeline entries, ascending.
     /// Completion detection reads the `directive.completed` ROW here rather
@@ -388,7 +388,8 @@ public struct WorldSnapshot: Equatable, Sendable {
             return WorldSnapshot(
                 devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
                 openOperations: Dictionary(
-                    uniqueKeysWithValues: operations.filter { $0.status == .active }.map { ($0.entityCode, $0) }
+                    operations.filter { $0.status == .active }.map { ($0.entityCode, $0) },
+                    uniquingKeysWith: { _, last in last }
                 ),
                 queuedOperations: Dictionary(grouping: operations, by: \.entityCode),
                 log: log,

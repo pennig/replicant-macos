@@ -36,9 +36,9 @@ struct PrintJob: Equatable, Sendable {
         directive.theatreDepot ?? world.device(directive.deviceCode)?.location
     }
 
-    /// The bench that should take `order`, or nil when every bench at this
-    /// depot is occupied — a wait, never a stall, and never a dispatch onto
-    /// someone else's job.
+    /// The bench that should take `order` — the shallowest queue with room,
+    /// an occupied bench included — or nil when every bench is at capacity,
+    /// which is a wait, never a stall.
     func bench(_ ctx: StepContext, for order: PrintOrder) -> Bench? {
         PrintScheduler.choose(order, at: depot, in: ctx.world)
     }
@@ -49,8 +49,8 @@ struct PrintJob: Equatable, Sendable {
     }
 
     /// Whether this run's own print is still open, wherever substitution put it.
-    /// `bench` cannot answer it: the chooser skips a bench carrying an open op,
-    /// so it skips the very bench holding our job.
+    /// `bench` cannot answer it: it re-ranks all benches by current depth, so
+    /// it need not return the one already holding our job.
     func stillPrinting(_ ctx: StepContext) -> Bool {
         // `dispatchedOperations` is already scoped to this directive, legacy
         // rows with no owner column included, so kind and liveness are the filter.

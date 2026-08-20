@@ -113,9 +113,11 @@ public struct Reconciler: Sendable {
         // the progress bar can't draw). Both also refresh a slipped deadline.
         if let activity = device.derivedActivity {
             let live = try Self.liveOps(on: device.deviceCode, in: db)
-            // The oldest LIVE op tracking this activity's kind — the op the
-            // device is actually running, or about to.
-            let matchingOp = live.first { $0.kind == activity.kind.rawValue }
+            // The oldest LIVE **active** op of this kind if one exists, else
+            // the oldest live op of this kind at all — an active job is never
+            // outranked by an enqueued sibling that merely started first.
+            let matchingOp = live.first { $0.kind == activity.kind.rawValue && $0.status == .active }
+                ?? live.first { $0.kind == activity.kind.rawValue }
             // A live *active* op of a DIFFERENT kind means the device moved
             // on; a merely-enqueued sibling is just queued behind it.
             let staleActiveOp = live.first { $0.status == .active && $0.kind != activity.kind.rawValue }
@@ -128,9 +130,10 @@ public struct Reconciler: Sendable {
             }.fetchOne(db)
 
             if let matchingOp, activity.completesAt != nil,
-               matchingOp.status != .active || matchingOp.completesAt != activity.completesAt {
-                // A queued op that has now started, or a moved deadline.
-                // Promote/refresh in place (same id preserves identity).
+               matchingOp.status != .active || matchingOp.completesAt != activity.completesAt,
+               matchingOp.status == .active || staleActiveOp == nil {
+                // A queued op that has now started, or a moved deadline —
+                // promoted/refreshed in place, unless a different kind is already `.active`.
                 var updated = matchingOp
                 updated.status = .active
                 updated.completesAt = activity.completesAt
@@ -443,8 +446,8 @@ public struct Reconciler: Sendable {
     }
 
     /// Which live op a completion closes: the one whose `params.device_type`
-    /// matches the result, or the oldest when neither side names a type.
-    /// `operationID`, when given, names the op outright.
+    /// matches the result; else the oldest untyped (adopted) candidate; else
+    /// nil when every candidate names a different type. `operationID` names it outright.
     static func selectCompletableOp(
         among ops: [GameModels.Operation],
         on deviceCode: String,
@@ -479,7 +482,14 @@ public struct Reconciler: Sendable {
             if let matched = candidates.first(where: { $0.printedDeviceType == produced }) {
                 return matched
             }
-            logger.notice("completion on \(deviceCode, privacy: .public): produced \(produced, privacy: .public) matches no live op's params — closing the oldest as another job's event")
+            // Falls back only to an untyped (adopted) candidate, which can't
+            // be contradicted; a candidate naming a different type closes nothing.
+            if let adopted = candidates.first(where: { $0.printedDeviceType == nil }) {
+                logger.notice("completion on \(deviceCode, privacy: .public): produced \(produced, privacy: .public) matches no live op's params — closing the oldest untyped (adopted) op instead")
+                return adopted
+            }
+            logger.notice("ignored completion on \(deviceCode, privacy: .public): produced \(produced, privacy: .public) matches no live op's params — another job's event")
+            return nil
         }
         return candidates.first
     }

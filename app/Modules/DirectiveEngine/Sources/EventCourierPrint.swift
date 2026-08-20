@@ -70,8 +70,8 @@ public struct EventCourierPrint: MissionStepMachine {
             .min { $0.deviceCode < $1.deviceCode }
     }
 
-    /// A busy bench waits; no bench at all stalls — the same split every
-    /// print site makes.
+    /// A bench at capacity waits; no bench at all stalls — the same split
+    /// every print site makes.
     private func printing(
         _ directive: Directive, _ depot: String, _ world: WorldSnapshot
     ) -> MissionAction {

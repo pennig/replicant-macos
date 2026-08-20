@@ -129,10 +129,10 @@ non-positive `queueSize` now caps the bench at one slot, the platen.
 rather than deferred** — the precedent being ticket 35, which rewrote 8 when it changed the same
 semantic in the other direction, and ticket 38, which rewrote 18. The instruction was not "make
 them green" but to decide, per test, between a removed semantic and a genuine regression. The
-result: **11 rewritten**, **6 already correct**, **4 reframed as explicit at-capacity cases**, and
-**one — `acquireDoesNotOrderTwice` — where a real fixture bug was found and fixed instead**:
-`PrintJob.stillPrinting` checks the **carrier's** device code while the fixture populated the
-**bench's**, so the owner-scoped guard was never reached.
+result: **11 rewritten**, **6 already correct** — one of them, `acquireDoesNotOrderTwice`, only after
+a real fixture bug was found and fixed rather than the assertion (`PrintJob.stillPrinting` checks the
+**carrier's** device code while the fixture populated the **bench's**, so the owner-scoped guard was
+never reached) — and **4 reframed as explicit at-capacity cases**.
 
 The classification table needed a correction of its own: its arithmetic summed to 21 only because
 two errors cancelled — one test double-counted, one omitted. Corrected to 11 + 6 + 4, with every

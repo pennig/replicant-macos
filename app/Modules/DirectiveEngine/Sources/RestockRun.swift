@@ -76,7 +76,7 @@ public struct RestockRun: MissionStepMachine {
 
     /// Print one relay at `depot`, or decline. Demand nets `idle` against what
     /// is already `onOrder`, so a bench substitution never buys a second relay.
-    /// A busy bench holds via `printing` rather than stalling.
+    /// A bench at capacity advances to `printing` to wait, rather than stalling.
     private func stocking(_ directive: Directive, _ depot: String, _ world: WorldSnapshot) -> MissionAction {
         let idle = RelayRun.idleRelays(at: depot, in: world).count
         let onOrder = PrintScheduler.onOrder(for: directive.id, at: depot, in: world)[RelayRun.relayDeviceType] ?? 0
