@@ -301,6 +301,17 @@ public struct Reconciler: Sendable {
                 case .deployed: device.stowedInDeviceCode = nil
                 case nil: break
                 }
+                if let cargo = Self.cargoReport(for: event) {
+                    var dict: [String: JSONValue] = {
+                        if case .object(let existing) = device.detail { return existing }
+                        return [:]
+                    }()
+                    dict["cargo_used"] = .number(cargo.used)
+                    if let capacity = cargo.capacity {
+                        dict["cargo_capacity"] = .number(capacity)
+                    }
+                    device.detail = .object(dict)
+                }
                 device.updatedAt = date.now
                 try Device.upsert { device }.execute(db)
                 return closed
@@ -398,6 +409,23 @@ public struct Reconciler: Sendable {
         // it) or a body scan completed; both surface the same `scan` block
         "scan.completed": [OperationKind.search.rawValue, OperationKind.surveyScan.rawValue],
     ]
+
+    /// Dotted event names reporting a cargo hold's settled contents, keyed here
+    /// for the same reason as `completionEvents`. The only two carrying
+    /// `cargo_after`; a collect fills a hold and a delivery empties it.
+    static let cargoReportEvents: Set<String> = ["transport.collected", "transport.delivered"]
+
+    /// The hold's settled contents as `event` reports them, nil for an event
+    /// reporting none. `cargo_after` is the total aboard once the move settled,
+    /// which is what `detail.cargo_used` means (memory: transport-events-carry-the-hold).
+    static func cargoReport(
+        for event: GameEventEnvelope
+    ) -> (used: Double, capacity: Double?)? {
+        guard cargoReportEvents.contains(event.event),
+              let used = event.payload?["cargo_after"]?.numberValue
+        else { return nil }
+        return (used, event.payload?["cargo_capacity"]?.numberValue)
+    }
 
     /// Tolerance when comparing an event's timestamp against an op's
     /// `startedAt` — absorbs client/server clock skew without letting a
