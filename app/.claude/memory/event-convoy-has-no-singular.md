@@ -8,9 +8,12 @@ description: EventRun has ONE convoy path — `freighterCodes` is the only lease
 `Directive.freighterCodes` is the whole lease. The `freighterCode` mirror, the
 `leasedFreighters` accessor and `Convoy.freighter` are gone, and no step may
 reintroduce a "lead hull" — a convoy of one is a list of one, walking the same
-code as a convoy of three. The physical `freighterCode` COLUMN survives in the
-table (append-only migrations) but nothing reads or writes it; treat it as
-inert. `addFreighterCodes` already backfilled every row that had one.
+code as a convoy of three. The COLUMN is gone too, dropped by
+`Directive.dropFreighterCode`, which must stay AFTER `addFreighterCodes` in the
+manifest: that backfill is what moves the rows the drop discards. Verified
+against a copy of the live database before landing — 80 of 465 rows carried a
+singular value, all 81 leases survived in the list, and no row held a value the
+list did not already have.
 
 Load and sweep share `divide(_:across:room:)`. They differ in exactly two
 declared ways and no others:

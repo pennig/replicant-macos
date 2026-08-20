@@ -96,6 +96,7 @@ public enum GameDatabase {
         HaulYield.addCollectedAtIndex,
         DirectiveLogEntry.addDispatchLookupIndex,
         GameModels.Operation.relaxOpenIndex,
+        Directive.dropFreighterCode,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

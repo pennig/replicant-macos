@@ -820,8 +820,7 @@ extension DirectiveLogEntry {
 public extension Directive {
     /// Appended, never folded into `addFreighterCode`: that one has shipped. A
     /// payload wider than one hold needs one freighter per hold, so the lease is
-    /// a list, and this backfill is what makes it the only one worth reading.
-    /// The `freighterCode` column it reads is inert from here on.
+    /// a list, and this backfill is what carries the singular rows across.
     static let addFreighterCodes = SchemaMigration("Add 'freighterCodes' to 'directives'") { db in
         try #sql(
             """
@@ -833,6 +832,17 @@ public extension Directive {
             UPDATE "directives"
                SET "freighterCodes" = json_array("freighterCode")
              WHERE "freighterCode" IS NOT NULL AND "freighterCode" <> ''
+            """
+        ).execute(db)
+    }
+
+    /// The mirror, retired: `freighterCodes` is the lease and nothing reads the
+    /// singular column. `addFreighterCodes` must stay ahead of this one in the
+    /// manifest — it is what moves the rows this drops.
+    static let dropFreighterCode = SchemaMigration("Drop 'freighterCode' from 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" DROP COLUMN "freighterCode"
             """
         ).execute(db)
     }
