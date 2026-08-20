@@ -18,6 +18,10 @@
 - Every existing test must pass unchanged at the end of every task. A task that requires editing an existing test assertion has changed behaviour and must stop and report instead.
 - Swift Testing only: `@Test`, `#expect`, `try GameDatabase.bootstrap()`. No XCTest.
 - Read test results via the event stream, not console text — use the repo's `swift-test-event-stream` skill. `swift test` console output is not a stable interface.
+- The Swift package is at `app/Modules`, not `app`. The DirectiveEngine test product is `DirectiveEngineTests`.
+- **Always pass `--test-product DirectiveEngineTests`** on a filtered run. Without it SwiftPM starts one process per test target and each truncates the shared event-stream file, so the results you read are whichever product finished last — a green 50-test run standing in for a 1906-test one, with nothing warning you. Verified: the same command without `--test-product` reported only `APITests`.
+- Baseline at `0fb0341`: `DirectiveEngineTests` is 1906 tests, 0 failed, 0 skipped, run completed. Any task ending on fewer than 1906 passing has lost tests, not fixed them.
+- Confirm every run completed before believing it: `testEnded` count must equal `testStarted`, and exactly one `runEnded` must be present. A test that traps emits neither, and the stream simply stops.
 - Fixtures must pin excluded rows explicitly, not only included ones, and every exclusion must be proved by mutation (delete the filter, watch the test fail).
 - Commit after every task. Never open a PR; land on the local branch.
 - `Operation.kind` is a `String` column. Compare against `OperationKind.print.rawValue`, never a bare literal.
@@ -177,7 +181,7 @@ If `Directive`'s memberwise init in this repo needs more arguments, copy the exa
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-swift test --package-path app --filter AuditLogNarrowing \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter AuditLogNarrowing \
   --event-stream-output-path /tmp/audit-red.jsonl
 ```
 
@@ -245,7 +249,7 @@ Delete the `let alreadyLogged = Set(...)` binding above it and the `!alreadyLogg
 - [ ] **Step 6: Run the full DirectiveEngine suite**
 
 ```bash
-swift test --package-path app --filter DirectiveEngine \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DirectiveEngine \
   --event-stream-output-path /tmp/audit-green.jsonl
 ```
 
@@ -361,7 +365,7 @@ Append to `DirectiveSliceTests.swift`:
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-swift test --package-path app --filter DispatchedOperationsNarrowing \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DispatchedOperationsNarrowing \
   --event-stream-output-path /tmp/dispatch-red.jsonl
 ```
 
@@ -447,7 +451,7 @@ Replace `WorldSnapshot.swift:40-48`. The existing comment names only the audit p
 - [ ] **Step 6: Run the full DirectiveEngine suite**
 
 ```bash
-swift test --package-path app --filter DirectiveEngine \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DirectiveEngine \
   --event-stream-output-path /tmp/dispatch-green.jsonl
 ```
 
@@ -561,7 +565,7 @@ Use the real memberwise inits — read `LocationFootprint` and `Device` in `app/
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-swift test --package-path app --filter WorldCoreEquivalence \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter WorldCoreEquivalence \
   --event-stream-output-path /tmp/core-red.jsonl
 ```
 
@@ -592,7 +596,7 @@ Create `WorldCore.swift`. Move the global fetches out of `WorldSnapshot.read`'s 
 - [ ] **Step 5: Run the full suite**
 
 ```bash
-swift test --package-path app --filter DirectiveEngine \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DirectiveEngine \
   --event-stream-output-path /tmp/core-green.jsonl
 ```
 
@@ -654,7 +658,7 @@ Append to `DirectiveSliceTests.swift`:
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-swift test --package-path app --filter DirectiveSliceComposition \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DirectiveSliceComposition \
   --event-stream-output-path /tmp/slice-red.jsonl
 ```
 
@@ -671,7 +675,7 @@ Move the five scoped fetches verbatim, including the `baseWanted`/`baseDecoded`/
 - [ ] **Step 5: Run the full suite**
 
 ```bash
-swift test --package-path app --filter DirectiveEngine \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DirectiveEngine \
   --event-stream-output-path /tmp/slice-green.jsonl
 ```
 
@@ -740,7 +744,7 @@ One `readAll` that answers for every running directive at once, so the scoped qu
 - [ ] **Step 2: Run to verify it fails**
 
 ```bash
-swift test --package-path app --filter DirectiveSliceBatching \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DirectiveSliceBatching \
   --event-stream-output-path /tmp/batch-red.jsonl
 ```
 
@@ -770,7 +774,7 @@ Add a `static let empty` with all five fields empty. One implementation means th
 - [ ] **Step 5: Run the full suite**
 
 ```bash
-swift test --package-path app --filter DirectiveEngine \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DirectiveEngine \
   --event-stream-output-path /tmp/batch-green.jsonl
 ```
 
@@ -850,7 +854,7 @@ git commit -m "perf(directives): answer every directive's scoped read in one pas
 - [ ] **Step 2: Run to verify it fails**
 
 ```bash
-swift test --package-path app --filter WorldTickReads \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter WorldTickReads \
   --event-stream-output-path /tmp/tick-red.jsonl
 ```
 
@@ -863,7 +867,7 @@ One `database.read { db in ... }` that fetches `running` (`Directive.where { $0.
 - [ ] **Step 4: Run the full suite and commit**
 
 ```bash
-swift test --package-path app --filter DirectiveEngine \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DirectiveEngine \
   --event-stream-output-path /tmp/tick-green.jsonl
 git add app/Modules/DirectiveEngine/Sources/WorldTick.swift app/Modules/DirectiveEngine/Tests/WorldTickTests.swift
 git commit -m "perf(directives): read the whole tick's world in one transaction"
@@ -910,7 +914,7 @@ git commit -m "perf(directives): read the whole tick's world in one transaction"
 - [ ] **Step 3: Run the full suite and commit**
 
 ```bash
-swift test --package-path app --filter DirectiveEngine \
+swift test --package-path app/Modules --test-product DirectiveEngineTests --disable-xctest --event-stream-version 0 --filter DirectiveEngine \
   --event-stream-output-path /tmp/view-green.jsonl
 git add app/Modules/DirectiveEngine/Sources/WorldView.swift app/Modules/DirectiveEngine/Sources/WorldTick.swift app/Modules/DirectiveEngine/Tests/WorldTickTests.swift
 git commit -m "perf(directives): build the brain's view from the tick's own read"
@@ -986,10 +990,24 @@ Replace the `supervisor` and `brain` Tasks in `start()` with a single `tickLoop`
 
 - [ ] **Step 5: Run the whole app test suite, not just DirectiveEngine**
 
+A whole-package run needs `--build-system native`, because the default
+`swiftbuild` backend gives each test target its own process and every one of
+them truncates the same event-stream file — leaving only the last product's
+results, which reads as a small green run rather than the missing data it is.
+
 ```bash
-swift test --package-path app \
+swift test --package-path app/Modules --build-system native --disable-xctest \
+  --event-stream-version 0 \
   --event-stream-output-path /tmp/engine-green.jsonl
 ```
+
+Then confirm the stream is whole before believing it:
+
+```bash
+jq -r 'select(.kind=="test").payload.id | split(".")[0]' /tmp/engine-green.jsonl | sort -u | wc -l
+```
+
+More than one module must appear. One module means the truncation bit you.
 
 Expected: all pass. This is the task most likely to break something outside the module — `stop()` ordering, `@Shared(.brainReport)` clearing, and any test driving the engine with a `TestClock`.
 
