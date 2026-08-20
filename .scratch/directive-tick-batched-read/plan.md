@@ -25,6 +25,24 @@
 - Fixtures must pin excluded rows explicitly, not only included ones, and every exclusion must be proved by mutation (delete the filter, watch the test fail).
 - Commit after every task. Never open a PR; land on the local branch.
 - `Operation.kind` is a `String` column. Compare against `OperationKind.print.rawValue`, never a bare literal.
+- **`Directive` fixtures use the helper below, never a hand-written init.** `Directive`'s memberwise init takes nine more arguments than is obvious, and `currentTarget` is a COMPUTED property (`targets[targetIndex]`) that cannot be passed. Every task's test code calls `testDirective(...)`; paste this helper into whichever new test file needs it first, and reuse it thereafter:
+
+```swift
+private func testDirective(
+    id: String, deviceCode: String, targets: [String] = ["SOL"],
+    status: DirectiveStatus = .running, kind: DirectiveKind = .haulRun
+) -> Directive {
+    Directive(
+        id: id, kind: kind, status: status, deviceCode: deviceCode,
+        targets: targets, targetIndex: 0, step: "preflight",
+        stepStartedAt: Date(timeIntervalSince1970: 0), returnToOrigin: false,
+        originDesignation: nil, attentionReason: nil,
+        createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+    )
+}
+```
+
+  With `targetIndex: 0`, `currentTarget` resolves to `targets.first`. If `.haulRun` is the wrong `kind` for what a test exercises, pass the right one rather than editing the helper's default.
 
 ## File Structure
 
@@ -101,10 +119,7 @@ private func completedEntry(_ id: String, op: String, at: Double) -> DirectiveLo
 }
 
 private func sliceDirective() -> Directive {
-    Directive(
-        id: "D1", kind: .haulRun, status: .running, deviceCode: "V1",
-        targets: ["SOL"], currentTarget: "SOL"
-    )
+    testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"])
 }
 
 @Suite struct AuditLogNarrowing {
@@ -537,10 +552,7 @@ import UniverseModels
         let core = try await database.read { db in try WorldCore.read(db) }
         let world = try await WorldSnapshot.read(
             from: database, now: Date(timeIntervalSince1970: 100),
-            directive: Directive(
-                id: "D1", kind: .haulRun, status: .running, deviceCode: "V1",
-                targets: ["SOL"], currentTarget: "SOL"
-            )
+            directive: testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"])
         )
 
         #expect(core.devices == world.devices)
@@ -710,8 +722,8 @@ One `readAll` that answers for every running directive at once, so the scoped qu
     /// quietly handing missions a different world than they get today.
     @Test func batchedMatchesIndividualForEachDirective() async throws {
         let database = try GameDatabase.bootstrap()
-        let a = Directive(id: "D1", kind: .haulRun, status: .running, deviceCode: "V1", targets: ["SOL"], currentTarget: "SOL")
-        let b = Directive(id: "D2", kind: .haulRun, status: .running, deviceCode: "V2", targets: ["VEGA"], currentTarget: "VEGA")
+        let a = testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"])
+        let b = testDirective(id: "D2", deviceCode: "V2", targets: ["VEGA"])
         try await database.write { db in
             try DirectiveLogEntry.insert { dispatchEntry("L1", op: "OP-A", at: 1) }.execute(db)
             try DirectiveLogEntry.insert {
@@ -814,8 +826,7 @@ git commit -m "perf(directives): answer every directive's scoped read in one pas
         try await database.write { db in
             for i in 1...5 {
                 try Directive.insert {
-                    Directive(id: "D\(i)", kind: .haulRun, status: .running,
-                              deviceCode: "V\(i)", targets: ["SOL"], currentTarget: "SOL")
+                    testDirective(id: "D\(i)", deviceCode: "V\(i)", targets: ["SOL"])
                 }.execute(db)
             }
         }
@@ -832,12 +843,10 @@ git commit -m "perf(directives): answer every directive's scoped read in one pas
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert {
-                Directive(id: "D1", kind: .haulRun, status: .running,
-                          deviceCode: "V1", targets: ["SOL"], currentTarget: "SOL")
+                testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"])
             }.execute(db)
             try Directive.insert {
-                Directive(id: "D2", kind: .haulRun, status: .paused,
-                          deviceCode: "V2", targets: ["SOL"], currentTarget: "SOL")
+                testDirective(id: "D2", deviceCode: "V2", targets: ["SOL"], status: .paused)
             }.execute(db)
         }
         let tick = try await WorldTick.read(
@@ -948,8 +957,7 @@ The only task that changes control flow, and the only one with a behaviour delta
         let database = try GameDatabase.bootstrap()
         try await database.write { db in
             try Directive.insert {
-                Directive(id: "D1", kind: .haulRun, status: .paused,
-                          deviceCode: "V1", targets: ["SOL"], currentTarget: "SOL")
+                testDirective(id: "D1", deviceCode: "V1", targets: ["SOL"], status: .paused)
             }.execute(db)
         }
         let tick = try await WorldTick.read(
