@@ -264,14 +264,15 @@ struct RelayRunAcquireSchedulerTests {
         #expect(deviceCode == "B3")
     }
 
-    /// C7, as a regression alongside C6: a lone busy bench holding this run's
-    /// own print must not be re-ordered. Vacuous re C7 alone — see the next
-    /// test, which isolates the owner-scoped guard from C6's busy-skip.
+    /// C7: a lone busy bench holding this run's own print must not be
+    /// re-ordered. B1 has real depth to spare, so `dispatched:` — not
+    /// `bench` finding B1 occupied — is what must exercise the guard.
     @Test("acquire does not order twice while its own print is open")
     func acquireDoesNotOrderTwice() {
+        let mine = op(on: "B1", owner: "R-1", deviceType: "ftl_relay")
         let world = snapshot(
             [bench("B1", printing: "ftl_relay")],
-            open: ["B1": op(on: "B1", owner: "R-1", deviceType: "ftl_relay")]
+            open: ["B1": mine], dispatched: ["OP-B1": mine]
         )
 
         #expect(RelayRun().nextAction(directive: acquiring(id: "R-1"), world: world) == .wait)

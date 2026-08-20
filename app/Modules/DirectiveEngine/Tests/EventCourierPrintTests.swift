@@ -189,10 +189,9 @@ struct EventCourierPrintTests {
         #expect(action == .wait)
     }
 
-    /// With the depot's only bench busy — even on another directive's job
-    /// the owner-scoped guard cannot see — there is no free bench to
-    /// dispatch onto, so the run waits rather than superseding it.
-    @Test("a co-tenant's print at the printer waits rather than dispatching onto it")
+    /// A co-tenant's job leaves real depth to spare, so the run queues its own
+    /// print behind it rather than waiting for the bench to clear.
+    @Test("a co-tenant's print at the printer does not block a courier print")
     func coTenantPrintWaitsRatherThanDispatching() {
         let openOperations = ["PRINTER": GameModels.Operation(
             id: "OP-OTHER", entityCode: "PRINTER", kind: OperationKind.print.rawValue,
@@ -202,15 +201,23 @@ struct EventCourierPrintTests {
         let action = EventCourierPrint().nextAction(
             directive: directive(step: EventCourierPrint.Step.printing.rawValue),
             world: world(
-                [EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now)],
+                [EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now, queueSize: 10)],
                 openOperations: openOperations
             )
         )
-        #expect(action == .wait)
+        #expect(action == .dispatch(
+            kind: .print, deviceCode: "PRINTER",
+            params: CommandParams(
+                deviceType: EventRun.courierDeviceType, quantity: 1, printTags: [EventRun.rootTag.string]
+            ),
+            nextStep: EventCourierPrint.Step.awaitingClone.rawValue
+        ))
     }
 
     /// Every bench busy is the system working, not a fault — two printers,
-    /// each holding another directive's job, must wait.
+    /// each already AT capacity on another directive's job, must wait.
+    /// `queueSize: 1` makes the capacity explicit rather than an accident of
+    /// an unset default.
     @Test("an all-busy depot waits, it does not stall")
     func allBusyWaits() {
         let openOperations: [String: GameModels.Operation] = [
@@ -229,8 +236,8 @@ struct EventCourierPrintTests {
             directive: directive(step: EventCourierPrint.Step.printing.rawValue),
             world: world(
                 [
-                    EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
-                    EventRunFixtures.device("PRINTER2", type: "autofactory", updatedAt: now),
+                    EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now, queueSize: 1),
+                    EventRunFixtures.device("PRINTER2", type: "autofactory", updatedAt: now, queueSize: 1),
                 ],
                 openOperations: openOperations
             )

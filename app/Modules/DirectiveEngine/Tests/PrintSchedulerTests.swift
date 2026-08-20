@@ -261,13 +261,23 @@ struct PrintSchedulerQueueingTests {
     }
 
     /// `Device.init`'s `schema.queueSize ?? 0` makes zero the server's own
-    /// "never reported" sentinel, never a genuine zero-slot printer, so it
-    /// must not cap a bench with real depth already on it.
-    @Test("a printer with no reported queue size is not capacity-limited")
-    func unreportedQueueSizeIsUnbounded() {
-        let world = snapshot([bench("B1", capacity: 0, queued: ["a", "b", "c"], printing: "d")])
+    /// "never reported" sentinel. Read conservatively — one slot, the platen
+    /// only — never as unbounded: most zero-reporting print-capable devices
+    /// in the live fleet are vessels and fabricators, not real depots.
+    @Test("an unreported queue size still admits an idle bench")
+    func unreportedQueueSizeStillAdmitsIdle() {
+        let world = snapshot([bench("B1", capacity: 0)])
 
         #expect(PrintScheduler.choose(order(), at: depot, in: world)?.device.deviceCode == "B1")
+    }
+
+    /// Isolated to one bench: if capacity were unbounded, B1's own depth
+    /// would still win it the choice, so this proves the CAP, not the rank.
+    @Test("an unreported queue size takes nothing more than its platen job")
+    func unreportedQueueSizeCapsAtOne() {
+        let world = snapshot([bench("B1", capacity: 0, printing: "mining_drone")])
+
+        #expect(PrintScheduler.choose(order(), at: depot, in: world) == nil)
     }
 
     /// A dispatched op can land before the printer's own poll shows it — the

@@ -192,13 +192,15 @@ struct EventRunLoadingTests {
         #expect(action == .advanceStep(nextStep: EventRun.Step.loading.rawValue))
     }
 
-    @Test("a print already in flight at the printer is not doubled")
+    /// An unattributed print in flight leaves the printer with real depth to
+    /// spare, so the run's own beacon queues behind it rather than waiting.
+    @Test("a print already in flight at the printer does not block the beacon")
     func waitsOnAnOpenPrint() {
         let devices = [
             EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
             EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
             EventRunFixtures.courier(),
-            EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now),
+            EventRunFixtures.device("PRINTER", type: "autofactory", updatedAt: now, queueSize: 10),
         ]
         let world = EventRunFixtures.world(
             devices: devices, event: EventRunFixtures.event(resources: ["structural": 200], devices: []),
@@ -207,7 +209,13 @@ struct EventRunLoadingTests {
         let action = EventRun().nextAction(
             directive: EventRunFixtures.directive(step: EventRun.Step.printing.rawValue, now: now), world: world
         )
-        #expect(action == .wait)
+        #expect(action == .dispatch(
+            kind: .print, deviceCode: "PRINTER",
+            params: CommandParams(
+                deviceType: EventPlan.beaconDeviceType, quantity: 1, printTags: ["auto:event:hub-1"]
+            ),
+            nextStep: EventRun.Step.printing.rawValue
+        ))
     }
 
     @Test("a missing freighter re-reads the fleet rather than stalling")

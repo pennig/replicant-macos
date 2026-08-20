@@ -52,11 +52,12 @@ private func device(
     features: [String] = [],
     availableCommands: [String] = [],
     tags: [String] = [],
+    queueSize: Int = 0,
     updatedAt: Date = now
 ) -> Device {
     Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
-        location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        location: location, locationName: nil, operationalCapacity: 100, queueSize: queueSize,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: availableCommands,
         features: features, tags: tags, detail: .object([:]),
@@ -68,8 +69,17 @@ private func carrier(_ code: String = "V1", location: String?) -> Device {
     device(code, type: "heaven_vessel", location: location, tags: [Brain.carrierTag.string])
 }
 
-private func hub(_ code: String = "AF1", location: String = hubLocation, updatedAt: Date = now) -> Device {
-    device(code, type: "autofactory", location: location, availableCommands: ["enqueue_print"], updatedAt: updatedAt)
+/// `queueSize` defaults to the live fleet's own idle-autofactory reading
+/// (`PrintingSnapshotTests.swift:117-124`), so a fixture is capacity-realistic
+/// unless a test deliberately narrows it to prove an at-capacity case.
+private func hub(
+    _ code: String = "AF1", location: String = hubLocation,
+    queueSize: Int = 10, updatedAt: Date = now
+) -> Device {
+    device(
+        code, type: "autofactory", location: location, availableCommands: ["enqueue_print"],
+        queueSize: queueSize, updatedAt: updatedAt
+    )
 }
 
 /// A planted, live relay. Its SYSTEM is what makes a location count as meshed,
@@ -396,10 +406,9 @@ struct RestockRunTests {
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
     }
 
-    /// One print in flight at a time: `CommandClient` supersedes any other open
-    /// op on a device, so a second dispatch would orphan the first's row. With
-    /// a single hub there is nowhere to fan out to, so the run holds in `printing`.
-    @Test("a print already in flight is never doubled up")
+    /// An unattributed print in flight still leaves the hub with real depth to
+    /// spare, so restock's own demand queues behind it rather than holding.
+    @Test("a print already in flight does not block restock's own")
     func neverPrintsWithOneInFlight() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let snapshot = world(
@@ -408,7 +417,11 @@ struct RestockRunTests {
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: RestockRun.Step.printing.rawValue))
+                == .dispatch(
+                    kind: .print, deviceCode: "AF1",
+                    params: CommandParams(deviceType: RelayRun.relayDeviceType),
+                    nextStep: RestockRun.Step.stocking.rawValue
+                ))
     }
 
     /// The reserve floor is the same rail `RelayRun` arms, read through the same
@@ -483,10 +496,10 @@ struct RestockRunTests {
                 "\(label) must not buy a census read")
     }
 
-    /// …and neither does a run whose print is already in flight: the busy bench
-    /// turns it away before the rail is ever consulted.
-    @Test("a stale census costs nothing while a print is already running")
-    func staleCensusCostsNothingWithAPrintInFlight() {
+    /// A print already in flight leaves the hub with real depth to spare, so a
+    /// stale census still buys its refresh rather than being short-circuited.
+    @Test("a stale census still buys a refresh with a print already running")
+    func staleCensusBuysARefreshWithAPrintInFlight() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let stale = now.addingTimeInterval(-(RelayRun.pollInterval + 60))
         let snapshot = world(
@@ -496,7 +509,7 @@ struct RestockRunTests {
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: RestockRun.Step.printing.rawValue))
+                == .refreshFootprint(nextStep: RestockRun.Step.stocking.rawValue, thenStall: nil))
     }
 
     /// A refresh that SUCCEEDS but still does not list the hub is positive
@@ -532,7 +545,11 @@ struct RestockRunTests {
             ("pool full", restockRun(targets: ["VEGA"]),
              world(devices: [hub(), liveRelay("REL0", at: hubLocation), spare("RLY1")]), .wait),
             ("print in flight", restockRun(targets: ["VEGA"]), inFlight,
-             .advanceStep(nextStep: RestockRun.Step.printing.rawValue)),
+             .dispatch(
+                 kind: .print, deviceCode: "AF1",
+                 params: CommandParams(deviceType: RelayRun.relayDeviceType),
+                 nextStep: RestockRun.Step.stocking.rawValue
+             )),
             ("reserve short", restockRun(targets: ["VEGA"]),
              world(devices: [hub(), liveRelay("REL0", at: hubLocation)], footprints: census(1)), .wait),
         ]
@@ -595,10 +612,10 @@ struct RestockRunTests {
                 == .advanceStep(nextStep: RestockRun.Step.stocking.rawValue))
     }
 
-    /// With the depot's only bench busy on a co-tenant's job there is no free
-    /// bench to fan out onto, so the run holds in `printing` rather than
-    /// superseding it.
-    @Test("a co-tenant's print at the hub holds rather than dispatching onto it")
+    /// A co-tenant's job leaves real depth to spare on the hub, so restock
+    /// queues its own print behind it rather than holding for the bench to
+    /// clear.
+    @Test("a co-tenant's print at the hub does not block restock's own")
     func coTenantPrintWaitsRatherThanDispatching() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let snapshot = world(
@@ -607,19 +624,24 @@ struct RestockRunTests {
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: RestockRun.Step.printing.rawValue))
+                == .dispatch(
+                    kind: .print, deviceCode: "AF1",
+                    params: CommandParams(deviceType: RelayRun.relayDeviceType),
+                    nextStep: RestockRun.Step.stocking.rawValue
+                ))
     }
 
     /// Every bench busy is the system working, not a fault — two hubs, each
-    /// holding another run's print, hold in `printing` rather than being
-    /// treated as unreachable.
+    /// already AT capacity on another run's print, hold in `printing` rather
+    /// than being treated as unreachable. `queueSize: 1` makes the capacity
+    /// explicit rather than an accident of an unset default.
     @Test("an all-busy depot holds, it does not stall")
     func allBusyWaits() {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let busy = openOp("AF1", kind: .print, directiveID: "OTHER")
             .merging(openOp("AF2", kind: .print, directiveID: "OTHER")) { _, last in last }
         let snapshot = world(
-            devices: [hub(), hub("AF2"), liveRelay("REL0", at: hubLocation)],
+            devices: [hub(queueSize: 1), hub("AF2", queueSize: 1), liveRelay("REL0", at: hubLocation)],
             openOperations: busy
         )
 

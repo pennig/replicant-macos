@@ -20,11 +20,11 @@ private let awayLocation = "SAGARMADHA"
 
 private func device(
     _ code: String, type: String, status: String = "idle", location: String? = depot,
-    tags: [String] = [], features: [String] = [], commands: [String] = []
+    tags: [String] = [], features: [String] = [], commands: [String] = [], queueSize: Int = 0
 ) -> Device {
     Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
-        location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        location: location, locationName: nil, operationalCapacity: 100, queueSize: queueSize,
         stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: commands,
         features: features, tags: tags, detail: .object([:]),
@@ -33,8 +33,11 @@ private func device(
 }
 
 /// A print hub in a named status — the one axis every test here turns.
-private func bench(_ code: String, status: String, location: String? = depot) -> Device {
-    device(code, type: "autofactory", status: status, location: location, commands: ["enqueue_print"])
+private func bench(_ code: String, status: String, location: String? = depot, queueSize: Int = 0) -> Device {
+    device(
+        code, type: "autofactory", status: status, location: location,
+        commands: ["enqueue_print"], queueSize: queueSize
+    )
 }
 
 /// A mine fleet one mining drone short, so `stocking` always has work to dispatch.
@@ -163,8 +166,9 @@ struct MineFleetPrintSubstituteTests {
         #expect(target(of: MineFleetPrint().nextAction(directive: run(hub: "AF1"), world: snapshot)) == "AF7")
     }
 
-    /// With every bench at the depot occupied there is no bench to choose —
-    /// never the lowest-coded busy one.
+    /// With every bench at the depot already AT capacity there is no bench to
+    /// choose — never the lowest-coded busy one. `queueSize: 1` makes the
+    /// capacity explicit rather than an accident of an unset default.
     @Test("with every hub queued there is no bench to choose")
     func allHubsQueuedYieldsNoBench() {
         var busy = openPrint(on: "AF2")
@@ -172,8 +176,8 @@ struct MineFleetPrintSubstituteTests {
         let snapshot = world(
             shortFleet() + [
                 bench("AF1", status: "idle", location: awayLocation),
-                bench("AF2", status: "printing (ftl_relay)"),
-                bench("AF7", status: "printing (mining_drone)"),
+                bench("AF2", status: "printing (ftl_relay)", queueSize: 1),
+                bench("AF7", status: "printing (mining_drone)", queueSize: 1),
             ],
             busy: busy
         )

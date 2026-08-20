@@ -85,14 +85,19 @@ enum PrintScheduler {
     /// and the lowest device code breaks every tie.
     static func choose(_ order: PrintOrder, at depot: String, in world: WorldSnapshot) -> Bench? {
         benches(at: depot, in: world)
-            // `queueSize` reads 0 when the server never reported it (`Device.init`'s
-            // `?? 0`), never as a genuine zero-slot printer, so it caps nothing here.
-            .filter { $0.device.queueSize <= 0 || $0.queueDepth < $0.device.queueSize }
+            .filter { $0.queueDepth < capacity(of: $0.device) }
             .min { left, right in
                 left.queueDepth == right.queueDepth
                     ? left.device.deviceCode < right.device.deviceCode
                     : left.queueDepth < right.queueDepth
             }
+    }
+
+    /// `queueSize` reads 0 when the server never reported it (`Device.init`'s
+    /// `?? 0`); read conservatively as ONE slot — the platen only, nothing
+    /// queued behind it — never as unbounded.
+    private static func capacity(of device: Device) -> Int {
+        device.queueSize > 0 ? device.queueSize : 1
     }
 
     /// What `owner` already has on order at `depot`, by device type — every

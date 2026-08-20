@@ -21,11 +21,11 @@ private let elsewhere = "SAGARMADHA"
 private func bench(
     _ code: String, status: String = "idle", location: String? = depot,
     features: [String] = [], commands: [String] = ["enqueue_print"],
-    updatedAt: Date = now
+    queueSize: Int = 0, updatedAt: Date = now
 ) -> Device {
     Device(
         deviceCode: code, deviceType: "autofactory", replicantCode: "R1", status: status,
-        location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        location: location, locationName: nil, operationalCapacity: 100, queueSize: queueSize,
         stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
         createdAt: Date(timeIntervalSince1970: 0), availableCommands: commands,
         features: features, tags: [], detail: .object([:]),
@@ -188,17 +188,17 @@ struct PrintJobTests {
         #expect(job.bench(frame, for: order())?.device.deviceCode == "B7")
     }
 
-    /// A co-tenant's op is invisible to the caller's owner-scoped guard, so
-    /// `bench` must never return an occupied bench — that would dispatch onto
-    /// someone else's job.
-    @Test("with every bench occupied there is no bench to choose")
+    /// A co-tenant's op leaves real depth to spare, so `bench` queues behind
+    /// it — the shallower/lowest-coded of the two owned benches — rather than
+    /// refusing outright.
+    @Test("a co-tenant's op does not block a bench with room")
     func allBusyYieldsNoBench() {
         let frame = ctx(
-            [bench("B1", status: "compacted"), bench("B2"), bench("B7")],
+            [bench("B1", status: "compacted"), bench("B2", queueSize: 10), bench("B7", queueSize: 10)],
             open: ["B2": op(on: "B2", owner: "OTHER"), "B7": op(on: "B7", owner: "OTHER")]
         )
 
-        #expect(job.bench(frame, for: order()) == nil)
+        #expect(job.bench(frame, for: order())?.device.deviceCode == "B2")
     }
 
     /// A carrier hull advertises `enqueue_print`; printing the fleet into the

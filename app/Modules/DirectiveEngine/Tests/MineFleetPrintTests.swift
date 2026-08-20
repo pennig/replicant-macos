@@ -30,11 +30,11 @@ private func mineDevice(
     _ code: String, type: String, tags: [String] = [], location: String? = nil,
     status: String = "idle", stowedIn: String? = nil, attachedTo: String? = nil,
     controllerDeviceCode: String? = nil, commands: [String] = [],
-    updatedAt: Date = now
+    queueSize: Int = 0, updatedAt: Date = now
 ) -> Device {
     Device(
         deviceCode: code, deviceType: type, replicantCode: "R1", status: status,
-        location: location, locationName: nil, operationalCapacity: 100, queueSize: 0,
+        location: location, locationName: nil, operationalCapacity: 100, queueSize: queueSize,
         stowedInDeviceCode: stowedIn, controllerDeviceCode: controllerDeviceCode,
         attachedToDeviceCode: attachedTo, createdAt: Date(timeIntervalSince1970: 0),
         availableCommands: commands, features: [], tags: tags, detail: .object([:]),
@@ -43,11 +43,12 @@ private func mineDevice(
 }
 
 private func hub(
-    _ code: String = "AF1", location: String = hubLocation, updatedAt: Date = now
+    _ code: String = "AF1", location: String = hubLocation,
+    queueSize: Int = 0, updatedAt: Date = now
 ) -> Device {
     mineDevice(
         code, type: "autofactory", location: location,
-        commands: ["enqueue_print"], updatedAt: updatedAt
+        commands: ["enqueue_print"], queueSize: queueSize, updatedAt: updatedAt
     )
 }
 
@@ -194,43 +195,55 @@ struct MineFleetPrintTests {
         ))
     }
 
-    /// One print in flight at a time on a SINGLE-bench depot: with nowhere else
-    /// to fan out to, the busy bench holds the run in `printing` rather than
-    /// dispatching a second job onto it.
-    @Test("a print already in flight is never doubled up")
+    /// An unattributed print in flight leaves real depth to spare, so the run
+    /// queues its own job behind it rather than holding.
+    @Test("a print already in flight does not block a second, independent one")
     func openOperationWaits() {
         let snapshot = world(
-            devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
+            devices: printedFleet(omitting: "mining_drone") + [hub(queueSize: 10), carrier()],
             openOperations: openPrint(on: "AF1")
         )
 
         #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot)
-                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
+                == .dispatch(
+                    kind: .print, deviceCode: "AF1",
+                    params: CommandParams(
+                        deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]
+                    ),
+                    nextStep: MineFleetPrint.Step.stocking.rawValue
+                ))
     }
 
-    /// With the depot's only bench busy on a co-tenant's job there is no free
-    /// bench to fan out onto, so the run holds in `printing` rather than
-    /// superseding it.
-    @Test("a co-tenant's print at the hub holds rather than dispatching onto it")
+    /// A co-tenant's job leaves real depth to spare, so the run queues its own
+    /// print behind it rather than holding for the bench to clear.
+    @Test("a co-tenant's print at the hub does not block the run's own")
     func aCoTenantsPrintWaitsRatherThanDispatching() {
         let snapshot = world(
-            devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
+            devices: printedFleet(omitting: "mining_drone") + [hub(queueSize: 10), carrier()],
             openOperations: openPrint(on: "AF1", directiveID: "OTHER")
         )
 
         #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot)
-                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
+                == .dispatch(
+                    kind: .print, deviceCode: "AF1",
+                    params: CommandParams(
+                        deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]
+                    ),
+                    nextStep: MineFleetPrint.Step.stocking.rawValue
+                ))
     }
 
     /// Every bench busy is the system working, not a fault — two hubs, each
-    /// holding another run's print, hold in `printing` rather than being
-    /// treated as unreachable.
+    /// already AT capacity on another run's print, hold in `printing` rather
+    /// than being treated as unreachable. `queueSize: 1` makes the capacity
+    /// explicit rather than an accident of an unset default.
     @Test("an all-busy depot holds, it does not stall")
     func allBusyWaits() {
         let busy = openPrint(on: "AF1", directiveID: "OTHER")
             .merging(openPrint(on: "AF2", directiveID: "OTHER")) { _, last in last }
         let snapshot = world(
-            devices: printedFleet(omitting: "mining_drone") + [hub(), hub("AF2"), carrier()],
+            devices: printedFleet(omitting: "mining_drone")
+                + [hub(queueSize: 1), hub("AF2", queueSize: 1), carrier()],
             openOperations: busy
         )
 
@@ -250,18 +263,25 @@ struct MineFleetPrintTests {
                 == .stall(.unreachableDevice))
     }
 
-    /// Our own print still holds the step: with the single bench it occupies
-    /// the only bench, so there is nowhere to fan out to either way.
-    @Test("our own open print still holds the step")
+    /// Our own open print names no type, so `onOrder` cannot net it against
+    /// demand — real depth still has room, so the run queues a second job
+    /// rather than holding.
+    @Test("an untyped open print of our own does not net, and does not block")
     func ourOwnPrintStillWaits() {
         let directive = printRun()
         let snapshot = world(
-            devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
+            devices: printedFleet(omitting: "mining_drone") + [hub(queueSize: 10), carrier()],
             openOperations: openPrint(on: "AF1", directiveID: directive.id)
         )
 
         #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
+                == .dispatch(
+                    kind: .print, deviceCode: "AF1",
+                    params: CommandParams(
+                        deviceType: "mining_drone", quantity: 3, printTags: [MineRecipe.fleetTag.string]
+                    ),
+                    nextStep: MineFleetPrint.Step.stocking.rawValue
+                ))
     }
 
     /// Nothing polls `LocationFootprint`, so a stale census buys its own read
@@ -722,21 +742,21 @@ struct MineFleetPrintFreshEvidenceTests {
         ))
     }
 
-    /// Nothing is decided while the job runs, so the read is not bought there —
-    /// the evidence that matters is the evidence AFTER the op closes. The single
-    /// busy bench leaves nowhere to fan out, so the run holds in `printing`.
-    @Test("an open print op is waited out without buying the sweep")
+    /// An unattributed open print leaves real depth to spare, so the run
+    /// proceeds to order its own job — and, with the fleet row this stale,
+    /// buys the sweep first rather than spending on unconfirmed evidence.
+    @Test("an open print op does not block a fleet-evidence sweep")
     func anOpenOpSpendsNoRead() {
         let stale = now.addingTimeInterval(-rowLag)
         let snapshot = world(
             devices: printedFleet(omitting: "ami_transport_controller", updatedAt: stale)
-                + [hub(updatedAt: stale), carrier(updatedAt: stale)],
+                + [hub(queueSize: 10, updatedAt: stale), carrier(updatedAt: stale)],
             openOperations: openPrint(on: "AF1")
         )
         let directive = printRun(stepStartedAt: now.addingTimeInterval(-5))
 
         #expect(MineFleetPrint().nextAction(directive: directive, world: snapshot)
-                == .advanceStep(nextStep: MineFleetPrint.Step.printing.rawValue))
+                == .refreshDevicesInSystem(designation: hubLocation, thenStall: .unreachableDevice))
     }
 
     /// A veto path spends nothing either: the sweep sits at the last moment before
