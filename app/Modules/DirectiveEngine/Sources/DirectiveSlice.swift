@@ -13,6 +13,9 @@ import GameModels
 import SQLiteData
 import UniverseModels
 
+/// Self-join alias for the correlated audit anti-join in `readAll`.
+private enum ClosingCompletion: AliasName {}
+
 /// The directive-scoped half of `WorldSnapshot` — composed with `WorldCore`
 /// by `WorldSnapshot.init(core:slice:now:)`.
 public struct DirectiveSlice: Equatable, Sendable {
@@ -75,8 +78,8 @@ public struct DirectiveSlice: Equatable, Sendable {
             )
         }
 
-        // Every directive's own dispatch entries, materialized once — the
-        // mission-half split and the audit anti-join below both read this.
+        // Every directive's own dispatch entries — feeds the mission-half's
+        // pre-owner-column fallback attribution below.
         let dispatchRows = try DirectiveLogEntry
             .where {
                 $0.directiveID.in(ids)
@@ -88,28 +91,24 @@ public struct DirectiveSlice: Equatable, Sendable {
         let dispatchByDirective = Dictionary(grouping: dispatchRows) { $0.directiveID ?? "" }
         let dispatchedIDsByDirective = dispatchByDirective.mapValues { Set($0.compactMap(\.operationID)) }
 
-        // Per directive, in Swift — a completion logged by one directive
-        // must never exclude another directive's dispatch of the same id.
-        let completedIDsByDirective = Dictionary(
-            grouping: try DirectiveLogEntry
-                .where {
-                    $0.directiveID.in(ids)
-                        && $0.kind.eq(DirectiveLogKind.opCompleted)
-                        && $0.operationID.isNot(nil)
-                }
-                .fetchAll(db),
-            by: { $0.directiveID ?? "" }
-        ).mapValues { Set($0.compactMap(\.operationID)) }
-        // Matched per directive, not in one SQL statement — see
+        // Correlated on BOTH directiveID and operationID — see
         // `app/.claude/memory/dispatched-operations-two-set-union.md`.
-        var auditByDirective: [String: [DirectiveLogEntry]] = [:]
-        for directive in directives {
-            let completed = completedIDsByDirective[directive.id] ?? []
-            auditByDirective[directive.id] = (dispatchByDirective[directive.id] ?? []).filter {
-                guard let opID = $0.operationID else { return false }
-                return !completed.contains(opID)
+        let auditRows = try DirectiveLogEntry
+            .where { entry in
+                entry.directiveID.in(ids)
+                    && entry.kind.eq(DirectiveLogKind.commandDispatched)
+                    && entry.operationID.isNot(nil)
+                    && !DirectiveLogEntry.as(ClosingCompletion.self)
+                        .where { completion in
+                            completion.directiveID.eq(entry.directiveID)
+                                && completion.kind.eq(DirectiveLogKind.opCompleted)
+                                && completion.operationID.eq(entry.operationID)
+                        }
+                        .exists()
             }
-        }
+            .order { $0.occurredAt }
+            .fetchAll(db)
+        let auditByDirective = Dictionary(grouping: auditRows) { $0.directiveID ?? "" }
 
         // Ids the batch dispatched — one unexecuted subquery, never a
         // host-parameter list in Swift.
