@@ -94,8 +94,10 @@ actor CommandGovernor {
                             && $0.kind.eq(kind.rawValue)
                             && $0.paramsDigest.eq(digest)
                             && $0.startedAt >= Date.FastISO8601Representation(queryOutput: owner.since)
-                            // A `.failed` attempt didn't land, so a repeat is
-                            // a retry rather than a duplicate to refuse.
+                            // `.failed` is the one status that proves the request
+                            // never reached the server, so a repeat is a retry
+                            // rather than a duplicate. Every other status —
+                            // `.unknown` included — may already have taken effect.
                             && $0.status.neq(OperationStatus.failed)
                     }
                     .fetchOne(db)

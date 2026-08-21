@@ -2394,6 +2394,10 @@
           "travel_type": {
             "type": "string"
           },
+          "hub_bonus": {
+            "type": "boolean",
+            "nullable": true
+          },
           "direction": {
             "type": "array",
             "items": {

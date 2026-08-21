@@ -118,6 +118,41 @@ struct CommandDedupTests {
         #expect(called.value)
     }
 
+    /// An `.unknown` row DOES suppress the repeat. It is what a dispatch whose
+    /// reply could not be decoded records: the server answered, so the command
+    /// may already have taken effect and re-POSTing walks into a moved world
+    /// (memory: failed-means-never-sent.md).
+    @Test func anUnknownRowSuppressesTheRepeat() async throws {
+        let database = try GameDatabase.bootstrap()
+        let digest = CommandParams().dedupKey
+        try await database.write { db in
+            try Operation.insert {
+                Operation(
+                    id: "UNKNOWN", entityCode: "R1", kind: "activate",
+                    status: .unknown, source: .optimistic,
+                    startedAt: Self.t0.addingTimeInterval(1), completesAt: nil,
+                    lastConfirmedAt: Self.t0.addingTimeInterval(1),
+                    detail: .object([:]), directiveID: "D1", step: "activating", paramsDigest: digest
+                )
+            }.execute(db)
+        }
+        let owner = CommandOwner(directiveID: "D1", step: "activating", since: Self.t0)
+        let called = LockIsolated(false)
+
+        let result = await withDependencies {
+            $0.defaultDatabase = database
+            $0.gameClient = budgetGameClient()
+            $0.commandClient.dispatchOwned = { _, _, _, _ in
+                called.setValue(true)
+                return .accepted(operationID: nil)
+            }
+        } operation: {
+            await CommandGovernor().dispatch(.simple("activate"), on: "R1", params: CommandParams(), owner: owner)
+        }
+        #expect(result == .deferred(.duplicate))
+        #expect(!called.value, "an unreadable reply must not license a second POST")
+    }
+
     /// A `.failed` row from a prior attempt in this step entry does NOT
     /// suppress a retry, while a `.completed` row still does — pinned side
     /// by side so the two can't silently drift apart again.

@@ -82,4 +82,27 @@ struct DeviceCommandResponseDecodingTests {
         let nullArrival = try decode(#"{"arrival_time": null, "status": "travel_started"}"#)
         #expect(nullArrival.arrivalTime == nil)
     }
+
+    // A hub-to-hub travel reply carries `hub_bonus`; undeclared, it threw and the
+    // retry was rejected into a device already in transit.
+    @Test func decodesTravelStartWithHubBonus() throws {
+        let response = try decode(
+            """
+            {
+              "arrives_at": "2026-08-21T15:34:56Z",
+              "destination": "AINALRAM",
+              "device_code": "F2908E6E",
+              "hub_bonus": true,
+              "origin": "ENASHIRA",
+              "status": "travel_started",
+              "travel_type": "surge"
+            }
+            """)
+
+        #expect(response.status == "travel_started")
+        #expect(response.hubBonus == true)
+
+        let absent = try decode(#"{"status": "travel_started"}"#)
+        #expect(absent.hubBonus == nil)
+    }
 }

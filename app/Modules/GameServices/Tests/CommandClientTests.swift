@@ -84,6 +84,66 @@ private typealias Operation = GameModels.Operation
         #expect(rows[0].kind == OperationKind.stow.rawValue)
     }
 
+    /// A 200 the schema cannot decode: the server accepted the command and only
+    /// its REPLY was unreadable, so the row must not claim the command never
+    /// landed (memory: failed-means-never-sent.md). The key is deliberately one
+    /// the server will never send — declaring it would retire the test.
+    @Test func anUndecodableSuccessIsRecordedAsUnknownNotFailed() async throws {
+        let database = try GameDatabase.bootstrap()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = stubGameClient { _ in
+                jsonResponse(200, #"{"status":"travelling","not_a_real_field":true}"#)
+            }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "travelling") }
+        } operation: {
+            let owner = CommandOwner(directiveID: "D1", step: "travelling", since: .distantPast)
+            _ = await CommandClient.liveValue.dispatchOwned(
+                .travel, "VESSEL", CommandParams(destination: "SOL"), owner
+            )
+        }
+
+        let rows = try await database.read { db in
+            try Operation.where { $0.entityCode.eq("VESSEL") }.fetchAll(db)
+        }
+        #expect(rows.count == 1)
+        #expect(rows[0].status == OperationStatus.unknown, "a decoded-reply failure must not read as never-sent")
+    }
+
+    /// `hub_bonus` on a travel reply is real and undeclared until 2026-08-21,
+    /// when one unreadable response re-POSTed a travel into a moving device.
+    /// Pins the schema entry that makes it decode.
+    @Test func aTravelReplyCarryingHubBonusDecodes() async throws {
+        let database = try GameDatabase.bootstrap()
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = stubGameClient { _ in
+                jsonResponse(200, #"{"status":"travelling","hub_bonus":true,"arrives_at":"1970-01-01T00:30:00Z"}"#)
+            }
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "travelling") }
+        } operation: {
+            let owner = CommandOwner(directiveID: "D1", step: "travelling", since: .distantPast)
+            _ = await CommandClient.liveValue.dispatchOwned(
+                .travel, "VESSEL", CommandParams(destination: "SOL"), owner
+            )
+        }
+
+        let rows = try await database.read { db in
+            try Operation.where { $0.entityCode.eq("VESSEL") }.fetchAll(db)
+        }
+        #expect(rows.count == 1)
+        #expect(rows[0].status != OperationStatus.unknown, "hub_bonus must not break decoding")
+        #expect(rows[0].status != OperationStatus.failed)
+    }
+
     /// A rejected immediate dispatch still writes its terminal row — `.rejected`,
     /// carrying the server's message in `detail`.
     @Test func immediateRejectionWritesARejectedRow() async throws {

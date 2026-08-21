@@ -14,6 +14,7 @@ import Dependencies
 import Foundation
 import GameModels
 import GameSession
+import OpenAPIRuntime
 import OSLog
 import SQLiteData
 import Utils
@@ -163,8 +164,8 @@ extension CommandClient: DependencyKey {
                         message = "Unexpected server response."
                     }
                 } catch {
-                    logger.error("dispatch \(kind.rawValue, privacy: .public): failed — \(error.localizedDescription, privacy: .public)")
-                    status = .failed
+                    status = throwStatus(error)
+                    logger.error("dispatch \(kind.rawValue, privacy: .public): \(status.rawValue, privacy: .public) — \(error.localizedDescription, privacy: .public)")
                     message = error.localizedDescription
                 }
 
@@ -315,9 +316,11 @@ extension CommandClient: DependencyKey {
                     return .failed("Unexpected server response.")
                 }
             } catch {
-                // Network / encoding error — not a server rejection. No retry.
-                logger.error("dispatch \(opID, privacy: .public): failed — \(error.localizedDescription, privacy: .public)")
-                await finish(opID, as: .failed, reason: error.localizedDescription, at: date.now, database: database)
+                // Not a server rejection, so the caller still hears `.failed`;
+                // only the ROW distinguishes never-sent from unreadable-reply.
+                let status = throwStatus(error)
+                logger.error("dispatch \(opID, privacy: .public): \(status.rawValue, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+                await finish(opID, as: status, reason: error.localizedDescription, at: date.now, database: database)
                 return .failed(error.localizedDescription)
             }
         }
@@ -409,6 +412,15 @@ extension CommandClient: DependencyKey {
         case let CommandError.unsupported(kind): return "Command not supported: \(kind.rawValue)."
         default: return error.localizedDescription
         }
+    }
+
+    /// How to record a thrown dispatch: `.failed` only when the request provably
+    /// never reached the server, `.unknown` once it answered. `ClientError.response`
+    /// is nil exactly until a response is received, so a body the schema cannot
+    /// decode lands here having already taken effect
+    /// (memory: failed-means-never-sent.md).
+    static func throwStatus(_ error: Error) -> OperationStatus {
+        (error as? ClientError)?.response == nil ? .failed : .unknown
     }
 
     private static func finish(
