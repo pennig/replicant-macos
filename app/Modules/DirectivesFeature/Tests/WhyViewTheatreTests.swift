@@ -235,6 +235,50 @@ struct WhyViewTheatreTests {
         }
     }
 
+    /// A built-in row is exempt from the filter because it has no theatre of its
+    /// own. Its DRIVING mission does, and leaving the pair split shows another
+    /// theatre's ferries with the runs that explain them filtered away.
+    @Test("A driven built-in follows its mission's theatre through the filter")
+    func drivenBuiltInFollowsItsMissionTheatre() throws {
+        try withDependencies {
+            $0.defaultDatabase = try GameDatabase.bootstrap()
+        } operation: {
+            let ferry = Device(
+                deviceCode: "F1", deviceType: "ami_transport_controller", replicantCode: "R1",
+                status: "coordinating", location: "AINALRAM-BELT-1", locationName: nil,
+                operationalCapacity: 100, queueSize: 0,
+                stowedInDeviceCode: nil, controllerDeviceCode: nil, attachedToDeviceCode: nil,
+                createdAt: Date(timeIntervalSince1970: 0), availableCommands: [],
+                features: ["ami"], tags: ["auto:mine"],
+                detail: .object(["ami_directive": .object(["name": .string("ferry")])]),
+                updatedAt: Date(timeIntervalSince1970: 0),
+                firstSeenAt: Date(timeIntervalSince1970: 0)
+            )
+            let mission = directiveFixture(id: "M", deviceCode: "F1", theatreDepot: "AINALRAM-BELT-1")
+            let rows = DirectiveRow.merge(devices: [ferry], directives: [mission])
+
+            var state = DirectivesFeature.State()
+            state.$brainReport.withLock {
+                $0 = brainReportFixture(theatres: [
+                    Theatre(
+                        depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
+                        readiness: .operational, stock: 40_000
+                    ),
+                    Theatre(
+                        depot: "TIANEFU-9-L4", system: "TIANEFU", origin: .pinned,
+                        readiness: .operational, stock: 40_000
+                    ),
+                ])
+            }
+
+            state.theatreFilter = "TIANEFU-9-L4"
+            #expect(state.visibleRows(rows).isEmpty, "the other theatre's ferry must go with its run")
+
+            state.theatreFilter = "AINALRAM-BELT-1"
+            #expect(state.visibleRows(rows).map(\.id).sorted() == ["builtin:F1", "custom:M"])
+        }
+    }
+
     @Test("A filter naming a theatre no longer offered shows everything")
     func staleFilterShowsEverything() throws {
         try withDependencies {

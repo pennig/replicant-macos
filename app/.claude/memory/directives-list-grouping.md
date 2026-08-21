@@ -42,3 +42,35 @@ redoing for any future change to the grouping rules.
 
 Deliberately not built: a group header is not selectable, so there is no per-mine detail pane.
 Related: [[directives-feature]], [[directive-soft-delete-retention]].
+
+## The theatre filter exempted every built-in (2026-08-21)
+
+`DirectiveRow.theatreDepot` returned nil for every `.builtIn` row — "no theatre
+concept applies" — and `DirectivesFeature.visibleRows` keeps a row when
+`theatreDepot == nil || theatreDepot == theatreFilter`. That exemption was meant
+for a mission never assigned a theatre; it swallowed every built-in as well.
+
+With two theatres recognised, filtering to `TIANEFU-9-L4` therefore hid the 19
+`AINALRAM-BELT-1` mission rows and kept all of AINALRAM's built-in ferries on
+screen. **The grouping symptom follows from the filter symptom**, which is why
+they looked like two bugs: with the mission rows gone, `missionKeys` no longer
+holds their ids or device codes, so `key(for:)`'s built-in branch falls through
+both mission lookups to `siteBearingTag` — the bare `auto:mine` — and the
+orphaned ferries collect into a group of their own.
+
+A built-in now inherits its driving mission's theatre. `DirectiveRow.missionTheatres`
+maps each driven device to its mission's depot by **both** handles `missionKeys`
+uses — `directive.deviceCode` and `directive.controllerCode` — because a pinned
+row can leave `controllerCode` unset. An undriven built-in (a permanent mine's
+belt controller, a service bot an armed fleet left standing) still resolves nil
+and still survives every filter, which is the exemption's real purpose.
+
+Visible side effect: a driven built-in's row caption now reads its depot rather
+than "unassigned".
+
+**The engine change that made this visible changed none of it.** The pinned haul
+rows had just stopped writing per-tick ([[pinned-mine-ferry-is-a-lease]]), so the
+timing invited blaming that; the rows were present in the query the whole time
+and the filter was dropping them. The live log settled it in one query — those
+runs were still cycling under the old build at the moment of the report.
+

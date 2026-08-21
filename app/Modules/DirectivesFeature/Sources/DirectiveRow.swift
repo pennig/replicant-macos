@@ -72,6 +72,9 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
     /// The device's own tags, unfiltered — `DirectiveGroup` needs the most
     /// specific fleet tag, which is not the one `drivenBy` names.
     public let tags: [String]
+    /// The theatre of the mission driving this device, so the filter takes the
+    /// pair together. Nil when no mission drives it.
+    public let theatreDepot: String?
 
     public var id: String { deviceCode }
 
@@ -82,7 +85,8 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
         config: JSONValue?,
         controlledDevices: [Device.ControlledDevice],
         drivenBy: DirectiveOwner? = nil,
-        tags: [String] = []
+        tags: [String] = [],
+        theatreDepot: String? = nil
     ) {
         self.deviceCode = deviceCode
         self.deviceType = deviceType
@@ -91,6 +95,7 @@ public struct BuiltInDirective: Equatable, Identifiable, Sendable {
         self.controlledDevices = controlledDevices
         self.drivenBy = drivenBy
         self.tags = tags
+        self.theatreDepot = theatreDepot
     }
 }
 
@@ -165,12 +170,12 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
         return "\(headline) → \(designation)"
     }
 
-    /// The theatre owning this row's work — nil for every built-in row (no
-    /// theatre concept applies) and for a custom mission never assigned one.
+    /// The theatre owning this row's work — a built-in row takes its driving
+    /// mission's, and is nil only when no mission drives it.
     public var theatreDepot: String? {
         switch self {
         case let .custom(directive, _): directive.theatreDepot
-        case .builtIn: nil
+        case let .builtIn(builtIn): builtIn.theatreDepot
         }
     }
 
@@ -295,6 +300,7 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
         let belts = MineRecipe.installedBelts(
             in: devices.filter { $0.currentDirective?.isEmpty == false }, hub: nil
         )
+        let theatres = missionTheatres(in: directives)
         let builtIn = devices.compactMap { device -> DirectiveRow? in
             guard let directive = device.currentDirective, !directive.isEmpty else { return nil }
             return .builtIn(
@@ -305,11 +311,30 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                     config: device.currentDirectiveConfig,
                     controlledDevices: device.controlledDevices,
                     drivenBy: owners[device.deviceCode] ?? fleetOwner(of: device, belts: belts),
-                    tags: device.tags
+                    tags: device.tags,
+                    theatreDepot: theatres[device.deviceCode]
                 )
             )
         }
         return custom + builtIn
+    }
+
+    /// Each device a live mission drives, against that mission's theatre —
+    /// reached by both handles `DirectiveGroup.missionKeys` uses, since a pinned
+    /// row can leave `controllerCode` unset. First wins: `directives` is
+    /// newest-first, so a contested device follows its most recent claim.
+    static func missionTheatres(in directives: [Directive]) -> [String: String] {
+        var theatres: [String: String] = [:]
+        for directive in directives {
+            guard !DirectiveStatus.finishedCases.contains(directive.status),
+                  let depot = directive.theatreDepot
+            else { continue }
+            if theatres[directive.deviceCode] == nil { theatres[directive.deviceCode] = depot }
+            if let controller = directive.controllerCode, theatres[controller] == nil {
+                theatres[controller] = depot
+            }
+        }
+        return theatres
     }
 
     /// The owner of a device the engine drives with no mission row to hold it —
