@@ -34,6 +34,7 @@ public struct Star: Identifiable, Equatable, Sendable {
     @Column(as: Date.FastISO8601Representation?.self) public var fullyScannedAt: Date?
     public var region: String?
     public var hasHub: Bool
+    public var hasWard: Bool
 
     public var id: String { designation }
     public var position: Position { Position(x: positionX, y: positionY, z: positionZ) }
@@ -50,7 +51,8 @@ public struct Star: Identifiable, Equatable, Sendable {
             hasLife: hasLife,
             entryPoint: entryPoint,
             region: region,
-            hasHub: hasHub
+            hasHub: hasHub,
+            hasWard: hasWard
         )
     }
 
@@ -69,7 +71,8 @@ public struct Star: Identifiable, Equatable, Sendable {
         firstVisitedAt: Date? = nil,
         fullyScannedAt: Date? = nil,
         region: String? = nil,
-        hasHub: Bool = false
+        hasHub: Bool = false,
+        hasWard: Bool = false
     ) {
         self.designation = designation
         self.spectralType = spectralType
@@ -86,6 +89,7 @@ public struct Star: Identifiable, Equatable, Sendable {
         self.fullyScannedAt = fullyScannedAt
         self.region = region
         self.hasHub = hasHub
+        self.hasWard = hasWard
     }
 }
 
@@ -106,7 +110,8 @@ extension Star {
             entryPoint: item.entryPoint,
             createdAt: createdAt,
             region: item.region,
-            hasHub: item.hasHub
+            hasHub: item.hasHub,
+            hasWard: item.hasWard
         )
     }
 }
@@ -115,8 +120,9 @@ extension Star {
 
 extension Star {
     /// Upserts `records` from the objective catalogue, refreshing every
-    /// catalogue-carried column (`region`/`hasHub` included) on conflict.
-    /// Per-replicant knowledge and lifecycle timestamps are left untouched.
+    /// catalogue-carried column (`region`/`hasHub`/`hasWard` included) on
+    /// conflict. Per-replicant knowledge and lifecycle timestamps are left
+    /// untouched.
     public static func upsertCatalogue(_ records: [Star], in db: Database) throws {
         try Star.insert {
             records
@@ -132,6 +138,7 @@ extension Star {
             row.entryPoint = excluded.entryPoint
             row.region = excluded.region
             row.hasHub = excluded.hasHub
+            row.hasWard = excluded.hasWard
         }
         .execute(db)
     }
@@ -223,6 +230,17 @@ extension Star {
         try #sql(
             """
             ALTER TABLE "stars" ADD COLUMN "hasHub" INTEGER NOT NULL DEFAULT 0
+            """
+        )
+        .execute(db)
+    }
+
+    /// Adds the census `hasWard` flag — non-nullable, mirroring the payload,
+    /// which reports a ward by presence and omits the key otherwise.
+    public static let addStarHasWard = SchemaMigration("Add 'hasWard' to 'stars'") { db in
+        try #sql(
+            """
+            ALTER TABLE "stars" ADD COLUMN "hasWard" INTEGER NOT NULL DEFAULT 0
             """
         )
         .execute(db)

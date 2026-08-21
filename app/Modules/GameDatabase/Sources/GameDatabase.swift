@@ -98,6 +98,7 @@ public enum GameDatabase {
         GameModels.Operation.relaxOpenIndex,
         Directive.dropFreighterCode,
         Directive.addBotCodes,
+        Star.addStarHasWard,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

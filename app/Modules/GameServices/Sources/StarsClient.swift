@@ -56,10 +56,9 @@ public struct StarsClient: Sendable {
     public var cooldownUntil: @Sendable () async -> Date?
 
     /// Walk the per-replicant observable-stars listing (`GET /v1/replicants/{code}/stars`,
-    /// paged), yielding each page as it arrives. Used to overlay per-replicant
-    /// `explored` / `has_life` onto the catalogue; the listing is distance-sorted,
-    /// so callers can stop once the nearby explored systems are covered. The
-    /// stream finishes when the last page is read, or throws if any request fails.
+    /// paged), yielding each page as it arrives to overlay per-replicant
+    /// `explored` / `has_life` onto the catalogue. Callers must walk every page:
+    /// the sort is by current distance, so explored systems do not cluster.
     public var survey: @Sendable (
         _ replicantCode: String,
         _ perPage: Int
@@ -206,36 +205,40 @@ extension StarPage {
 }
 
 extension StarItem {
-    /// The full-catalogue row (`GET /v1/stars`), which the spec models with its
-    /// own schema as of 2.3.2. It carries no per-replicant knowledge, so
-    /// `explored` / `hasLife` start unset here and are overlaid by `survey`.
+    /// The full-catalogue row (`GET /v1/stars`), which the spec gives its own
+    /// schema. It carries no per-replicant knowledge, so `explored` / `hasLife`
+    /// start unset here and are overlaid by `survey`.
     fileprivate init(schema: Components.Schemas.AppSchemasStarsCatalogueStarSchema) {
+        let position = schema.position.map(Position.init(schema:)) ?? Position(x: 0, y: 0, z: 0)
         self.init(
             designation: schema.designation ?? "",
             spectralType: schema.spectralType ?? "",
             color: schema.color ?? "",
-            position: schema.position.map(Position.init(schema:)) ?? Position(x: 0, y: 0, z: 0),
+            position: position,
             estimatedPlanets: schema.estimatedPlanets ?? 0,
             explored: false,
             hasLife: nil,
             entryPoint: schema.entryPoint,
             region: schema.region,
-            hasHub: schema.hasHub ?? false
+            hasHub: schema.hasHub ?? false,
+            hasWard: schema.hasWard ?? false
         )
     }
 
     fileprivate init(schema: Components.Schemas.AppSchemasStarsStarItemSchema) {
+        let position = schema.position.map(Position.init(schema:)) ?? Position(x: 0, y: 0, z: 0)
         self.init(
             designation: schema.designation ?? "",
             spectralType: schema.spectralType ?? "",
             color: schema.color ?? "",
-            position: schema.position.map(Position.init(schema:)) ?? Position(x: 0, y: 0, z: 0),
+            position: position,
             estimatedPlanets: schema.estimatedPlanets ?? 0,
             explored: schema.explored ?? false,
             hasLife: schema.hasLife,
             entryPoint: schema.entryPoint,
             region: schema.region,
-            hasHub: schema.hasHub ?? false
+            hasHub: schema.hasHub ?? false,
+            hasWard: schema.hasWard ?? false
         )
     }
 }

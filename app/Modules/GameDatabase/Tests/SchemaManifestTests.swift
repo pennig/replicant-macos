@@ -76,6 +76,7 @@ import Testing
         "Relax 'operations' open index to active only",
         "Drop 'freighterCode' from 'directives'",
         "Add 'botCodes' to 'directives'",
+        "Add 'hasWard' to 'stars'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {
