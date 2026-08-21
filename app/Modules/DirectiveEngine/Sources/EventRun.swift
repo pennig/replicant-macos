@@ -410,19 +410,33 @@ public struct EventRun: MissionStepMachine {
     // MARK: - Loading
 
     /// The courier, then the beacon and the option's devices standing at `depot`,
-    /// in the order `loading` attaches them.
+    /// in the order `loading` attaches them. Each type is capped at what the
+    /// option asks for: the commit consumes exactly that many, so a surplus
+    /// flown out is abandoned at the event site.
     static func loadPayload(
         courier: Device, option: EventPlan.Option, depot: String, tag: FleetTag,
         in world: WorldSnapshot
     ) -> [Device] {
-        var payload = [courier]
-        payload += world.devices.values
+        let standing = world.devices.values
             .filter {
                 $0.carries(tag, policy: .exact) && $0.location == depot
                     && ($0.deviceType == EventPlan.beaconDeviceType || option.devices[$0.deviceType] != nil)
             }
             .sorted { $0.deviceCode < $1.deviceCode }
-        return payload
+
+        var room = option.devices
+        room[EventPlan.beaconDeviceType] = max(room[EventPlan.beaconDeviceType] ?? 0, 1)
+        // A device already on the carrier holds its berth however the rest of
+        // the field sorts, so the choice cannot change mid-load.
+        var chosen: Set<String> = []
+        for device in standing.filter({ $0.attachedToDeviceCode != nil })
+            + standing.filter({ $0.attachedToDeviceCode == nil })
+        {
+            guard let left = room[device.deviceType], left > 0 else { continue }
+            room[device.deviceType] = left - 1
+            chosen.insert(device.deviceCode)
+        }
+        return [courier] + standing.filter { chosen.contains($0.deviceCode) }
     }
 
     /// One freighter's share of the bill.

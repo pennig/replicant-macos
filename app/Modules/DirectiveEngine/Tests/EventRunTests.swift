@@ -137,6 +137,97 @@ struct EventRunLoadingTests {
         ))
     }
 
+    /// The commit consumes exactly what the option asks for, so anything flown
+    /// beyond that is abandoned at the event site. The load takes the required
+    /// count and leaves the rest standing at the depot.
+    @Test("a surplus print is left standing rather than loaded")
+    func surplusIsLeftStanding() {
+        let tag = EventRun.fleetTag(forTheatre: "HUB-1").string
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
+            EventRunFixtures.courier(attachedTo: "CARRIER"),
+            EventRunFixtures.device("FARM1", type: "orbital_farm", attachedTo: "CARRIER", tags: [tag]),
+            EventRunFixtures.device("FARM2", type: "orbital_farm", attachedTo: "CARRIER", tags: [tag]),
+            EventRunFixtures.device("FARM3", type: "orbital_farm", tags: [tag]),
+            EventRunFixtures.device("FARM4", type: "orbital_farm", tags: [tag]),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices, event: EventRunFixtures.event(devices: [(2, "orbital_farm")]), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
+        )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.departing.rawValue), "\(action)")
+    }
+
+    /// The cap is per device type, never a total across the payload.
+    @Test("each device type is capped against its own requirement")
+    func capIsPerDeviceType() {
+        let tag = EventRun.fleetTag(forTheatre: "HUB-1").string
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
+            EventRunFixtures.courier(attachedTo: "CARRIER"),
+            EventRunFixtures.device("FARM1", type: "orbital_farm", attachedTo: "CARRIER", tags: [tag]),
+            EventRunFixtures.device("FARM2", type: "orbital_farm", tags: [tag]),
+            EventRunFixtures.device("SOLAR1", type: "solar_collector", attachedTo: "CARRIER", tags: [tag]),
+            EventRunFixtures.device("SOLAR2", type: "solar_collector", tags: [tag]),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices,
+            event: EventRunFixtures.event(devices: [(1, "orbital_farm"), (1, "solar_collector")]), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
+        )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.departing.rawValue), "\(action)")
+    }
+
+    /// The run plants one beacon whatever else stands tagged at the depot.
+    @Test("only one beacon rides even when several stand tagged")
+    func onlyOneBeaconRides() {
+        let tag = EventRun.fleetTag(forTheatre: "HUB-1").string
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
+            EventRunFixtures.courier(attachedTo: "CARRIER"),
+            EventRunFixtures.device("BEACON1", type: "ftl_beacon", attachedTo: "CARRIER", tags: [tag]),
+            EventRunFixtures.device("BEACON2", type: "ftl_beacon", tags: [tag]),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices, event: EventRunFixtures.event(devices: []), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
+        )
+        #expect(action == .advanceStep(nextStep: EventRun.Step.departing.rawValue), "\(action)")
+    }
+
+    /// Capping must not under-deliver: the requirement itself is still taken.
+    @Test("the load still takes the option's full requirement")
+    func loadTakesTheFullRequirement() {
+        let tag = EventRun.fleetTag(forTheatre: "HUB-1").string
+        let devices = [
+            EventRunFixtures.device("CARRIER", type: "surge_carrier", tags: ["auto:carrier"]),
+            EventRunFixtures.device("FREIGHT", type: "cargo_freighter"),
+            EventRunFixtures.courier(attachedTo: "CARRIER"),
+            EventRunFixtures.device("FARM1", type: "orbital_farm", attachedTo: "CARRIER", tags: [tag]),
+            EventRunFixtures.device("FARM2", type: "orbital_farm", tags: [tag]),
+        ]
+        let world = EventRunFixtures.world(
+            devices: devices, event: EventRunFixtures.event(devices: [(2, "orbital_farm")]), now: now
+        )
+        let action = EventRun().nextAction(
+            directive: EventRunFixtures.directive(step: EventRun.Step.loading.rawValue, now: now), world: world
+        )
+        #expect(action == .dispatch(
+            kind: .attach, deviceCode: "CARRIER",
+            params: CommandParams(devices: ["FARM2"]),
+            nextStep: EventRun.Step.confirmingLoad.rawValue
+        ))
+    }
+
     @Test("a missing courier idles rather than stalling")
     func noCourierWaits() {
         let devices = [
