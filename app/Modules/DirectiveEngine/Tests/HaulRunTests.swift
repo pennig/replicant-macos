@@ -162,12 +162,13 @@ private func run(
     stepStartedAt: Date = fixtureNow,
     fleetTag: String? = HaulRun.defaultFleetTag.string,
     controllerCode: String? = nil,
-    theatreDepot: String? = nil
+    theatreDepot: String? = nil,
+    targets: [String] = []
 ) -> Directive {
     Directive(
         id: "D1", kind: .haulRun, status: .running, deviceCode: "C1",
         controllerCode: controllerCode,
-        fleetTag: fleetTag, targets: [], targetIndex: 0, step: step,
+        fleetTag: fleetTag, targets: targets, targetIndex: 0, step: step,
         stepStartedAt: stepStartedAt, returnToOrigin: false,
         originDesignation: nil, attentionReason: nil,
         createdAt: fixtureNow, updatedAt: fixtureNow, theatreDepot: theatreDepot
@@ -1101,6 +1102,61 @@ struct HaulRunEndToEndTests {
         #expect(row.status == .running)
     }
 
+    /// A settled pinned ferry must cost NOTHING per tick — no command, no log
+    /// row, no `updatedAt` churn. Ten evaluations because the old shape wrote
+    /// three `.stepStarted` rows per minute-long lap, so any surviving cycle
+    /// shows up here as a row.
+    @Test func aSettledPinnedFerryWritesNothingAcrossManyEvaluations() async throws {
+        let database = try GameDatabase.bootstrap()
+        let belt = "ATIANFU-BELT-1"
+        try await database.write { db in
+            try Device.insert {
+                controller(
+                    "C1",
+                    currentDirective: HaulTargetPlanner.ferry,
+                    currentConfig: [
+                        "collect": .string(belt),
+                        "deliver": .string(HaulRun.deliveryLocation),
+                    ]
+                )
+            }.execute(db)
+            try Directive.insert {
+                run(
+                    step: HaulRun.Step.hauling.rawValue,
+                    stepStartedAt: fixtureNow.addingTimeInterval(-24 * 60 * 60),
+                    targets: [belt]
+                )
+            }.execute(db)
+        }
+
+        let dispatched = LockIsolated(0)
+        let before = try #require(await readRow(database))
+
+        let steps = try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(fixtureNow)
+            $0.uuid = .incrementing
+            $0.commandGovernor.dispatchOwned = { _, _, _, _ in
+                dispatched.withValue { $0 += 1 }
+                return .dispatched(.accepted(operationID: nil))
+            }
+        } operation: {
+            try await drive(database, evaluations: 10)
+        }
+
+        #expect(dispatched.value == 0)
+        #expect(steps == Array(repeating: HaulRun.Step.hauling.rawValue, count: 10))
+
+        let logRows = try await database.read { db in
+            try DirectiveLogEntry.where { $0.directiveID.eq("D1") }.fetchCount(db)
+        }
+        #expect(logRows == 0, "a settled ferry must write no log rows at all")
+
+        let after = try #require(await readRow(database))
+        #expect(after.stepStartedAt == before.stepStartedAt)
+        #expect(after.updatedAt == before.updatedAt)
+    }
+
     /// The complement: with nothing reachable the engine issues NO command, and
     /// the run parks in `hauling` still `.running`.
     ///
@@ -1576,13 +1632,14 @@ struct HaulRunPinnedTests {
         step: String,
         deviceCode: String,
         targets: [String],
-        controllerCode: String? = nil
+        controllerCode: String? = nil,
+        stepStartedAt: Date = fixtureNow
     ) -> Directive {
         Directive(
             id: "D9", kind: .haulRun, status: .running, deviceCode: deviceCode,
             controllerCode: controllerCode,
             fleetTag: HaulRun.defaultFleetTag.string, targets: targets, targetIndex: 0, step: step,
-            stepStartedAt: fixtureNow, returnToOrigin: false,
+            stepStartedAt: stepStartedAt, returnToOrigin: false,
             originDesignation: nil, attentionReason: nil,
             createdAt: fixtureNow, updatedAt: fixtureNow
         )
@@ -1678,6 +1735,48 @@ struct HaulRunPinnedTests {
             world: twoPileWorld(controllers: [keeper("C1"), settled])
         )
         #expect(action == .advanceStep(nextStep: HaulRun.Step.hauling.rawValue))
+    }
+
+    /// A pinned row has one belt and never re-ranks, so waking to re-survey buys
+    /// nothing and writes three `.stepStarted` rows a minute. It holds instead:
+    /// `.wait` is the only action that writes nothing at all.
+    @Test func pinnedHaulingHoldsIndefinitelyWhileTheFerryKeepsItsConfig() {
+        let settled = keeper(
+            "C2", currentDirective: HaulTargetPlanner.ferry,
+            currentConfig: [
+                "collect": .string(pinnedBelt),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let action = HaulRun().nextAction(
+            directive: keeperRun(
+                step: HaulRun.Step.hauling.rawValue, deviceCode: "C2", targets: [pinnedBelt],
+                stepStartedAt: fixtureNow.addingTimeInterval(-24 * 60 * 60)
+            ),
+            world: twoPileWorld(controllers: [keeper("C1"), settled])
+        )
+        #expect(action == .wait)
+    }
+
+    /// Holding is not sleeping: the config is what it watches, so a ferry
+    /// repointed at another belt sends it back to `assigning` to re-arm. The
+    /// re-entry budget still counts, because that loop never re-enters `hauling`.
+    @Test func pinnedHaulingReturnsToAssignWhenTheFerryConfigDrifts() {
+        let drifted = keeper(
+            "C2", currentDirective: HaulTargetPlanner.ferry,
+            currentConfig: [
+                "collect": .string(richestPile),
+                "deliver": .string(HaulRun.deliveryLocation),
+            ]
+        )
+        let action = HaulRun().nextAction(
+            directive: keeperRun(
+                step: HaulRun.Step.hauling.rawValue, deviceCode: "C2", targets: [pinnedBelt],
+                stepStartedAt: fixtureNow.addingTimeInterval(-24 * 60 * 60)
+            ),
+            world: twoPileWorld(controllers: [keeper("C1"), drifted])
+        )
+        #expect(action == .advanceStep(nextStep: HaulRun.Step.assigning.rawValue))
     }
 
     /// Case 4, the scoping guard: an empty `targets` is the general drainer, and

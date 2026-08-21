@@ -384,10 +384,17 @@ public struct HaulRun: MissionStepMachine {
         }
     }
 
-    /// Hold for `pollInterval` against `world`'s clock, then survey again. `.wait`
-    /// writes nothing, so the interval can be measured without the step resetting
-    /// the clock it reads.
+    /// A pinned row watches its own config and holds on `.wait`, which writes
+    /// nothing; drift routes through `assigning`, never back through here, so
+    /// `dispatchAttemptCount` stays bounded. The general drainer instead surveys
+    /// again each `pollInterval` — its ranking is only as good as its census.
     private func haul(_ directive: Directive, _ world: WorldSnapshot) -> MissionAction {
+        if let pinned = Self.pinnedSource(of: directive) {
+            let assignment = Self.pinnedAssignment(directive, at: pinned, in: world)
+            return Self.isInForce(assignment, in: world, for: directive)
+                ? .wait
+                : .advanceStep(nextStep: Step.assigning.rawValue)
+        }
         if world.now.timeIntervalSince(directive.stepStartedAt) < Self.pollInterval {
             return .wait
         }
