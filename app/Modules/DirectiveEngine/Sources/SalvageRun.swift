@@ -607,15 +607,15 @@ public struct SalvageRun: MissionStepMachine {
         case .judge: break
         }
 
-        let stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
-        // A dropped completion frame: the drones are already home, nothing said so.
-        if stranded.isEmpty { return .advanceStep(nextStep: Step.verifying.rawValue) }
-        // Still mining — the drones are out by design. Reconcile on a cadence to
-        // catch completion (or the controller going idle); never stall, however
-        // long the cycle runs.
+        // Outranks the aboard check below: a post-launch read can still carry
+        // pre-deployment rows (memory: post-launch-read-precedes-deployment.md).
         if Self.isMining(controller) {
             return canRead ? .refreshFleet(tag: wireTag, thenStall: nil) : .wait
         }
+        let stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
+        // Mining over and every drone aboard: a dropped completion frame — they
+        // are home and nothing said so.
+        if stranded.isEmpty { return .advanceStep(nextStep: Step.verifying.rawValue) }
         // Set but not running, drones out: no completion is ever coming, so the
         // reconcile above would wait forever. Prove it on a fresh read, then name it.
         if Self.isPaused(controller) {

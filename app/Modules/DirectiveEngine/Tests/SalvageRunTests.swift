@@ -751,6 +751,28 @@ struct SalvageRunMiningTests {
         #expect(SalvageRun().nextAction(directive: directive, world: world) == .wait)
     }
 
+    /// A row read AFTER the step began can still predate the launch taking
+    /// effect, satisfying the watermark while reading "stowed aboard". Taken for
+    /// a dropped completion frame it advances to `verify` and false-stalls
+    /// `dronesNotRecovered` (memory: post-launch-read-precedes-deployment.md).
+    @Test func doesNotReadAPostLaunchPreDeploymentRowAsRecovered() {
+        let mining = device(
+            "CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            currentDirective: "gather_salvage",
+            currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)],
+            updatedAt: now
+        )
+        // Fresh by the watermark (read 5s into the step) and still aboard: the
+        // launch had not taken effect server-side when the read was issued.
+        let notYetDeployed = device("DRONE", type: "mining_drone", stowedIn: "VESSEL",
+                                    controlledBy: "CTRL",
+                                    updatedAt: now.addingTimeInterval(-5))
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-10))
+        let world = world(devices: [atSystem, mining, notYetDeployed], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world) != .advanceStep(nextStep: "verifying"))
+    }
+
     /// Mining done, a drone not aboard and NOT travelling (no ETA): it isn't
     /// coming on its own. Hand to `verify`, which refreshes once and raises
     /// `dronesNotRecovered` if the fresh rows agree.
