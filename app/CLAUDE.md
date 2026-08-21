@@ -42,7 +42,7 @@ into the source.
 **The budget is hard, not advisory:**
 
     file header            ≤ 10 lines
-    declaration doc (///)  ≤ 3 lines
+    declaration doc (///)  ≤ 4 lines
     inline //              ≤ 2 lines
 
 Blank `///` lines count. A fact that does not fit in three lines is a memory note,
@@ -94,12 +94,13 @@ The docs website seems to be updated more diligently to match the real implement
 ---
 ## Git, Code Review, and Code Comprehension Protocols
 Commits are to be made directly to the main branch, or to a branch/worktree that gets merged to main upon review. No PRs should be created nor should the origin remote be considered while working.
-All agents and reviewing subagents must utilize Swift-LSP (SourceKit-LSP) to analyze code changes. Before signing off on any code:
+Whenever possible, utilize Swift-LSP (SourceKit-LSP) to analyze code changes. NOTE: Subagents cannot use LSP tools, so they must fall back to grep. 
+Before signing off on any code:
 1. Query the Swift-LSP language server (e.g., `goToDefinition`, `findReferences`) for syntax, type correctness, and unresolved references.
 2. Cross-reference usage by checking symbol references.
 3. Treat LSP output as the single source of truth over simple text matching — **but only when the index demonstrably covers the symbol.** An empty `findReferences` is NOT evidence that a symbol is unused: the index is lazy and will not have reached code written this session (see below). Never conclude "no callers, safe to change" from an empty result. When the index is cold, say so and fall back to the compiler: a clean `swift build --build-tests` type-checks every cross-module call site, which is what the reference query was approximating.
 **LSP root is `Modules/`** (where `Package.swift` lives) — nearly all code is in that SPM package, which SourceKit-LSP resolves with no build-server config. Root the language server there, not at the repo top level. The thin app-target shell (`macOS/AppFeature.swift`, `MainFeature.swift`, `ReplicantApp.swift`) lives in the `.xcodeproj` and is *not* covered without an `xcode-build-server`-generated `buildServer.json`; grep is acceptable for that sliver. Build the package once so the index store is populated (a stale index yields stale symbol answers). The LSP tools load at Claude Code startup, so a session must be (re)launched with the Swift LSP plugin active to have them. **`Modules/.sourcekit-lsp/config.json` points LSP at SwiftPM's swiftbuild BSP server, so it reads the index store your own `swift build` writes** rather than maintaining a separate one. Consequence: **the index is exactly as fresh as your last build** — build, then query. This is what makes same-session code resolve at all (it previously never did).
-**Every new worktree needs two setup steps before LSP works — do them first, and tell any subagent you dispatch into a worktree to do the same:**
+**Every new worktree needs two setup steps before LSP works — do them first:**
 1. `cd app/Modules && swift build --build-tests` — a fresh worktree has an empty index; the build is what populates it.
 2. `./scripts/link-index-store.sh` — SwiftPM advertises its index store at `.build/index-store` while the swiftbuild engine writes to `.build/out`. The script symlinks them. **Without it every reference query returns zero**, silently. It is idempotent, so run it whenever unsure, and re-run after anything that wipes `.build`.
 
