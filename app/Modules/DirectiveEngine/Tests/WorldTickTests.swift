@@ -489,6 +489,18 @@ private struct StallingMachine: MissionStepMachine {
     func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
 }
 
+/// Enrols a bot roster on every directive it is asked about.
+private struct EnrollingMachine: MissionStepMachine {
+    let kind: DirectiveKind = .salvageRun
+    let firstStep = "step"
+
+    func nextAction(directive: Directive, world: WorldSnapshot) -> MissionAction {
+        .enrolBots(deviceCodes: ["B1", "B2"], nextStep: "enrolled")
+    }
+
+    func plan(_ context: RoamContext) -> RoamPlan { .exhausted }
+}
+
 /// `D1` asks for a device refresh the harness answers on its own schedule;
 /// every other directive advances. Records the ids it was asked about, which is
 /// what a would-be second evaluation of `D1` shows up in.
@@ -893,6 +905,35 @@ private func steps(_ database: any DatabaseReader) async throws -> [String] {
                 try DirectiveLogEntry.all.fetchAll(db)
             }
             #expect(entries.isEmpty, "the refused write takes its timeline entry with it")
+        }
+    }
+}
+
+@Suite struct EnrolledRosterPersistence {
+    /// `commit` names its columns, so a column the executor assigns but does not
+    /// list is dropped in silence — the roster would read empty for ever and the
+    /// departure gate would be inert with every test still green.
+    @Test func anEnrolmentSurvivesTheCommitColumnList() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Directive.insert {
+                directiveFixture(id: "D1", deviceCode: "V1", targets: ["SOL"])
+            }.execute(db)
+        }
+        let now = Date(timeIntervalSince1970: 100)
+        let tick = try await WorldTick.read(from: database, now: now, generation: 1)
+        let core = DirectiveEngineCore(machines: [EnrollingMachine()], tick: .seconds(5))
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(now)
+            $0.uuid = .incrementing
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1", tick: tick)
+            let row = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(row?.botCodes == ["B1", "B2"], "the roster the evaluation decided is written")
+            #expect(row?.step == "enrolled", "and the step move that carried it landed")
         }
     }
 }

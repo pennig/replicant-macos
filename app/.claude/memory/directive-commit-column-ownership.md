@@ -20,7 +20,7 @@ the engine and executor is in one of them:
 
 | Set | Columns | Written by |
 | --- | --- | --- |
-| progress | `step`, `stepStartedAt`, `targetIndex`, `controllerCode`, `claimedRelayCode`, `updatedAt` | `DirectiveExecutor.commit` |
+| progress | `step`, `stepStartedAt`, `targetIndex`, `controllerCode`, `claimedRelayCode`, `botCodes`, `updatedAt` | `DirectiveExecutor.commit` |
 | lifecycle | `status`, `attentionReason`, `updatedAt` | `DirectiveExecutor.commitLifecycle` |
 | queue | `targets`, `updatedAt` | `DirectiveEngine.resolveExtendQueue` |
 
@@ -42,6 +42,10 @@ so a resumed run re-dispatches; for the four `nonRetryableKinds` (`print`,
 print or a double withdrawal. Recording reality on a paused row is strictly
 safer than refusing it, and the pause still holds because `status` was never in
 the statement.
+
+`botCodes` is progress for the same reason: an enrolment records that a bot is
+about to leave the hull, and losing it on a paused row would leave the run owing
+a recovery it has no record of ([[bot-roster-departure-gate]]).
 
 `commitLifecycle` is the opposite case and takes `WHERE status = 'running'`.
 `.needsAttention` and `.completed` are decisions ABOUT the run, made from a row

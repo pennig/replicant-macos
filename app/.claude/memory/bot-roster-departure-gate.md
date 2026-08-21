@@ -87,6 +87,13 @@ because the brain drives only retry/cancel and a retry cannot reach it.
 Both bot-carrying engines get this at once: `BotPhase` is one copy serving
 `SalvageRun` and `SurveyRun`.
 
+**`botCodes` must stay named in `DirectiveExecutor.commit`'s column list**
+([[directive-commit-column-ownership]]). That list is explicit, and a column the
+executor assigns but does not name is dropped in silence — the roster reads empty
+for ever and the gate is inert with every unit test still green, because the
+engine tests build their own `Directive` values and never touch the write path.
+`EnrolledRosterPersistence` is the one test that would catch it.
+
 ## What this does not cover
 
 - **No backfill.** A directive already running has no record of which bots it put

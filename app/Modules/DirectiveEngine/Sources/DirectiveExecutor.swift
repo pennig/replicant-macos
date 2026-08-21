@@ -502,6 +502,7 @@ enum DirectiveExecutor {
                         $0.targetIndex = #bind(directive.targetIndex)
                         $0.controllerCode = #bind(directive.controllerCode)
                         $0.claimedRelayCode = #bind(directive.claimedRelayCode)
+                        $0.botCodes = #bind(directive.botCodes)
                         $0.updatedAt = #bind(directive.updatedAt)
                     }
                     .execute(db)
