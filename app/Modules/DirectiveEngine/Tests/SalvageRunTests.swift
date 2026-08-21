@@ -773,6 +773,26 @@ struct SalvageRunMiningTests {
         #expect(SalvageRun().nextAction(directive: directive, world: world) != .advanceStep(nextStep: "verifying"))
     }
 
+    /// The controller row carries no freshness gate — the ladder vouches for the
+    /// DRONE rows only — so `isMining` can be read off a row still holding the
+    /// previous cycle's terminal `completed`. A drone reporting `mining (…)` on a
+    /// gated row is direct evidence the cycle is live, and outranks that field.
+    @Test func waitsWhileADroneReportsMiningOverAStaleCompletedController() {
+        let staleCompleted = device(
+            "CTRL", type: "ami_mining_controller", stowedIn: "VESSEL",
+            controlled: ["DRONE"], directives: ["gather_salvage"],
+            currentDirective: "gather_salvage",
+            currentDirectiveConfig: ["location": .string("TOSLIT-6-5"), "recall": .bool(true)],
+            currentDirectiveStatus: "completed",
+            updatedAt: now.addingTimeInterval(-2 * 60)
+        )
+        let mining = device("DRONE", type: "mining_drone", location: "TOSLIT-6-5",
+                            controlledBy: "CTRL", status: "mining (conductive)", updatedAt: now)
+        let directive = running(step: "awaiting", stepStartedAt: now.addingTimeInterval(-41))
+        let world = world(devices: [atSystem, staleCompleted, mining], now: now)
+        #expect(SalvageRun().nextAction(directive: directive, world: world) == .wait)
+    }
+
     /// Mining done, a drone not aboard and NOT travelling (no ETA): it isn't
     /// coming on its own. Hand to `verify`, which refreshes once and raises
     /// `dronesNotRecovered` if the fresh rows agree.

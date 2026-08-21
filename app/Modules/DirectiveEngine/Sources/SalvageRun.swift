@@ -250,6 +250,13 @@ public struct SalvageRun: MissionStepMachine {
             && controller.currentDirectiveStatus == "paused"
     }
 
+    /// Whether any of `drones` reports itself working. `isMining` reads a
+    /// controller row under no freshness gate; a drone's own `mining (…)` is the
+    /// same fact on a row the caller has already proven fresh.
+    static func anyDroneMining(_ drones: [Device]) -> Bool {
+        drones.contains { $0.statusBase == "mining" }
+    }
+
     // MARK: - Target planning
 
     /// Where the run goes next, ranked by `SalvageTargetPlanner` over MESHED
@@ -607,9 +614,10 @@ public struct SalvageRun: MissionStepMachine {
         case .judge: break
         }
 
-        // Outranks the aboard check below: a post-launch read can still carry
-        // pre-deployment rows (memory: post-launch-read-precedes-deployment.md).
-        if Self.isMining(controller) {
+        // Outranks every check below: a post-launch read can still carry
+        // pre-deployment rows, and the controller's own row is not gated above
+        // (memory: post-launch-read-precedes-deployment.md).
+        if Self.isMining(controller) || Self.anyDroneMining(drones) {
             return canRead ? .refreshFleet(tag: wireTag, thenStall: nil) : .wait
         }
         let stranded = drones.filter { $0.stowedInDeviceCode != vessel.deviceCode }
