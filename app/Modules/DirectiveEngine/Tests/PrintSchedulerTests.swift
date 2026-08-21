@@ -362,7 +362,7 @@ struct PrintSchedulerOnOrderTests {
     }
 
     /// An op adopted from a device snapshot carries `detail: {}` — it names no
-    /// type. It cannot be netted and must not be counted as a zero.
+    /// type, so a bench reporting no jobs of its own leaves it uncountable.
     @Test("an op that names no device type is not counted")
     func typelessOpNotCounted() {
         let world = snapshot(
@@ -371,6 +371,54 @@ struct PrintSchedulerOnOrderTests {
         )
 
         #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world).isEmpty)
+    }
+
+    /// One `enqueue_print` with `quantity: N` records ONE typed op; jobs 2…N
+    /// reach the platen as untyped adopted rows, and the queue behind them
+    /// carries no op at all. The bench's own snapshot is the only account of
+    /// what is still coming off it.
+    @Test("a batch's adopted job counts what the bench still has on it")
+    func adoptedBatchJobCountsTheBenchLoad() {
+        let world = snapshot(
+            [bench("B1", queued: ["orbital_farm"], printing: "orbital_farm")],
+            open: ["B1": op(on: "B1", owner: "D-7", id: "OP-B1-2")]
+        )
+
+        #expect(
+            PrintScheduler.onOrder(for: "D-7", at: depot, in: world) == ["orbital_farm": 2]
+        )
+    }
+
+    /// The platen and the queue name their device types but never whose jobs
+    /// they are. With another run on the same bench no share can be attributed,
+    /// so the count falls back to what this owner's own ops prove.
+    @Test("a co-tenant on the bench keeps its snapshot out of the count")
+    func coTenantKeepsTheBenchSnapshotOut() {
+        let world = snapshot(
+            [bench("B1", queued: ["orbital_farm"], printing: "orbital_farm")],
+            queued: [
+                "B1": [
+                    op(on: "B1", owner: "D-7", id: "OP-1"),
+                    op(on: "B1", owner: "OTHER", id: "OP-2", startedAt: now.addingTimeInterval(1))
+                ]
+            ]
+        )
+
+        #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world).isEmpty)
+    }
+
+    /// A dispatch lands before the printer's next poll, so the bench reports an
+    /// empty platen while the order is real. The typed op's quantity holds.
+    @Test("a fresh batch counts its quantity before the bench snapshot catches up")
+    func freshBatchCountsItsQuantityAheadOfTheSnapshot() {
+        let world = snapshot(
+            [bench("B1")],
+            open: ["B1": op(on: "B1", owner: "D-7", deviceType: "orbital_farm", quantity: 3)]
+        )
+
+        #expect(
+            PrintScheduler.onOrder(for: "D-7", at: depot, in: world) == ["orbital_farm": 3]
+        )
     }
 
     /// A decodable payload is not enough on its own: only print ops are on order.

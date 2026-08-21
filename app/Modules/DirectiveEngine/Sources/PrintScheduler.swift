@@ -100,20 +100,45 @@ enum PrintScheduler {
         device.queueSize > 0 ? device.queueSize : 1
     }
 
-    /// What `owner` already has on order at `depot`, by device type — every
-    /// live op per bench, not just the active one. A `print_queue` entry
-    /// carries no id, so only ops can be attributed to a directive.
+    /// What `owner` already has on order at `depot`, by device type: the
+    /// greater, per bench, of what its own ops claim and what the bench itself
+    /// reports working. A `print_queue` entry carries no id, so an op is still
+    /// the only thing that can attribute a bench to a directive.
     static func onOrder(
         for owner: String, at depot: String, in world: WorldSnapshot
     ) -> [String: Int] {
         benches(at: depot, in: world).reduce(into: [String: Int]()) { total, bench in
-            for op in openOps(for: bench.device.deviceCode, in: world) {
-                guard op.kind == OperationKind.print.rawValue,
-                      op.directiveID == owner,
-                      let type = op.printedDeviceType
-                else { continue }
-                total[type, default: 0] += op.printedQuantity ?? 1
+            let live = openOps(for: bench.device.deviceCode, in: world)
+                .filter { $0.kind == OperationKind.print.rawValue }
+            guard live.contains(where: { $0.directiveID == owner }) else { return }
+
+            var claimed: [String: Int] = [:]
+            for op in live where op.directiveID == owner {
+                guard let type = op.printedDeviceType else { continue }
+                claimed[type, default: 0] += op.printedQuantity ?? 1
+            }
+            // A batch's jobs 2…N are untyped adopted rows over a queue with no
+            // ops at all, so only the bench names them — and it names no owner.
+            let declared = live.allSatisfy { $0.directiveID == owner }
+                ? jobs(on: bench.device) : [:]
+            for type in Set(claimed.keys).union(declared.keys) {
+                total[type, default: 0] += max(claimed[type] ?? 0, declared[type] ?? 0)
             }
         }
+    }
+
+    /// The bench's own account of what it is working, by device type: the platen
+    /// job plus every queued entry. Neither names whose job it is, so a caller
+    /// must establish that before counting these against anyone.
+    private static func jobs(on device: Device) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        if let printing = device.printingSnapshot?.deviceType {
+            counts[printing, default: 0] += 1
+        }
+        for item in device.printQueueItems {
+            guard let type = item.deviceType else { continue }
+            counts[type, default: 0] += 1
+        }
+        return counts
     }
 }
