@@ -73,14 +73,14 @@ public struct LocationsClient: Sendable {
 }
 
 extension BodyDetail {
-    /// The stored resources at this body (planets, moons, belts carry inventory;
-    /// a special site carries none).
+    /// The stored resources at this body. Every case carries them, special
+    /// sites included — a Lagrange point is a real depot and holds real stock.
     public var inventory: [InventoryItem] {
         switch self {
-        case .planet(let p): return p.inventory
-        case .moon(let m):   return m.inventory
-        case .belt(let b):   return b.inventory
-        case .special:       return []
+        case .planet(let p):  return p.inventory
+        case .moon(let m):    return m.inventory
+        case .belt(let b):    return b.inventory
+        case .special(let s): return s.inventory
         }
     }
 }
