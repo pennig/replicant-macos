@@ -389,17 +389,42 @@ struct PrintSchedulerOnOrderTests {
         )
     }
 
-    /// The platen and the queue name their device types but never whose jobs
-    /// they are. With another run on the same bench no share can be attributed,
-    /// so the count falls back to what this owner's own ops prove.
-    @Test("a co-tenant on the bench keeps its snapshot out of the count")
-    func coTenantKeepsTheBenchSnapshotOut() {
+    /// A queue entry names no owner, so a co-tenant keeps it out — but the
+    /// bench holds ONE active op (`operation_one_active_per_device`), which
+    /// makes the platen attributable however many others queue behind it.
+    /// The platen counts and the identical queue entry does not: one, never two.
+    @Test("a co-tenant queued behind still leaves the platen ours")
+    func coTenantQueuedBehindLeavesThePlatenOurs() {
         let world = snapshot(
             [bench("B1", queued: ["orbital_farm"], printing: "orbital_farm")],
             queued: [
                 "B1": [
                     op(on: "B1", owner: "D-7", id: "OP-1"),
-                    op(on: "B1", owner: "OTHER", id: "OP-2", startedAt: now.addingTimeInterval(1))
+                    op(
+                        on: "B1", owner: "OTHER", status: .enqueued, id: "OP-2",
+                        startedAt: now.addingTimeInterval(1)
+                    )
+                ]
+            ]
+        )
+
+        #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world) == ["orbital_farm": 1])
+    }
+
+    /// The mirror, and the half that must stay conservative: the bench's one
+    /// active op is the co-tenant's, so the platen is theirs. This owner's
+    /// untyped job is queued behind it and proves nothing about either.
+    @Test("a co-tenant holding the platen keeps it out of our count")
+    func coTenantHoldingThePlatenKeepsItOut() {
+        let world = snapshot(
+            [bench("B1", queued: ["orbital_farm"], printing: "orbital_farm")],
+            queued: [
+                "B1": [
+                    op(on: "B1", owner: "OTHER", id: "OP-1"),
+                    op(
+                        on: "B1", owner: "D-7", status: .enqueued, id: "OP-2",
+                        startedAt: now.addingTimeInterval(1)
+                    )
                 ]
             ]
         )
