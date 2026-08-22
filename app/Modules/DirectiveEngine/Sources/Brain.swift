@@ -78,16 +78,16 @@ struct Brain: Sendable {
                 // One row per operational theatre, never a single flat reading for
                 // every theatre — but read here, not necessarily with `view`.
                 let depots = view.theatres.filter(\.isOperational).map(\.depot)
-                var hubFootprints: [String: LocationFootprint] = [:]
+                var hubStocks: [String: LocationStock] = [:]
                 if !depots.isEmpty {
-                    let rows = try LocationFootprint.where { $0.location.in(depots) }.fetchAll(db)
-                    hubFootprints = Dictionary(uniqueKeysWithValues: rows.map { ($0.location, $0) })
+                    let rows = try LocationInventory.where { $0.location.in(depots) }.fetchAll(db)
+                    hubStocks = LocationInventory.folded(rows)
                 }
                 return Snapshot(
                     view: view,
                     directives: directives,
                     log: log,
-                    hubFootprints: hubFootprints
+                    hubStocks: hubStocks
                 )
             }
         } catch {
@@ -98,7 +98,7 @@ struct Brain: Sendable {
                 decision: .idle(reason: "world unavailable"),
                 ranked: [],
                 theatres: [],
-                limits: Self.limits(hubFootprint: nil),
+                limits: Self.limits(hubStock: nil),
                 survey: .idle(reason: "world unavailable"),
                 salvage: .idle(reason: "world unavailable"),
                 haul: .idle(reason: "world unavailable"),
@@ -155,12 +155,12 @@ struct Brain: Sendable {
         @Dependency(\.gameClient) var gameClient
         let budget = await gameClient.budget(.actions)
         let reads = await gameClient.budget(.reads)
-        let firstFootprint = operational.first.flatMap { snapshot.hubFootprints[$0.depot] }
+        let firstStock = operational.first.flatMap { snapshot.hubStocks[$0.depot] }
         let theatreLimits = Dictionary(uniqueKeysWithValues: operational.map {
             (
                 $0.depot,
                 Self.limits(
-                    hubFootprint: snapshot.hubFootprints[$0.depot], budget: budget, reads: reads
+                    hubStock: snapshot.hubStocks[$0.depot], budget: budget, reads: reads
                 )
             )
         })
@@ -169,7 +169,7 @@ struct Brain: Sendable {
             decision: decision,
             ranked: plan.ranked,
             theatres: snapshot.view.theatres,
-            limits: Self.limits(hubFootprint: firstFootprint, budget: budget, reads: reads),
+            limits: Self.limits(hubStock: firstStock, budget: budget, reads: reads),
             prune: Self.pruneReport(
                 plan: plan, decision: decision, directives: snapshot.directives
             ),
@@ -274,7 +274,7 @@ struct Brain: Sendable {
         }
         return Snapshot(
             view: snapshot.view, directives: directives,
-            log: snapshot.log, hubFootprints: snapshot.hubFootprints
+            log: snapshot.log, hubStocks: snapshot.hubStocks
         )
     }
 
@@ -318,7 +318,7 @@ struct Brain: Sendable {
         }
         return Snapshot(
             view: snapshot.view, directives: directives,
-            log: snapshot.log, hubFootprints: snapshot.hubFootprints
+            log: snapshot.log, hubStocks: snapshot.hubStocks
         )
     }
 
@@ -732,20 +732,20 @@ struct Brain: Sendable {
     /// enforced by `CommandGovernor` and the floor by `PrintRail.printStockIsShort`.
     /// Read through `@Dependency(\.gameClient)` so this is the figure every dispatch
     /// throttles on, not a second copy.
-    private static func limits(hubFootprint: LocationFootprint?) async -> BrainLimits {
+    private static func limits(hubStock: LocationStock?) async -> BrainLimits {
         @Dependency(\.gameClient) var gameClient
         return limits(
-            hubFootprint: hubFootprint,
+            hubStock: hubStock,
             budget: await gameClient.budget(.actions),
             reads: await gameClient.budget(.reads)
         )
     }
 
-    /// `limits(hubFootprint:)` over ALREADY-READ budgets — `report()` reads each
+    /// `limits(hubStock:)` over ALREADY-READ budgets — `report()` reads each
     /// bucket once and reuses it for the flat figure and every theatre's own,
     /// rather than one governor call per theatre for one fleet-wide budget.
     private static func limits(
-        hubFootprint: LocationFootprint?,
+        hubStock: LocationStock?,
         budget: RateLimitGovernor.Snapshot,
         reads: RateLimitGovernor.Snapshot
     ) -> BrainLimits {
@@ -756,11 +756,11 @@ struct Brain: Sendable {
             readsRemaining: reads.remaining,
             readsLimit: reads.limit,
             readsFloor: DeviceRefreshClient.readFloor,
-            hubStock: hubFootprint?.resources,
+            hubStock: hubStock?.quantities,
             // The rail vetoes on the reading's AGE as well as its value, so a
             // figure without its timestamp cannot say what the rail is doing.
-            hubStockFetchedAt: hubFootprint?.fetchedAt,
-            spendFloor: BrainCeiling.aggregateSpendFloor,
+            hubStockFetchedAt: hubStock?.fetchedAt,
+            reserveFloors: BrainCeiling.reserveFloors,
             rateLimitedAt: budget.rateLimitedAt
         )
     }
@@ -776,28 +776,16 @@ struct Brain: Sendable {
         let log: [String: [DirectiveLogEntry]]
         /// Read for the why-view's reserve-floor line only, by depot — never a
         /// single reading, or every theatre's card shows one theatre's figure.
-        let hubFootprints: [String: LocationFootprint]
+        let hubStocks: [String: LocationStock]
 
         init(
             view: WorldView, directives: [Directive], log: [String: [DirectiveLogEntry]],
-            hubFootprints: [String: LocationFootprint]
+            hubStocks: [String: LocationStock]
         ) {
             self.view = view
             self.directives = directives
             self.log = log
-            self.hubFootprints = hubFootprints
-        }
-
-        /// Single-footprint convenience — kept for the tests that only ever
-        /// cared about liveness, never about stock reporting.
-        init(
-            view: WorldView, directives: [Directive], log: [String: [DirectiveLogEntry]],
-            hubFootprint: LocationFootprint?
-        ) {
-            self.init(
-                view: view, directives: directives, log: log,
-                hubFootprints: hubFootprint.map { [$0.location: $0] } ?? [:]
-            )
+            self.hubStocks = hubStocks
         }
     }
 

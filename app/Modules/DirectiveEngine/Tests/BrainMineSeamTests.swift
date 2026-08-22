@@ -33,7 +33,7 @@ private func seedMineSeamWorld(
     try seedRelay(db, code: "RLY-SOL", location: "SOL-1")
     try seedPrintHub(db, code: "HUB1", location: mineSeamHub)
     try seedHubStockpile(
-        db, location: mineSeamHub, resources: BrainCeiling.aggregateSpendFloor * 2
+        db, location: mineSeamHub, resources: 1_000_000
     )
     try seedSystemDetail(
         db, system: mineSeamBeltSystem, scanned: true,

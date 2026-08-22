@@ -410,7 +410,7 @@ func seedGrowableWorld(
     try seedPrintHub(db, code: "HUB1", location: growHubLocation)
     // A theatre needs BOTH a print-capable device and a stocked location —
     // skip the stockpile and no theatre is recognised, silently disabling growth.
-    try seedHubStockpile(db, location: growHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
+    try seedHubStockpile(db, location: growHubLocation, resources: 1_000_000)
     for code in carriers {
         try seedDevice(db, code: code, type: "heaven_vessel", location: growHubLocation)
     }
@@ -445,6 +445,9 @@ func seedHubStockpile(
     fetchedAt: Date = fixtureCensusFetchedAt
 ) throws {
     try seedStockpile(db, location: location, resources: resources, fetchedAt: fetchedAt)
+    // A hub that can print needs the per-type reading too: seeding the total
+    // alone leaves `PrintRail` vetoing on a reading that was never written.
+    try LocationInventory.insert { railClearingRows(at: location, fetchedAt: fetchedAt) }.execute(db)
 }
 
 /// A `LocationFootprint` census row for `location` holding `resources` units.
@@ -600,4 +603,47 @@ extension Brain {
     func evaluateOnce() async -> BrainDecision {
         await report().decision
     }
+}
+
+// MARK: - Reserve-rail stock fixtures
+
+/// Per-type stock ten floors deep in every type — a reading `PrintRail`
+/// permits, for the tests whose subject is something other than the rail.
+func railClearingStock(fetchedAt: Date) -> LocationStock {
+    LocationStock(quantities: BrainCeiling.reserveFloors.mapValues { $0 * 10 }, fetchedAt: fetchedAt)
+}
+
+/// `railClearingStock` keyed for a `WorldSnapshot`'s `inventories`.
+func railClearingInventory(at location: String, fetchedAt: Date) -> [String: LocationStock] {
+    [location: railClearingStock(fetchedAt: fetchedAt)]
+}
+
+/// One type a single unit under its floor, the rest ten floors deep — the
+/// smallest reading the rail refuses, and the one that names its own cause.
+func railShortStock(_ type: String = "conductive", fetchedAt: Date) -> LocationStock {
+    var quantities = BrainCeiling.reserveFloors.mapValues { $0 * 10 }
+    quantities[type] = BrainCeiling.reserveFloor(for: type) - 1
+    return LocationStock(quantities: quantities, fetchedAt: fetchedAt)
+}
+
+/// `railClearingStock` as `LocationInventory` rows, for the tests that seed a
+/// real database rather than a `WorldSnapshot` value.
+func railClearingRows(at location: String, fetchedAt: Date) -> [LocationInventory] {
+    BrainCeiling.reserveFloors.map { type, floor in
+        LocationInventory(
+            location: location, resourceType: type, quantity: floor * 10, fetchedAt: fetchedAt
+        )
+    }
+}
+
+/// A `LocationsClient.body` stub whose inventory clears every reserve floor —
+/// what an engine-level test needs so the depot sweep feeds the rail rather
+/// than tripping `testValue`'s `unimplemented`.
+func railClearingBody(_ designation: String) -> BodyDetail {
+    .belt(Belt(
+        designation: designation,
+        inventory: BrainCeiling.reserveFloors.map {
+            InventoryItem(resourceType: $0.key, quantity: $0.value * 10)
+        }
+    ))
 }

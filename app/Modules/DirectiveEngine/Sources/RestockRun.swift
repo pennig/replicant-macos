@@ -28,12 +28,12 @@ public struct RestockRun: MissionStepMachine {
 
     /// The reserve rail, injected exactly as `RelayRun` injects it so the two
     /// cannot disagree about what "too poor to print" means.
-    public let reserveFloor: Int?
+    public let reserveFloors: [String: Double]?
 
-    /// Build a run whose print veto reads `reserveFloor`, the rail's aggregate
+    /// Build a run whose print veto reads `reserveFloors`, the rail's per-type
     /// stock floor unless a caller overrides it.
-    public init(reserveFloor: Int? = BrainCeiling.aggregateSpendFloor) {
-        self.reserveFloor = reserveFloor
+    public init(reserveFloors: [String: Double]? = BrainCeiling.reserveFloors) {
+        self.reserveFloors = reserveFloors
     }
 
     /// This mission's step vocabulary, as `Directive.step` holds it (D6).
@@ -89,23 +89,16 @@ public struct RestockRun: MissionStepMachine {
             return .advanceStep(nextStep: Step.printing.rawValue)
         }
 
-        // The rail, held once in `PrintRail` so no print site can drift from it.
+        // A stale census buys a refresh rather than waiting it out: the only
+        // production poll of `LocationInventory` is hourly, far past the rail's
+        // own freshness bound, so waiting would confine printing to whatever
+        // window that sweep happens to leave open.
         //
-        // A stale census buys a refresh rather than waiting it out, because
-        // **nothing polls `LocationFootprint`** — `refreshFootprint()`'s only
-        // production callers are a mission's own `.refreshFootprint` action and
-        // the Locations screen — so waiting confines printing to the window
-        // after some OTHER mission happens to refresh, and widening the
-        // freshness bound only moves that dead line. The read is bought only
-        // once every guard above has said this run wants to print, so its cost
-        // tracks wanting stock rather than existing. The gate must stay
-        // TABLE-WIDE: a per-location one self-loops, whereas a refresh that
-        // succeeds while still omitting the hub is positive evidence and falls
-        // through to the fail-closed `printStockIsShort`. `thenStall: nil`
-        // because restock must never escalate a top-up nobody is waiting on —
-        // the price is one census read per tick while demand is unmet.
-        let rail = PrintRail(reserveFloor: reserveFloor)
-        if rail.footprintCensusIsStale(world) {
+        // `thenStall: nil` because restock must never escalate a top-up nobody
+        // is waiting on — the price is one census read per tick while demand
+        // is unmet.
+        let rail = PrintRail(reserveFloors: reserveFloors)
+        if rail.stockCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }

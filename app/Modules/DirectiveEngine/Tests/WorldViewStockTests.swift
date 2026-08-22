@@ -45,7 +45,7 @@ struct WorldViewStockTests {
         try await db.write { db in
             try seedRelay(db, code: "R1", location: "SOL-3-L4", status: "relaying")
             try seedPrintHub(db, code: "AF1", location: "SOL-3")
-            try seedHubStockpile(db, location: "SOL-3", resources: 50_000)
+            try seedStockpile(db, location: "SOL-3", resources: 50_000)
             try LocationInventory.insert {
                 [
                     LocationInventory(location: "SOL-3", resourceType: "conductive", quantity: 100, fetchedAt: older),
@@ -67,7 +67,7 @@ struct WorldViewStockTests {
         try await db.write { db in
             try seedRelay(db, code: "R1", location: "SOL-3-L4", status: "relaying")
             try seedPrintHub(db, code: "AF1", location: "SOL-3")
-            try seedHubStockpile(db, location: "SOL-3", resources: 50_000)
+            try seedStockpile(db, location: "SOL-3", resources: 50_000)
         }
 
         let view = try await db.read { try WorldView.read(from: $0, now: Date()) }

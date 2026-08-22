@@ -706,6 +706,12 @@ actor DirectiveEngineCore {
             logger.notice("directive \(directive.id, privacy: .public): footprint refresh failed: \(error)")
         }
 
+        // `PrintRail` reads per-type stock, which `refreshFootprint()` never
+        // writes — only the hourly `DeadlineScheduler` sweep does, far past the
+        // rail's own freshness bound. Without this the fail-closed veto would
+        // re-ask for the same refresh every tick, forever.
+        await refreshDepotInventories(for: directive)
+
         let fresh: WorldSnapshot
         do {
             fresh = try await WorldSnapshot.read(from: database, now: date.now, directive: directive)
@@ -714,6 +720,25 @@ actor DirectiveEngineCore {
             return reason.map { .stall($0) } ?? .advanceStep(nextStep: nextStep)
         }
         return await reAsk(machine, directive, fresh, paid: paid)
+    }
+
+    /// One per-type stock read per candidate depot, best-effort — a depot that
+    /// fails simply ages. Candidates are derived exactly as `WorldView.read`
+    /// derives its own: a RECOGNISED-theatre filter sweeps nothing in a world
+    /// whose readiness is itself waiting on this read.
+    private func refreshDepotInventories(for directive: Directive) async {
+        @Dependency(\.locationsClient) var locationsClient
+        @Dependency(\.defaultDatabase) var database
+
+        let depots = (try? await database.read { db -> Set<String> in
+            let devices = try Device.all.fetchAll(db)
+            let pins = try TheatrePin.all.fetchAll(db)
+            return Set(devices.filter(\.isPrintHub).compactMap(\.location))
+                .union(pins.map(\.location))
+                .union(devices.filter { $0.deviceType == "system_hub" }.compactMap(\.location))
+        }) ?? []
+        guard !depots.isEmpty else { return }
+        await locationsClient.refreshDepotInventories(depots.sorted())
     }
 
     /// `resolveFootprintRefresh`'s contract, paid for with one walk of the account

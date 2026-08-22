@@ -643,7 +643,7 @@ private func seedSecondTheatre(_ db: Database) throws {
     try seedRelay(db, code: "REL2", location: secondTheatreSystem)
     try seedStar(db, designation: secondTheatreSystem, x: 300, y: 300, z: 300)
     try seedPrintHub(db, code: "HUB2", location: secondTheatreHubLocation)
-    try seedHubStockpile(db, location: secondTheatreHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
+    try seedHubStockpile(db, location: secondTheatreHubLocation, resources: 1_000_000)
 }
 
 private func surveyEnsureDirectives(_ database: any DatabaseWriter) async throws -> [Directive] {

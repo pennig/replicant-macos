@@ -69,6 +69,11 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// machine needs `fetchedAt` too: `surveying` gates its refresh on how
     /// stale the census is, which a bare `[String: Int]` cannot answer.
     public let footprints: [String: LocationFootprint]
+    /// Per-type stock by location, mirroring `WorldCore.inventories` — what
+    /// `PrintRail` checks a print against, and the only reading that can
+    /// answer WHICH type is short. `footprints` above carries a total and
+    /// cannot.
+    public let inventories: [String: LocationStock]
     /// Census star position, by system designation — the geometry the Haul
     /// Run's round-trip ranking reads. Whole-table, like `footprints`.
     public let starPositions: [String: Position]
@@ -127,6 +132,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         systems: [String: StarSystem] = [:],
         siteAssays: [String: [String: Double]] = [:],
         footprints: [String: LocationFootprint] = [:],
+        inventories: [String: LocationStock] = [:],
         starPositions: [String: Position] = [:],
         components: [String: String] = [:],
         blueprintBills: [String: ResourceCost] = [:],
@@ -147,6 +153,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.systems = systems
         self.siteAssays = siteAssays
         self.footprints = footprints
+        self.inventories = inventories
         self.starPositions = starPositions
         self.components = components
         self.blueprintBills = blueprintBills
@@ -232,6 +239,7 @@ public struct WorldSnapshot: Equatable, Sendable {
             systems: slice.systems,
             siteAssays: slice.siteAssays,
             footprints: core.footprints,
+            inventories: core.inventories,
             starPositions: core.starPositions,
             components: core.components,
             blueprintBills: core.blueprintBills,

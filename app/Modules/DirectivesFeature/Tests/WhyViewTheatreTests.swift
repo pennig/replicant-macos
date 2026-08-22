@@ -121,9 +121,9 @@ struct WhyViewTheatreTests {
         #expect(denebedLines["mine"] == "no printed mine fleet")
     }
 
-    /// Each theatre's own footprint renders under its own heading — the
-    /// `Snapshot.hubFootprint` fix.
-    @Test("two theatres with different footprint resources each report their own number")
+    /// Each theatre's own stock reading renders under its own heading — the
+    /// `Snapshot.hubStocks` fix.
+    @Test("two theatres with different per-type stock each report their own number")
     func eachTheatreReportsItsOwnStockLine() {
         let ainalram = Theatre(
             depot: "AINALRAM-BELT-1", system: "AINALRAM", origin: .derived,
@@ -133,17 +133,23 @@ struct WhyViewTheatreTests {
             depot: "DENEBED-BELT-1", system: "DENEBED", origin: .pinned,
             readiness: .operational, stock: 900
         )
-        func limits(hubStock: Int) -> BrainLimits {
-            BrainLimits(
+        // Every other type a thousand floors deep, so conductive is the type
+        // the line names and the figure under test is the one that renders.
+        func limits(conductive: Double) -> BrainLimits {
+            var stock = BrainCeiling.reserveFloors.mapValues { $0 * 1000 }
+            stock["conductive"] = conductive
+            return BrainLimits(
                 actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
                 readsRemaining: 108, readsLimit: 120, readsFloor: 12,
-                hubStock: hubStock, hubStockFetchedAt: BrainWhyViewTests.now,
-                spendFloor: 35_078, rateLimitedAt: nil
+                hubStock: stock, hubStockFetchedAt: BrainWhyViewTests.now,
+                reserveFloors: BrainCeiling.reserveFloors, rateLimitedAt: nil
             )
         }
         let report = brainReportFixture(
             theatres: [ainalram, denebed],
-            theatreLimits: [ainalram.depot: limits(hubStock: 40_000), denebed.depot: limits(hubStock: 900)]
+            theatreLimits: [
+                ainalram.depot: limits(conductive: 40_000), denebed.depot: limits(conductive: 900),
+            ]
         )
 
         let groups = Dictionary(uniqueKeysWithValues: BrainWhy.groups(for: report).map { ($0.depot, $0) })

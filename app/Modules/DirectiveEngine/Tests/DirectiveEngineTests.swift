@@ -2679,14 +2679,15 @@ struct RelayRunEngineTests {
             }
             $0.locationsClient.footprint = {
                 footprintReads.withValue { $0 += 1 }
-                // Abundant, and far above `BrainCeiling.aggregateSpendFloor` —
-                // the rail must PERMIT here, so what is being proven is that
-                // the rail ran at all, not that it vetoed.
+                // Abundant, and clear of every reserve floor — the rail must
+                // PERMIT here, so what is being proven is that the rail ran at
+                // all, not that it vetoed.
                 return [Self.hubLocation: LocationCounts(
                     locationEvents: 0, devices: 2, resourceSites: 0,
                     resources: 999_999, replicants: 0
                 )]
             }
+            $0.locationsClient.body = { railClearingBody($0) }
             $0.commandGovernor.dispatchOwned = { kind, _, _, _ in
                 dispatched.withValue { $0.append(kind) }
                 return .dispatched(.accepted(operationID: "OP1"))
@@ -2736,6 +2737,9 @@ struct RelayRunEngineTests {
                     resources: 999_999, replicants: 0
                 )]
             }
+            // The depot sweep does not find it either — the same unreadable
+            // hub, on the read the rail actually consults.
+            $0.locationsClient.body = { _ in throw LocationsError.notFound }
             $0.commandGovernor.dispatchOwned = { _, _, _, _ in
                 dispatched.withValue { $0 += 1 }
                 return .dispatched(.accepted(operationID: "OP1"))

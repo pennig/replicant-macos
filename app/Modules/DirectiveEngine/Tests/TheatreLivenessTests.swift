@@ -25,7 +25,7 @@ private func snapshot(_ database: any DatabaseWriter) async throws -> Brain.Snap
         Brain.Snapshot(
             view: try WorldView.read(from: db, now: livenessNow),
             directives: try Directive.all.fetchAll(db),
-            log: [:], hubFootprint: nil
+            log: [:], hubStocks: [:]
         )
     }
 }

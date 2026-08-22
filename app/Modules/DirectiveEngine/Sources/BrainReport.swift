@@ -46,20 +46,20 @@ public struct BrainLimits: Equatable, Sendable {
     /// Where `PollCoordinator` starts deferring low-priority reads of its own
     /// accord — the reads-side counterpart to `actionsFloor`.
     public let readsFloor: Int
-    /// The hub's last-read TOTAL holdings, or nil when no census row for the
-    /// hub exists (or there is no hub on the mesh at all). Nil is "nobody has
-    /// told us", never "zero" — and `RelayRun` treats it as a veto for the
-    /// same reason.
-    public let hubStock: Int?
+    /// The depot's last-read PER-TYPE stock, or nil when no reading for it
+    /// exists (or there is no hub on the mesh at all). Nil is "nobody has told
+    /// us", never "zero" — and `RelayRun` treats it as a veto for the same
+    /// reason.
+    public let hubStock: [String: Double]?
     /// WHEN that reading was taken. It must be carried beside the figure, never
     /// dropped: a reading's AGE is one of the three conditions that veto a print
     /// (`PrintRail.printStockIsShort`), so an old row sitting well above the
     /// floor reads as comfortable headroom while the rail refuses every print.
     /// See `hubStockStanding(at:)`.
     public let hubStockFetchedAt: Date?
-    /// `BrainCeiling.aggregateSpendFloor` — the reserve-floor rail the stock
-    /// above is judged against.
-    public let spendFloor: Int
+    /// `BrainCeiling.reserveFloors` — the per-type rail the stock above is
+    /// judged against.
+    public let reserveFloors: [String: Double]
     /// When the SERVER last answered 429, or nil if it never has this
     /// session. Kept as its own fact rather than inferred from
     /// `actionsRemaining`: being rate-limited is not the same event as pacing
@@ -73,9 +73,9 @@ public struct BrainLimits: Equatable, Sendable {
         readsRemaining: Int,
         readsLimit: Int,
         readsFloor: Int,
-        hubStock: Int?,
+        hubStock: [String: Double]?,
         hubStockFetchedAt: Date?,
-        spendFloor: Int,
+        reserveFloors: [String: Double],
         rateLimitedAt: Date?
     ) {
         self.actionsRemaining = actionsRemaining
@@ -86,7 +86,7 @@ public struct BrainLimits: Equatable, Sendable {
         self.readsFloor = readsFloor
         self.hubStock = hubStock
         self.hubStockFetchedAt = hubStockFetchedAt
-        self.spendFloor = spendFloor
+        self.reserveFloors = reserveFloors
         self.rateLimitedAt = rateLimitedAt
     }
 
@@ -111,7 +111,8 @@ public struct BrainLimits: Equatable, Sendable {
         guard let hubStock, let hubStockFetchedAt else { return .unread }
         let age = now.timeIntervalSince(hubStockFetchedAt)
         if age > RelayRun.hubFreshness { return .stale(age: age) }
-        return hubStock < spendFloor ? .belowFloor : .clear
+        let short = BrainCeiling.shortTypes(hubStock: hubStock, floors: reserveFloors)
+        return short.isEmpty ? .clear : .belowFloor(shortTypes: short)
     }
 
     /// The reserve-floor rail's four outcomes, as an operator needs them
@@ -124,8 +125,9 @@ public struct BrainLimits: Equatable, Sendable {
         /// comfortable and still be worthless; `age` is what the operator
         /// actually needs told.
         case stale(age: TimeInterval)
-        /// A fresh reading that sits below the reserve floor.
-        case belowFloor
+        /// A fresh reading with at least one type below its own floor, named
+        /// and sorted — a total cannot say WHICH, and which is the actionable half.
+        case belowFloor(shortTypes: [String])
         /// A fresh reading with real headroom — the only state that permits a
         /// print.
         case clear

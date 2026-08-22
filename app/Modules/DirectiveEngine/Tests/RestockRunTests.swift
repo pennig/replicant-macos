@@ -48,15 +48,16 @@ private func op(
 
 private func snapshot(
     _ devices: [Device], open: [String: GameModels.Operation] = [:],
-    resources: Int = BrainCeiling.aggregateSpendFloor * 2
+    stock: LocationStock? = nil
 ) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: open, dispatchedOperations: [:],
         footprints: [hubLocation: LocationFootprint(
-            location: hubLocation, devices: 1, resources: resources,
+            location: hubLocation, devices: 1, resources: 1_000_000,
             resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
         )],
+        inventories: [hubLocation: stock ?? railClearingStock(fetchedAt: now)],
         now: now
     )
 }
@@ -140,7 +141,7 @@ struct RestockRunCapAndSweepTests {
     @Test("a short reserve declines before the sweep is ever reached")
     func shortReserveDeclinesBeforeTheSweep() {
         let stale = bench("B1", updatedAt: now.addingTimeInterval(-3600))
-        let world = snapshot([stale], resources: 0)
+        let world = snapshot([stale], stock: railShortStock(fetchedAt: now))
 
         #expect(RestockRun().nextAction(directive: restocking(startedAgo: 60), world: world) == .wait)
     }

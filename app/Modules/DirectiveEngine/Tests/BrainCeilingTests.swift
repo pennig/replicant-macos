@@ -10,11 +10,10 @@
 //  six types (10–120 per type), never 370 per type.
 //
 //  Binding-type note: conductive — NOT volatiles — is the type that actually
-//  constrains `K` under the live mix (see `relaysUntilBindingTypeFloors`'s
-//  test below and `brain-relay-reserve-floor.md`'s corrected arithmetic).
-//  Volatiles is both the cheapest bill line and the scarcest live stock,
-//  which reads as "obviously bites first," but bind order depends on stock
-//  RELATIVE TO CONSUMPTION, not on either alone.
+//  constrains `K` under the live mix. Volatiles is both the cheapest bill line
+//  and the scarcest live stock, which reads as "obviously bites first," but
+//  bind order depends on stock RELATIVE TO CONSUMPTION, not either alone.
+//  See `brain-relay-reserve-floor.md`.
 //
 
 import Foundation
@@ -129,41 +128,27 @@ struct BrainCeilingTests {
         #expect(BrainCeiling.relayBill["conductive"] == 120)
     }
 
-    // MARK: - The aggregate proxy `RelayRun` actually arms
 
-    /// Conductive is the binding type under the live/reference mix — pinned
-    /// directly, since this is exactly the fact the earlier draft of this
-    /// note (and this file) got backwards. ~106.95 relays before conductive
-    /// hits its own floor, computed from the reference snapshot, not
-    /// hand-picked.
-    @Test func conductiveIsTheBindingTypeUnderTheReferenceMix() {
-        let conductiveHeadroom = (BrainCeiling.referenceHubStock["conductive"]! - BrainCeiling.reserveFloor(for: "conductive"))
-            / BrainCeiling.relayBill["conductive"]!
-        #expect(BrainCeiling.relaysUntilBindingTypeFloors == conductiveHeadroom)
-        // And volatiles — the type an uncorrected intuition names as
-        // "obviously first" — actually has roughly 4× the headroom.
-        let volatilesHeadroom = (BrainCeiling.referenceHubStock["volatiles"]! - BrainCeiling.reserveFloor(for: "volatiles"))
-            / BrainCeiling.relayBill["volatiles"]!
-        #expect(volatilesHeadroom > conductiveHeadroom * 3)
+    /// `shortTypes` names every type under its floor and nothing else, and is
+    /// empty exactly when `printPermitted` says yes — the two are one decision
+    /// reported two ways, so they must never disagree.
+    @Test func shortTypesNamesEveryTypeUnderItsFloorAndAgreesWithPrintPermitted() {
+        var stock = BrainCeiling.reserveFloors
+        stock["conductive"] = BrainCeiling.reserveFloor(for: "conductive") - 1
+        stock["rares"] = 0
+        #expect(BrainCeiling.shortTypes(hubStock: stock) == ["conductive", "rares"])
+        #expect(!BrainCeiling.printPermitted(hubStock: stock))
+        #expect(BrainCeiling.shortTypes(hubStock: BrainCeiling.reserveFloors).isEmpty)
+        #expect(BrainCeiling.printPermitted(hubStock: BrainCeiling.reserveFloors))
     }
 
-    /// Absolute pin (not a comparison against itself): the exact aggregate
-    /// floor `RelayRun` arms with today, derived from the bill and the
-    /// reference mix. Marked so any future recalibration of `reserveRelays`
-    /// or `referenceHubStock` shows up as a diff here, which is the entire
-    /// point of `K` being marked `// CALIBRATE`.
-    @Test func aggregateSpendFloorIsPinnedToItsDerivedValue() {
-        #expect(BrainCeiling.aggregateSpendFloor == 35_078)
-    }
-
-    /// The whole reason `aggregateSpendFloor` exists instead of the naive
-    /// sum-of-floors: it must be MUCH larger, or it undershoots the true
-    /// per-type floor by more than an order of magnitude (the naive sum
-    /// permits printing all the way down to ~1,850 total stock, by which
-    /// point conductive alone has been at zero for a long time).
-    @Test func aggregateSpendFloorIsFarMoreConservativeThanTheNaiveSum() {
-        let naiveSum = Int(BrainCeiling.reserveFloors.values.reduce(0, +))
-        #expect(BrainCeiling.aggregateSpendFloor > naiveSum * 15)
+    /// Injected floors override the rail's own — the seam `PrintRail` arms and
+    /// every test that needs a cheaper bar relies on.
+    @Test func injectedFloorsOverrideTheRailsOwn() {
+        let stock = ["conductive": 10.0]
+        #expect(!BrainCeiling.printPermitted(hubStock: stock))
+        #expect(BrainCeiling.printPermitted(hubStock: stock, floors: ["conductive": 5]))
+        #expect(BrainCeiling.shortTypes(hubStock: stock, floors: ["conductive": 20]) == ["conductive"])
     }
 }
 
@@ -171,39 +156,36 @@ struct BrainCeilingTests {
 ///
 /// `BrainLimits.hubStockStanding(at:)` (the why-view's four-state verdict) and
 /// `PrintRail.printStockIsShort(at:_:)` (the actual veto) cannot share an
-/// implementation — they read different shapes, a single figure on a report
-/// versus a footprint table on a `WorldSnapshot`. So the next best thing is a
-/// test that fails the moment the two disagree.
-///
-/// This exists because the first cut of the why-view reported only TWO of the
-/// rail's three veto conditions: it dropped `LocationFootprint.fetchedAt`, so
-/// an hour-old census row showing comfortable stock rendered as headroom while
-/// every print was in fact being refused. That is precisely the "print on stale
-/// abundance" hazard `printStockIsShort`'s freshness branch was added to close,
-/// reproduced on the surface whose whole job is to be trustworthy.
+/// implementation — they read different shapes, a per-type dictionary on a
+/// report versus an inventory table on a `WorldSnapshot`. So the next best
+/// thing is a test that fails the moment the two disagree.
 @Suite("BrainLimits — hub stock standing")
 struct HubStockStandingTests {
     static let now = Date(timeIntervalSince1970: 2_000_000)
-    static let floor = BrainCeiling.aggregateSpendFloor
 
-    static func limits(stock: Int?, fetchedAt: Date?) -> BrainLimits {
+    /// Floors with one type a single unit under — the smallest reading that
+    /// can distinguish "short" from "clear".
+    static var justShort: [String: Double] {
+        var stock = BrainCeiling.reserveFloors
+        stock["conductive"] = BrainCeiling.reserveFloor(for: "conductive") - 1
+        return stock
+    }
+
+    static func limits(stock: [String: Double]?, fetchedAt: Date?) -> BrainLimits {
         BrainLimits(
             actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
             readsRemaining: 108, readsLimit: 120, readsFloor: 12,
             hubStock: stock, hubStockFetchedAt: fetchedAt,
-            spendFloor: floor, rateLimitedAt: nil
+            reserveFloors: BrainCeiling.reserveFloors, rateLimitedAt: nil
         )
     }
 
-    static func snapshot(stock: Int?, fetchedAt: Date?) -> WorldSnapshot {
-        var footprints: [String: LocationFootprint] = [:]
+    static func snapshot(stock: [String: Double]?, fetchedAt: Date?) -> WorldSnapshot {
+        var inventories: [String: LocationStock] = [:]
         if let stock, let fetchedAt {
-            footprints["SOL-3"] = LocationFootprint(
-                location: "SOL-3", devices: 1, resources: stock, resourceSites: 0,
-                locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
-            )
+            inventories["SOL-3"] = LocationStock(quantities: stock, fetchedAt: fetchedAt)
         }
-        return WorldSnapshot(devices: [:], openOperations: [:], footprints: footprints, now: now)
+        return WorldSnapshot(devices: [:], openOperations: [:], inventories: inventories, now: now)
     }
 
     /// Every combination of (stock, age) that can distinguish the branches —
@@ -217,7 +199,8 @@ struct HubStockStandingTests {
             RelayRun.hubFreshness + 1,
             3600,
         ]
-        let stocks: [Int?] = [nil, 0, Self.floor - 1, Self.floor, Self.floor + 1, 500_000]
+        let rich = BrainCeiling.reserveFloors.mapValues { $0 * 1000 }
+        let stocks: [[String: Double]?] = [nil, [:], Self.justShort, BrainCeiling.reserveFloors, rich]
         let run = PrintRail()
 
         for stock in stocks {
@@ -234,24 +217,31 @@ struct HubStockStandingTests {
     }
 
     /// The verdicts are not merely "veto or not" — each veto names its own
-    /// cause, because the operator's next action differs: refresh the census,
-    /// wait for one, or go find where the resources went.
+    /// cause, because the operator's next action differs: refresh the reading,
+    /// wait for one, or go find where THAT type went.
     @Test func eachVetoNamesItsOwnCause() {
         #expect(Self.limits(stock: nil, fetchedAt: nil).hubStockStanding(at: Self.now) == .unread)
         #expect(
-            Self.limits(stock: 500_000, fetchedAt: Self.now.addingTimeInterval(-3600))
+            Self.limits(stock: BrainCeiling.reserveFloors, fetchedAt: Self.now.addingTimeInterval(-3600))
                 .hubStockStanding(at: Self.now) == .stale(age: 3600)
         )
         #expect(
-            Self.limits(stock: Self.floor - 1, fetchedAt: Self.now).hubStockStanding(at: Self.now) == .belowFloor
+            Self.limits(stock: Self.justShort, fetchedAt: Self.now)
+                .hubStockStanding(at: Self.now) == .belowFloor(shortTypes: ["conductive"])
         )
-        #expect(Self.limits(stock: Self.floor, fetchedAt: Self.now).hubStockStanding(at: Self.now) == .clear)
+        #expect(
+            Self.limits(stock: BrainCeiling.reserveFloors, fetchedAt: Self.now)
+                .hubStockStanding(at: Self.now) == .clear
+        )
     }
 
     /// A half-populated report fails CLOSED, matching the rail's own direction
     /// on an unreadable stock — silence is never permission to spend.
     @Test func aHalfPopulatedReadingFailsClosed() {
-        #expect(Self.limits(stock: 500_000, fetchedAt: nil).hubStockStanding(at: Self.now) == .unread)
+        #expect(
+            Self.limits(stock: BrainCeiling.reserveFloors, fetchedAt: nil)
+                .hubStockStanding(at: Self.now) == .unread
+        )
         #expect(Self.limits(stock: nil, fetchedAt: Self.now).hubStockStanding(at: Self.now) == .unread)
     }
 }

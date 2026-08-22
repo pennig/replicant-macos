@@ -19,10 +19,10 @@ public struct MineFleetPrint: MissionStepMachine {
 
     /// The reserve rail, injected exactly as `RelayRun` and `RestockRun` inject
     /// it so the three cannot disagree about what "too poor to print" means.
-    public let reserveFloor: Int?
+    public let reserveFloors: [String: Double]?
 
-    public init(reserveFloor: Int? = BrainCeiling.aggregateSpendFloor) {
-        self.reserveFloor = reserveFloor
+    public init(reserveFloors: [String: Double]? = BrainCeiling.reserveFloors) {
+        self.reserveFloors = reserveFloors
     }
 
     /// This mission's step vocabulary, as `Directive.step` holds it (D6).
@@ -98,8 +98,8 @@ public struct MineFleetPrint: MissionStepMachine {
 
         // The rail, held once in `PrintRail` so no print site can drift from it.
         // Nothing polls `LocationFootprint`, so a stale census buys its own read.
-        let rail = PrintRail(reserveFloor: reserveFloor)
-        if rail.footprintCensusIsStale(world) {
+        let rail = PrintRail(reserveFloors: reserveFloors)
+        if rail.stockCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.stocking.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }

@@ -126,12 +126,15 @@ private func world(
     dispatchedOperations: [String: GameModels.Operation] = [:],
     systems: [String: StarSystem] = [:],
     footprints: [String: LocationFootprint] = [:],
+    inventories: [String: LocationStock]? = nil,
     now: Date = fixtureNow
 ) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: openOperations, log: [], dispatchedOperations: dispatchedOperations,
-        systems: systems, siteAssays: [:], footprints: footprints, now: now
+        systems: systems, siteAssays: [:], footprints: footprints,
+        inventories: inventories ?? railClearingInventory(at: hubLocation, fetchedAt: now),
+        now: now
     )
 }
 
@@ -140,6 +143,16 @@ private func footprint(_ location: String, resources: Int, fetchedAt: Date = fix
         location: location, devices: 1, resources: resources, resourceSites: 0,
         locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
     )
+}
+
+/// The rail fixtures below arm one type only, so `conductive` alone decides —
+/// the same shape as the real rail with five of its six floors set aside.
+private let testFloors: [String: Double] = ["conductive": 500]
+
+private func stock(
+    _ location: String, conductive: Double, fetchedAt: Date = fixtureNow
+) -> [String: LocationStock] {
+    [location: LocationStock(quantities: ["conductive": conductive], fetchedAt: fetchedAt)]
 }
 
 /// The target system. Its entry point IS an L4 (true of every system live), so
@@ -207,9 +220,15 @@ private func snapshot(
 ) -> WorldSnapshot {
     let locations = Set(devices.compactMap(\.location)).union([depot])
     let footprints = Dictionary(uniqueKeysWithValues: locations.map { ($0, footprint($0, resources: 999_999)) })
+    let inventories = Dictionary(uniqueKeysWithValues: locations.map {
+        ($0, LocationStock(
+            quantities: BrainCeiling.reserveFloors.mapValues { $0 * 10 }, fetchedAt: fixtureNow
+        ))
+    })
     return world(
         devices: [device("C1", location: depot)] + devices,
-        openOperations: open, dispatchedOperations: dispatched, footprints: footprints
+        openOperations: open, dispatchedOperations: dispatched,
+        footprints: footprints, inventories: inventories
     )
 }
 
@@ -370,20 +389,20 @@ struct RelayRunAcquireTests {
     @Test func printStockShortStallsRetry() {
         let snapshot = world(
             devices: [carrier(), hub()],
-            footprints: [hubLocation: footprint(hubLocation, resources: 100)]
+            inventories: stock(hubLocation, conductive: 100)
         )
         // The floor is injected because the calibrated constant is a later
         // task; production ships it unarmed (nil).
-        #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
+        #expect(RelayRun(reserveFloors: testFloors).nextAction(directive: running(), world: snapshot)
                 == .stall(.printStockShort))
         // …and the same world with stock above the floor prints, so the stall
         // is the floor's doing and not the fixture's.
         let stocked = world(
             devices: [carrier(), hub()],
-            footprints: [hubLocation: footprint(hubLocation, resources: 900)]
+            inventories: stock(hubLocation, conductive: 900)
         )
         guard case .dispatch(_, _, _, RelayRun.Step.printing.rawValue) =
-                RelayRun(reserveFloor: 500).nextAction(directive: running(), world: stocked)
+                RelayRun(reserveFloors: testFloors).nextAction(directive: running(), world: stocked)
         else {
             Issue.record("stock above the floor must still print")
             return
@@ -393,7 +412,7 @@ struct RelayRunAcquireTests {
     /// Once armed, a hub location with NO census row at all no longer vetoes
     /// immediately — it requests a refresh first (mirroring `HaulRun.survey`'s
     /// gate on the WHOLE table, not just this one row — see
-    /// `footprintCensusIsStale`'s doc), because "we couldn't read the stock"
+    /// `stockCensusIsStale`'s doc), because "we couldn't read the stock"
     /// is not evidence either way, and one GET may well clear it. Only once a
     /// reading is actually in hand does the rail form an opinion — see
     /// `printStockShortStallsRetry` for the veto itself,
@@ -406,7 +425,7 @@ struct RelayRunAcquireTests {
     /// `unarmedRailNeverVetoesEvenOnUnknownStock` below — it has no opinion
     /// at all, by design, so it does not even ask for a refresh.)
     @Test func missingFootprintTriggersARefreshRatherThanAnImmediateVeto() {
-        let snapshot = world(devices: [carrier(), hub()])
+        let snapshot = world(devices: [carrier(), hub()], inventories: [:])
         // thenStall: .printStockShort — this gate MUST escalate rather than
         // retry forever if the census never resolves (round 3's fix). Proven
         // end to end (through the real engine resolver, since "the refresh
@@ -414,7 +433,7 @@ struct RelayRunAcquireTests {
         // this pure function) by
         // `RefreshFootprintTests.persistentlyFailingFootprintRefreshEscalatesAfterOneRound`
         // in `DirectiveEngineTests.swift`.
-        #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
+        #expect(RelayRun(reserveFloors: testFloors).nextAction(directive: running(), world: snapshot)
                 == .refreshFootprint(nextStep: RelayRun.Step.acquire.rawValue, thenStall: .printStockShort))
     }
 
@@ -425,12 +444,12 @@ struct RelayRunAcquireTests {
     @Test func staleFootprintTriggersARefreshEvenWhenItLooksAbundant() {
         let snapshot = world(
             devices: [carrier(), hub()],
-            footprints: [hubLocation: footprint(
-                hubLocation, resources: 999_999,
+            inventories: stock(
+                hubLocation, conductive: 999_999,
                 fetchedAt: fixtureNow.addingTimeInterval(-(RelayRun.pollInterval + 1))
-            )]
+            )
         )
-        #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
+        #expect(RelayRun(reserveFloors: testFloors).nextAction(directive: running(), world: snapshot)
                 == .refreshFootprint(nextStep: RelayRun.Step.acquire.rawValue, thenStall: .printStockShort))
     }
 
@@ -441,19 +460,15 @@ struct RelayRunAcquireTests {
     /// trusted as "abundant." `printStockIsShort`'s separate `hubFreshness`
     /// bound catches exactly this, failing closed rather than reopening the
     /// refresh-trigger gate (which would risk the self-loop
-    /// `footprintCensusIsStale`'s doc describes).
+    /// `stockCensusIsStale`'s doc describes).
     @Test func staleHubRowIsNotTrustedEvenWhenTheCensusAsAWholeLooksFresh() {
-        let snapshot = world(
-            devices: [carrier(), hub()],
-            footprints: [
-                hubLocation: footprint(
-                    hubLocation, resources: 999_999,
-                    fetchedAt: fixtureNow.addingTimeInterval(-(RelayRun.hubFreshness + 1))
-                ),
-                "SOME-OTHER-BELT-1": footprint("SOME-OTHER-BELT-1", resources: 1),
-            ]
+        var inventories = stock(
+            hubLocation, conductive: 999_999,
+            fetchedAt: fixtureNow.addingTimeInterval(-(RelayRun.hubFreshness + 1))
         )
-        #expect(RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
+        inventories.merge(stock("SOME-OTHER-BELT-1", conductive: 1)) { _, last in last }
+        let snapshot = world(devices: [carrier(), hub()], inventories: inventories)
+        #expect(RelayRun(reserveFloors: testFloors).nextAction(directive: running(), world: snapshot)
                 == .stall(.printStockShort))
     }
 
@@ -462,51 +477,49 @@ struct RelayRunAcquireTests {
     /// here (bypassing `nextAction` entirely) so that guarantee stays covered
     /// even though `acquire` no longer reaches it in practice.
     @Test func printStockIsShortFailsClosedOnAMissingFootprintDirectly() {
-        let armed = PrintRail(reserveFloor: 500)
-        #expect(armed.printStockIsShort(at: hubLocation, world(devices: [carrier(), hub()])))
+        let armed = PrintRail(reserveFloors: testFloors)
+        #expect(armed.printStockIsShort(at: hubLocation, world(devices: [carrier(), hub()], inventories: [:])))
     }
 
-    /// The stall's log line must name the condition that ACTUALLY fired.
+    /// The stall's log line must name the condition that ACTUALLY fired: a
+    /// stale reading sitting far above every floor, reported as a shortage,
+    /// points an operator at a resource problem that does not exist.
     ///
-    /// It used to say `stock <n> below floor <f>` on all three branches, which
-    /// is false on two of them — most damagingly on the stale-row branch, where
-    /// it printed a reading (999,999) sitting far ABOVE the floor (35,078) as
-    /// though it were beneath it, pointing an operator at an imaginary resource
-    /// shortage instead of at a census that had stopped listing the hub.
-    ///
-    /// Asserted on the diagnosis string rather than on the emitted log line
+    /// Asserted on the diagnosis string rather than the emitted log line
     /// because `os.Logger` output is not readable from a test; the branch
-    /// selection — the part that was wrong — is entirely in this function, and
-    /// it shares its branch order with `printStockIsShort` by construction.
+    /// selection is entirely in this function, and it shares its branch order
+    /// with `printStockIsShort` by construction.
     @Test func theVetoLogNamesWhichConditionFired() {
-        let armed = PrintRail(reserveFloor: 500)
+        let armed = PrintRail(reserveFloors: testFloors)
 
         // Branch 1: no row at all — there is no reading to be "below" anything.
-        let missing = armed.printStockShortDiagnosis(at: hubLocation, world(devices: [carrier(), hub()]))
-        #expect(missing.contains("no census row"))
+        let missing = armed.printStockShortDiagnosis(at: hubLocation, world(devices: [carrier(), hub()], inventories: [:]))
+        #expect(missing.contains("no per-type stock reading"))
         #expect(!missing.contains("below floor"))
 
         // Branch 2: a present row, abundant, but too old to believe. The AGE is
         // what vetoed, and the line must say so rather than claim a shortage.
         let staleWorld = world(
             devices: [carrier(), hub()],
-            footprints: [hubLocation: footprint(
-                hubLocation, resources: 999_999,
+            inventories: stock(
+                hubLocation, conductive: 999_999,
                 fetchedAt: fixtureNow.addingTimeInterval(-(RelayRun.hubFreshness + 60))
-            )]
+            )
         )
         let stale = armed.printStockShortDiagnosis(at: hubLocation, staleWorld)
         #expect(stale.contains("freshness bound"))
         #expect(stale.contains("360s old"))
         #expect(!stale.contains("below floor"), "an abundant-but-stale reading is not a shortage")
 
-        // Branch 3: the genuine shortage — the only case the old line described
-        // correctly, and it must keep describing it.
+        // Branch 3: the genuine shortage, which names the type that is short.
         let shortWorld = world(
             devices: [carrier(), hub()],
-            footprints: [hubLocation: footprint(hubLocation, resources: 12)]
+            inventories: stock(hubLocation, conductive: 12)
         )
-        #expect(armed.printStockShortDiagnosis(at: hubLocation, shortWorld) == "stock 12 below floor 500")
+        #expect(
+            armed.printStockShortDiagnosis(at: hubLocation, shortWorld)
+                == "conductive 12 below floor 500"
+        )
 
         // The three branches agree with the predicate they explain: each of
         // these worlds really does veto.
@@ -526,40 +539,41 @@ struct RelayRunAcquireTests {
     /// (positive evidence: the census is fresh and STILL doesn't list the
     /// hub) rather than refreshing without end.
     @Test func persistentlyMissingFootprintEscalatesRatherThanRefreshingForever() {
-        var footprints: [String: LocationFootprint] = [:]
+        var inventories: [String: LocationStock] = [:]
         var action: MissionAction = .wait
         for _ in 0..<5 {
-            let snapshot = world(devices: [carrier(), hub()], footprints: footprints)
-            action = RelayRun(reserveFloor: 500).nextAction(directive: running(), world: snapshot)
+            let snapshot = world(devices: [carrier(), hub()], inventories: inventories)
+            action = RelayRun(reserveFloors: testFloors).nextAction(directive: running(), world: snapshot)
             if case .stall = action { break }
             guard case .refreshFootprint = action else {
                 Issue.record("expected a refresh or a terminal stall, got \(action)")
                 return
             }
-            // The census refresh's real effect: EVERY OTHER location the API
-            // knows about goes fresh — never the hub's own, since that is
-            // exactly the pathological case this test drives.
-            footprints["SOME-OTHER-BELT-1"] = footprint("SOME-OTHER-BELT-1", resources: 1)
+            // The sweep's real effect: EVERY OTHER depot goes fresh — never the
+            // hub's own, since that is exactly the pathological case this test
+            // drives.
+            inventories.merge(stock("SOME-OTHER-BELT-1", conductive: 1)) { _, last in last }
         }
         #expect(action == .stall(.printStockShort))
     }
 
-    /// Production ships the rail ARMED with `BrainCeiling.aggregateSpendFloor`
-    /// — the conservative TOTAL-stock proxy, the closest today's total-only
-    /// `LocationFootprint` can get to the true per-type check. This pins that
-    /// as a deliberate, live state (not the earlier `nil`-unarmed placeholder)
-    /// and proves stock below it actually vetoes end to end, via a FRESH
-    /// footprint (a stale/missing one would refresh instead — see the tests
-    /// above).
-    @Test func theReserveRailIsArmedWithTheCalibratedFloor() {
+    /// Production ships the rail ARMED with `BrainCeiling.reserveFloors` — the
+    /// true per-type check. This pins that as a deliberate, live state (not the
+    /// earlier `nil`-unarmed placeholder) and proves a depot under one type's
+    /// floor actually vetoes end to end, via a FRESH reading (a stale or
+    /// missing one would refresh instead — see the tests above).
+    @Test func theReserveRailIsArmedWithTheCalibratedFloors() {
         // Absolute pin, not a comparison against itself: any future
-        // recalibration of `BrainCeiling`'s `K` or reference snapshot must
-        // show up here as a diff.
-        #expect(BrainCeiling.aggregateSpendFloor == 35_078)
-        #expect(RelayRun().reserveFloor == BrainCeiling.aggregateSpendFloor)
+        // recalibration of `BrainCeiling`'s `K` must show up here as a diff.
+        #expect(BrainCeiling.reserveFloor(for: "conductive") == 600)
+        #expect(RelayRun().reserveFloors == BrainCeiling.reserveFloors)
+        // Rich in every type but conductive, so the veto is that type's doing
+        // rather than an empty fixture's.
+        var quantities = BrainCeiling.reserveFloors.mapValues { $0 * 10 }
+        quantities["conductive"] = 0
         let broke = world(
             devices: [carrier(), hub()],
-            footprints: [hubLocation: footprint(hubLocation, resources: 0)]
+            inventories: [hubLocation: LocationStock(quantities: quantities, fetchedAt: fixtureNow)]
         )
         #expect(RelayRun().nextAction(directive: running(), world: broke) == .stall(.printStockShort))
     }
@@ -572,9 +586,9 @@ struct RelayRunAcquireTests {
     /// to refresh FOR). This is the one place "unknown is never short" still
     /// holds, and only because the rail itself is off.
     @Test func unarmedRailNeverVetoesEvenOnUnknownStock() {
-        let snapshot = world(devices: [carrier(), hub()])
+        let snapshot = world(devices: [carrier(), hub()], inventories: [:])
         guard case .dispatch(.print, "AF1", _, RelayRun.Step.printing.rawValue) =
-                RelayRun(reserveFloor: nil).nextAction(directive: running(), world: snapshot)
+                RelayRun(reserveFloors: nil).nextAction(directive: running(), world: snapshot)
         else {
             Issue.record("an explicitly unarmed rail must not veto, even on unknown stock")
             return
@@ -701,7 +715,7 @@ struct RelayRunReclaimTests {
         // The carrier stands at the hub, so the print path's own preconditions
         // (a co-located, freshly-read hub) are all met — the ONLY thing left to
         // stop it is the rail.
-        let broke = world(devices: [Self.source(), carrier(), hub()])
+        let broke = world(devices: [Self.source(), carrier(), hub()], inventories: [:])
         #expect(RelayRun().nextAction(directive: running(sourceRelayCode: "R9"), world: broke)
                 == .advanceStep(nextStep: RelayRun.Step.fetching.rawValue))
 

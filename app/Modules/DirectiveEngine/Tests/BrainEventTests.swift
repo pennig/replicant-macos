@@ -659,7 +659,7 @@ struct BrainEnsureOneFreighterTests {
             view: eventView(
                 devices: stagedConvoy(), events: [eventFixture("X-1-EVT-001", location: "X-1")]
             ),
-            directives: [], log: [:], hubFootprints: [:]
+            directives: [], log: [:], hubStocks: [:]
         )
     }
 

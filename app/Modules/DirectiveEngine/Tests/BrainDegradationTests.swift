@@ -38,18 +38,30 @@ private let hubLocation = "SOL-3"
 
 private let target = "VEGA"
 
-/// Below `aggregateSpendFloor` but deliberately NOT zero — the rail must veto on a
-/// world plainly holding resources, because what it protects is the reserve rather
-/// than the last unit.
-private let belowFloorStock = 34_000
+/// Conductive one unit under its floor, every other type ten floors deep — the
+/// rail must veto on a world plainly holding resources, because what it
+/// protects is the reserve rather than the last unit.
+private let belowFloorStock: [String: Double] = {
+    var stock = BrainCeiling.reserveFloors.mapValues { $0 * 10 }
+    stock["conductive"] = BrainCeiling.reserveFloor(for: "conductive") - 1
+    return stock
+}()
 
-private let aboveFloorStock = 200_000
+private let aboveFloorStock: [String: Double] = BrainCeiling.reserveFloors.mapValues { $0 * 10 }
+
+/// The `LocationsClient.body` reading a scripted depot sweep hands back.
+private func scriptedBody(_ designation: String, stock: [String: Double]) -> BodyDetail {
+    .belt(Belt(
+        designation: designation,
+        inventory: stock.map { InventoryItem(resourceType: $0.key, quantity: $0.value) }
+    ))
+}
 
 /// The smallest world ranking one grow candidate. `salvage` is a parameter so the
 /// unknown-value case can remove the value data and change nothing else.
 private func seedDegradationWorld(
     _ db: Database,
-    hubStock: Int = belowFloorStock,
+    hubStock: [String: Double] = belowFloorStock,
     salvage: Double? = 3_200,
     carriers: [String] = ["VDEG1"]
 ) throws {
@@ -65,18 +77,23 @@ private func seedDegradationWorld(
     if let salvage {
         try seedSalvageAssay(db, id: "SITE-\(target)", system: target, totals: ["structural": salvage])
     }
-    try seedFootprint(db, location: hubLocation, resources: hubStock, fetchedAt: liftoff)
+    try seedFootprint(db, location: hubLocation, stock: hubStock, fetchedAt: liftoff)
 }
 
 private func seedFootprint(
-    _ db: Database, location: String, resources: Int, fetchedAt: Date
+    _ db: Database, location: String, stock: [String: Double], fetchedAt: Date
 ) throws {
     try LocationFootprint.insert {
         LocationFootprint(
-            location: location, devices: 2, resources: resources, resourceSites: 0,
-            locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
+            location: location, devices: 2, resources: Int(stock.values.reduce(0, +)),
+            resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
         )
     }.execute(db)
+    try LocationInventory.replace(
+        location: location,
+        items: stock.map { InventoryItem(resourceType: $0.key, quantity: $0.value) },
+        fetchedAt: fetchedAt, in: db
+    )
 }
 
 // MARK: - The scripted seam
@@ -206,7 +223,7 @@ private func drive(
     censusReads: LockIsolated<Int> = LockIsolated(0),
     resolutions: Resolutions = Resolutions(),
     refresher: (@Sendable (any DatabaseWriter, LockIsolated<[ConfirmRead]>) -> DeviceRefreshClient)? = nil,
-    census: Int = belowFloorStock,
+    census: [String: Double] = belowFloorStock,
     storage: InMemoryStorage,
     from start: Date,
     step: TimeInterval,
@@ -234,8 +251,11 @@ private func drive(
             // the engine resolver that calls it.
             $0.locationsClient.footprint = { [censusReads] in
                 censusReads.withValue { $0 += 1 }
-                return [hubLocation: LocationCounts(devices: 2, resources: census)]
+                return [hubLocation: LocationCounts(devices: 2, resources: Int(census.values.reduce(0, +)))]
             }
+            // The rail reads per-type, so the engine's depot sweep is scripted
+            // from the same figures the census above totals.
+            $0.locationsClient.body = { scriptedBody($0, stock: census) }
         } operation: { () -> Tick in
             @Shared(.brainReport) var report: BrainReport?
             await core.tickBrain()
@@ -399,9 +419,9 @@ struct BrainReserveRailDegradationTests {
         let report = await tickReport(database, at: liftoff, uuid: .incrementing)
 
         #expect(report.limits.hubStock == belowFloorStock)
-        #expect(report.limits.spendFloor == BrainCeiling.aggregateSpendFloor)
+        #expect(report.limits.reserveFloors == BrainCeiling.reserveFloors)
         #expect(
-            report.limits.hubStockStanding(at: liftoff) == .belowFloor,
+            report.limits.hubStockStanding(at: liftoff) == .belowFloor(shortTypes: ["conductive"]),
             "the feed must say what the rail did — printing vetoed, not comfortable headroom"
         )
     }
@@ -829,5 +849,5 @@ private func seedReclaimableWorld(
     try seedSystemDetail(db, system: "DEADEND", scanned: true)
     try seedRelay(db, code: "RDEG_A", location: "DEADEND-1", updatedAt: sourceUpdatedAt)
 
-    try seedFootprint(db, location: hubLocation, resources: aboveFloorStock, fetchedAt: liftoff)
+    try seedFootprint(db, location: hubLocation, stock: aboveFloorStock, fetchedAt: liftoff)
 }

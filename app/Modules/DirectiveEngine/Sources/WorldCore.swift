@@ -30,6 +30,11 @@ public struct WorldCore: Equatable, Sendable {
     public let openOperations: [String: GameModels.Operation]
     public let queuedOperations: [String: [GameModels.Operation]]
     public let footprints: [String: LocationFootprint]
+    /// Per-type stock by location, folded from `LocationInventory` — the
+    /// reading `PrintRail` checks a print against. Whole-table like
+    /// `footprints`, and one row per type per location the fleet has read
+    /// in detail, so it stays a handful of rows.
+    public let inventories: [String: LocationStock]
     public let starPositions: [String: Position]
     public let components: [String: String]
     public let blueprintBills: [String: ResourceCost]
@@ -54,6 +59,7 @@ public struct WorldCore: Equatable, Sendable {
         openOperations: [String: GameModels.Operation],
         queuedOperations: [String: [GameModels.Operation]],
         footprints: [String: LocationFootprint],
+        inventories: [String: LocationStock],
         starPositions: [String: Position],
         components: [String: String],
         blueprintBills: [String: ResourceCost],
@@ -71,6 +77,7 @@ public struct WorldCore: Equatable, Sendable {
         self.openOperations = openOperations
         self.queuedOperations = queuedOperationsSorted(queuedOperations)
         self.footprints = footprints
+        self.inventories = inventories
         self.starPositions = starPositions
         self.components = components
         self.blueprintBills = blueprintBills
@@ -109,6 +116,7 @@ public struct WorldCore: Equatable, Sendable {
         let footprints = Dictionary(
             footprintRows.map { ($0.location, $0) }, uniquingKeysWith: { _, last in last }
         )
+        let inventories = LocationInventory.folded(try LocationInventory.all.fetchAll(db))
 
         // Same geometry `WorldView.read` computes: a haul candidate must
         // sit in the delivering theatre's own mesh COMPONENT, not merely be meshed.
@@ -167,6 +175,7 @@ public struct WorldCore: Equatable, Sendable {
             ),
             queuedOperations: Dictionary(grouping: operations, by: \.entityCode),
             footprints: footprints,
+            inventories: inventories,
             starPositions: starPositions,
             components: components,
             blueprintBills: blueprintBills,

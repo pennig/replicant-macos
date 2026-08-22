@@ -28,21 +28,35 @@ private func fundedGameClient() -> GameClient {
 /// Two meshed, print-capable systems far enough apart that `MeshGraph` never
 /// merges them into one component — each recognised as its OWN theatre, with
 /// a footprint of `resources` distinct from the other's.
-private func seedTwoTheatreWorld(_ db: Database, ainalramStock: Int, denebedStock: Int) throws {
+/// Overwrites the rail-clearing rows `seedHubStockpile` writes with one
+/// distinguishing conductive figure, so each theatre carries its own reading.
+private func setConductive(_ db: Database, at location: String, to quantity: Double) throws {
+    var stock = BrainCeiling.reserveFloors.mapValues { $0 * 10 }
+    stock["conductive"] = quantity
+    try LocationInventory.replace(
+        location: location,
+        items: stock.map { InventoryItem(resourceType: $0.key, quantity: $0.value) },
+        fetchedAt: stockFixtureNow, in: db
+    )
+}
+
+private func seedTwoTheatreWorld(_ db: Database, ainalramStock: Double, denebedStock: Double) throws {
     try seedStar(db, designation: "AINALRAM", x: 0, y: 0, z: 0)
     try seedRelay(db, code: "REL-A", location: "AINALRAM", updatedAt: stockFixtureNow)
     try seedPrintHub(db, code: "HUB-A", location: "AINALRAM-BELT-1", updatedAt: stockFixtureNow)
-    try seedHubStockpile(db, location: "AINALRAM-BELT-1", resources: ainalramStock, fetchedAt: stockFixtureNow)
+    try seedHubStockpile(db, location: "AINALRAM-BELT-1", resources: 1_000_000, fetchedAt: stockFixtureNow)
+    try setConductive(db, at: "AINALRAM-BELT-1", to: ainalramStock)
 
     try seedStar(db, designation: "DENEBED", x: 2_000, y: 2_000, z: 2_000)
     try seedRelay(db, code: "REL-B", location: "DENEBED", updatedAt: stockFixtureNow)
     try seedPrintHub(db, code: "HUB-B", location: "DENEBED-BELT-1", updatedAt: stockFixtureNow)
-    try seedHubStockpile(db, location: "DENEBED-BELT-1", resources: denebedStock, fetchedAt: stockFixtureNow)
+    try seedHubStockpile(db, location: "DENEBED-BELT-1", resources: 1_000_000, fetchedAt: stockFixtureNow)
+    try setConductive(db, at: "DENEBED-BELT-1", to: denebedStock)
 }
 
 @Suite("Brain — per-theatre stock reporting")
 struct BrainTheatreStockTests {
-    @Test("two theatres with different footprint resources each report their own number")
+    @Test("two theatres with different per-type stock each report their own number")
     func eachTheatreReportsItsOwnStock() async throws {
         let database = try GameDatabase.bootstrap()
         try await database.write { db in try seedTwoTheatreWorld(db, ainalramStock: 40_000, denebedStock: 900) }
@@ -58,8 +72,8 @@ struct BrainTheatreStockTests {
         }
 
         #expect(report.theatres.map(\.depot).sorted() == ["AINALRAM-BELT-1", "DENEBED-BELT-1"])
-        #expect(report.theatreLimits["AINALRAM-BELT-1"]?.hubStock == 40_000)
-        #expect(report.theatreLimits["DENEBED-BELT-1"]?.hubStock == 900)
+        #expect(report.theatreLimits["AINALRAM-BELT-1"]?.hubStock?["conductive"] == 40_000)
+        #expect(report.theatreLimits["DENEBED-BELT-1"]?.hubStock?["conductive"] == 900)
         // Never the OTHER theatre's number under this theatre's own heading.
         #expect(report.theatreLimits["AINALRAM-BELT-1"]?.hubStock != report.theatreLimits["DENEBED-BELT-1"]?.hubStock)
     }

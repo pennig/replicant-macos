@@ -14,10 +14,10 @@ private let logger = Logger(subsystem: "name.pennig.replicould", category: "Dire
 
 public struct EventCourierPrint: MissionStepMachine {
     public let kind = DirectiveKind.eventCourierPrint
-    public let reserveFloor: Int?
+    public let reserveFloors: [String: Double]?
 
-    public init(reserveFloor: Int? = BrainCeiling.aggregateSpendFloor) {
-        self.reserveFloor = reserveFloor
+    public init(reserveFloors: [String: Double]? = BrainCeiling.reserveFloors) {
+        self.reserveFloors = reserveFloors
     }
 
     public enum Step: String, CaseIterable, Sendable {
@@ -85,8 +85,8 @@ public struct EventCourierPrint: MissionStepMachine {
             owner: directive.id
         )
         guard let printer = PrintJob(depot: depot).bench(ctx, for: order) else { return .wait }
-        let rail = PrintRail(reserveFloor: reserveFloor)
-        if rail.footprintCensusIsStale(world) {
+        let rail = PrintRail(reserveFloors: reserveFloors)
+        if rail.stockCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.printing.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }

@@ -60,7 +60,7 @@ private func seedSeamWorld(_ db: Database, salvageAt: String?) throws {
     try seamDevice(
         db, code: "HUB1", type: "autofactory", location: "SOL-3", availableCommands: ["enqueue_print"]
     )
-    try seedHubStockpile(db, location: "SOL-3", resources: BrainCeiling.aggregateSpendFloor * 2)
+    try seedHubStockpile(db, location: "SOL-3", resources: 1_000_000)
 
     try seamDevice(
         db, code: "SALV1", type: "heaven_vessel", location: "SOL-3",

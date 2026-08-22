@@ -95,6 +95,9 @@ private func seedFootprint(
             locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
         )
     }.execute(db)
+    // The per-type reading `PrintRail` checks: seeding the total alone leaves
+    // every print vetoed on a reading that was never written.
+    try LocationInventory.insert { railClearingRows(at: location, fetchedAt: fetchedAt) }.execute(db)
 }
 
 private func seedSystemWithEntryPoint(_ db: Database, designation: String) throws {
@@ -491,6 +494,9 @@ private func drive(
                 censusReads.withValue { $0 += 1 }
                 return server.census()
             }
+            // The rail reads per-type, so the engine's depot sweep is scripted
+            // alongside the census the same resolver refreshes.
+            $0.locationsClient.body = { railClearingBody($0) }
             // Restock's pre-spend sweep: rows from `database`, stamped fresh —
             // the same authoritative read a real `GET devices?location=` buys.
             $0.devicesClient.fetchAtLocation = { designation in

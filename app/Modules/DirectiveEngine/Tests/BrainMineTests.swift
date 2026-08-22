@@ -820,7 +820,7 @@ struct BrainReportMineDefaultsTests {
             limits: BrainLimits(
                 actionsRemaining: 0, actionsLimit: 0, actionsFloor: 0,
                 readsRemaining: 0, readsLimit: 0, readsFloor: 0,
-                hubStock: nil, hubStockFetchedAt: nil, spendFloor: 0, rateLimitedAt: nil
+                hubStock: nil, hubStockFetchedAt: nil, reserveFloors: [:], rateLimitedAt: nil
             ),
             survey: .idle(reason: "none"),
             observedAt: mineNow
@@ -867,7 +867,7 @@ private func seedMineSecondTheatre(_ db: Database) throws {
     try seedRelay(db, code: "REL2", location: secondMineTheatreSystem)
     try seedStar(db, designation: secondMineTheatreSystem, x: 300, y: 300, z: 300)
     try seedPrintHub(db, code: "HUB2", location: secondMineTheatreHubLocation)
-    try seedHubStockpile(db, location: secondMineTheatreHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
+    try seedHubStockpile(db, location: secondMineTheatreHubLocation, resources: 1_000_000)
     try seedSystemDetail(
         db, system: secondMineTheatreSystem, scanned: true,
         belts: [Belt(designation: secondMineTheatreBelt, density: "dense")]

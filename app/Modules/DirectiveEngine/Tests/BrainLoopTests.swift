@@ -224,7 +224,7 @@ struct BrainLoopTests {
         #expect(published?.observedAt == tickTime)
         // The rails are reported even on an idle tick — headroom is a standing
         // fact, not something that only exists when a launch is blocked.
-        #expect(published?.limits.spendFloor == BrainCeiling.aggregateSpendFloor)
+        #expect(published?.limits.reserveFloors == BrainCeiling.reserveFloors)
 
         // Publishing is not persisting: the why-view is derived state and the
         // brain design forbids it a table.

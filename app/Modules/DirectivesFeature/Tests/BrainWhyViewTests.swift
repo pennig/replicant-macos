@@ -78,9 +78,9 @@ struct BrainWhyViewTests {
             readsRemaining: 108,
             readsLimit: 120,
             readsFloor: 12,
-            hubStock: 41_000,
+            hubStock: BrainCeiling.reserveFloors.mapValues { $0 * 10 },
             hubStockFetchedAt: now,
-            spendFloor: 35_078,
+            reserveFloors: BrainCeiling.reserveFloors,
             rateLimitedAt: rateLimitedAt
         )
     }
@@ -316,8 +316,8 @@ struct BrainWhyViewTests {
                 limits: BrainLimits(
                     actionsRemaining: 4, actionsLimit: 60, actionsFloor: 6,
                     readsRemaining: 108, readsLimit: 120, readsFloor: 12,
-                    hubStock: 41_000, hubStockFetchedAt: Self.now,
-                    spendFloor: 35_078, rateLimitedAt: nil
+                    hubStock: BrainCeiling.reserveFloors.mapValues { $0 * 10 }, hubStockFetchedAt: Self.now,
+                    reserveFloors: BrainCeiling.reserveFloors, rateLimitedAt: nil
                 )
             )
         )
@@ -391,15 +391,14 @@ struct BrainWhyViewTests {
     /// express.
     ///
     /// The staleness case is the one this test exists for. `PrintRail
-    /// .printStockIsShort` vetoes on a census row older than
-    /// `RelayRun.hubFreshness` regardless of how healthy the number looks, so
-    /// a card rendering an hour-old 41,000-unit reading as "against a 35,078
-    /// reserve floor" would be telling the operator there is headroom while
-    /// every print is in fact being refused. Silence must not read as
-    /// permission to spend — and neither must a stale reading, which is the
-    /// same failure wearing a number.
+    /// .printStockIsShort` vetoes on a reading older than
+    /// `RelayRun.hubFreshness` regardless of how healthy the numbers look, so
+    /// a card rendering an hour-old reading as clear headroom would be telling
+    /// the operator there is room while every print is in fact being refused.
+    /// Silence must not read as permission to spend — and neither must a stale
+    /// reading, which is the same failure wearing a number.
     @Test func theReserveFloorLineReportsAllThreeVetoStatesNotJustTwo() {
-        func line(hubStock: Int?, fetchedAt: Date?) -> String? {
+        func line(hubStock: [String: Double]?, fetchedAt: Date?) -> String? {
             BrainWhy.from(
                 report: Self.report(
                     .idle(reason: "no grow or prune work"),
@@ -407,32 +406,39 @@ struct BrainWhyViewTests {
                         actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
                         readsRemaining: 108, readsLimit: 120, readsFloor: 12,
                         hubStock: hubStock, hubStockFetchedAt: fetchedAt,
-                        spendFloor: 35_078, rateLimitedAt: nil
+                        reserveFloors: BrainCeiling.reserveFloors, rateLimitedAt: nil
                     )
                 )
             ).limitPressure.first { $0.kind == .reserveFloor }?.detail
         }
         let fresh = Self.now.addingTimeInterval(-60)
         let stale = Self.now.addingTimeInterval(-3720) // 62 minutes — well past hubFreshness
+        // Every type a thousand floors deep except conductive, so which type
+        // the line names is decided by the fixture rather than by a tie.
+        func stock(conductive: Double) -> [String: Double] {
+            var stock = BrainCeiling.reserveFloors.mapValues { $0 * 1000 }
+            stock["conductive"] = conductive
+            return stock
+        }
 
         #expect(
-            line(hubStock: 41_000, fetchedAt: fresh)
-                == "hub stock — 41,000 units against a 35,078 reserve floor"
+            line(hubStock: stock(conductive: 12_000), fetchedAt: fresh)
+                == "hub stock — clear, tightest is conductive 12,000 of 600"
         )
         #expect(
-            line(hubStock: 12_000, fetchedAt: fresh)
-                == "hub stock — 12,000 units, below the 35,078 reserve floor — printing vetoed"
+            line(hubStock: stock(conductive: 300), fetchedAt: fresh)
+                == "hub stock — conductive 300 of 600 — printing vetoed"
         )
-        // Comfortably ABOVE the floor and still vetoed — the whole point. The
-        // line names the AGE, not the figure, so the operator looks at the
-        // census rather than hunting a shortage that does not exist.
+        // Comfortably ABOVE every floor and still vetoed — the whole point. The
+        // line names the AGE, not the figures, so the operator looks at the
+        // reading rather than hunting a shortage that does not exist.
         #expect(
-            line(hubStock: 41_000, fetchedAt: stale)
-                == "hub stock — 41,000 units, but the census reading is 1h old — printing vetoed until it refreshes"
+            line(hubStock: stock(conductive: 12_000), fetchedAt: stale)
+                == "hub stock — the reading is 1h old — printing vetoed until it refreshes"
         )
         #expect(
             line(hubStock: nil, fetchedAt: nil)
-                == "hub stock — no census reading — printing vetoed until one lands"
+                == "hub stock — no per-type reading — printing vetoed until one lands"
         )
     }
 
@@ -444,8 +450,8 @@ struct BrainWhyViewTests {
             BrainLimits(
                 actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
                         readsRemaining: 108, readsLimit: 120, readsFloor: 12,
-                hubStock: 41_000, hubStockFetchedAt: Self.now.addingTimeInterval(-ageSeconds),
-                spendFloor: 35_078, rateLimitedAt: nil
+                hubStock: BrainCeiling.reserveFloors.mapValues { $0 * 10 }, hubStockFetchedAt: Self.now.addingTimeInterval(-ageSeconds),
+                reserveFloors: BrainCeiling.reserveFloors, rateLimitedAt: nil
             ).hubStockStanding(at: Self.now)
         }
         #expect(standing(ageSeconds: RelayRun.hubFreshness - 1) == .clear)

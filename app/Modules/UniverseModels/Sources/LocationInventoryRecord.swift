@@ -64,3 +64,39 @@ extension LocationInventory {
         .execute(db)
     }
 }
+
+// MARK: - The folded form the reserve rail reads
+
+/// One location's per-type stock and the moment it was read.
+///
+/// `fetchedAt` is the OLDEST read behind the quantities, so a partially
+/// refreshed location is judged by its stalest line rather than its freshest.
+public struct LocationStock: Equatable, Sendable {
+    public let quantities: [String: Double]
+    public let fetchedAt: Date
+
+    public init(quantities: [String: Double], fetchedAt: Date) {
+        self.quantities = quantities
+        self.fetchedAt = fetchedAt
+    }
+}
+
+extension LocationInventory {
+    /// Fold raw rows into one `LocationStock` per location.
+    ///
+    /// Resource types are lowercased on the way in (`replace` already does it),
+    /// so callers may key with `BrainCeiling.resourceTypes` directly.
+    public static func folded(_ rows: [LocationInventory]) -> [String: LocationStock] {
+        var quantities: [String: [String: Double]] = [:]
+        var oldest: [String: Date] = [:]
+        for row in rows {
+            quantities[row.location, default: [:]][row.resourceType, default: 0] += row.quantity
+            // Qualified: bare `min` resolves to `@Table`'s dynamic member lookup.
+            oldest[row.location] = Swift.min(oldest[row.location] ?? row.fetchedAt, row.fetchedAt)
+        }
+        return quantities.reduce(into: [:]) { folded, entry in
+            guard let fetchedAt = oldest[entry.key] else { return }
+            folded[entry.key] = LocationStock(quantities: entry.value, fetchedAt: fetchedAt)
+        }
+    }
+}

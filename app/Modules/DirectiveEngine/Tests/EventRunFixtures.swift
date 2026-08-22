@@ -100,9 +100,14 @@ enum EventRunFixtures {
     /// The stock census that makes the depot `.operational`.
     static func depotFootprint(fetchedAt: Date) -> LocationFootprint {
         LocationFootprint(
-            location: "HUB-1", devices: 2, resources: BrainCeiling.aggregateSpendFloor * 2,
+            location: "HUB-1", devices: 2, resources: 1_000_000,
             resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: fetchedAt
         )
+    }
+
+    /// The per-type reading the print rail is checked against at that depot.
+    static func depotInventory(fetchedAt: Date) -> [LocationInventory] {
+        railClearingRows(at: "HUB-1", fetchedAt: fetchedAt)
     }
 
     /// The event carrying LIVE progress, as the ledger reports it mid-run.
@@ -228,6 +233,15 @@ enum EventRunFixtures {
                 "HUB-1": LocationFootprint(
                     location: "HUB-1", devices: devices.count, resources: stock,
                     resourceSites: 0, locationEvents: 0, replicants: 0,
+                    fetchedAt: footprintFresh ? now : .distantPast
+                )
+            ],
+            // Scaled off the same `stock` knob, so the default clears every
+            // reserve floor ten times over and a fixture asking for little is
+            // short on every type.
+            inventories: [
+                "HUB-1": LocationStock(
+                    quantities: BrainCeiling.reserveFloors.mapValues { $0 * 10 * Double(stock) / 500_000 },
                     fetchedAt: footprintFresh ? now : .distantPast
                 )
             ],

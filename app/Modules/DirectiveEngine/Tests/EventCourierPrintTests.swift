@@ -41,6 +41,7 @@ struct EventCourierPrintTests {
                     resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
                 )
             ],
+            inventories: railClearingInventory(at: "HUB-1", fetchedAt: now),
             theatres: [Theatre(depot: "HUB-1", system: "HUB", origin: .derived,
                                readiness: .operational, stock: 500_000)],
             replicantHostDevices: hosts,

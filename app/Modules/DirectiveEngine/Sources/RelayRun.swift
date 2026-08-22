@@ -23,14 +23,12 @@ public struct RelayRun: MissionStepMachine {
     public let kind: DirectiveKind = .relayRun
     public var firstStep: String { Step.acquire.rawValue }
 
-    /// Total-stock floor the print step checks before spending; nil leaves the rail
-    /// unarmed. A PROXY for `BrainCeiling`'s per-type reserve, since
-    /// `LocationFootprint` carries only a total — and NOT the sum of the six
-    /// per-type floors, which undershoots badly.
-    public let reserveFloor: Int?
+    /// Per-type floors the print step checks the depot's own stock against
+    /// before spending; nil leaves the rail unarmed.
+    public let reserveFloors: [String: Double]?
 
-    public init(reserveFloor: Int? = BrainCeiling.aggregateSpendFloor) {
-        self.reserveFloor = reserveFloor
+    public init(reserveFloors: [String: Double]? = BrainCeiling.reserveFloors) {
+        self.reserveFloors = reserveFloors
     }
 
     /// This mission's step vocabulary, as the bare strings `Directive.step` holds.
@@ -328,8 +326,8 @@ public struct RelayRun: MissionStepMachine {
         // about resources already committed. `.printStockShort` rather than nil
         // because this gates an irreversible spend, so a persistently-unreadable
         // census must reach bounded-retry-then-escalate instead of retrying forever.
-        let rail = PrintRail(reserveFloor: reserveFloor)
-        if reserveFloor != nil, rail.footprintCensusIsStale(world) {
+        let rail = PrintRail(reserveFloors: reserveFloors)
+        if reserveFloors != nil, rail.stockCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.acquire.rawValue, thenStall: .printStockShort)
         }
         if rail.printStockIsShort(at: depot, world) {

@@ -72,9 +72,10 @@ private func world(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: busy, log: [], dispatchedOperations: [:], systems: [:], siteAssays: [:],
         footprints: [depot: LocationFootprint(
-            location: depot, devices: 1, resources: BrainCeiling.aggregateSpendFloor * 2,
+            location: depot, devices: 1, resources: 1_000_000,
             resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
         )],
+        inventories: railClearingInventory(at: depot, fetchedAt: now),
         peers: [], now: now
     )
 }

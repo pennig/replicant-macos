@@ -89,18 +89,20 @@ private func census(
 }
 
 private func healthyCensus(fetchedAt: Date = now) -> [String: LocationFootprint] {
-    census(BrainCeiling.aggregateSpendFloor * 2, fetchedAt: fetchedAt)
+    census(1_000_000, fetchedAt: fetchedAt)
 }
 
 private func world(
     devices: [Device],
     openOperations: [String: GameModels.Operation] = [:],
-    footprints: [String: LocationFootprint]? = nil
+    inventories: [String: LocationStock]? = nil
 ) -> WorldSnapshot {
     WorldSnapshot(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: openOperations, log: [], dispatchedOperations: [:],
-        systems: [:], siteAssays: [:], footprints: footprints ?? healthyCensus(), peers: [], now: now
+        systems: [:], siteAssays: [:], footprints: healthyCensus(),
+        inventories: inventories ?? railClearingInventory(at: hubLocation, fetchedAt: now),
+        peers: [], now: now
     )
 }
 
@@ -290,7 +292,7 @@ struct MineFleetPrintTests {
         let stale = now.addingTimeInterval(-(RelayRun.pollInterval + 60))
         let snapshot = world(
             devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
-            footprints: healthyCensus(fetchedAt: stale)
+            inventories: railClearingInventory(at: hubLocation, fetchedAt: stale)
         )
 
         #expect(MineFleetPrint().nextAction(directive: printRun(), world: snapshot)
@@ -303,7 +305,7 @@ struct MineFleetPrintTests {
     func shortStockWaitsAndNeverStalls() {
         let snapshot = world(
             devices: printedFleet(omitting: "mining_drone") + [hub(), carrier()],
-            footprints: census(1)
+            inventories: [hubLocation: railShortStock(fetchedAt: now)]
         )
 
         let action = MineFleetPrint().nextAction(directive: printRun(), world: snapshot)
@@ -597,10 +599,11 @@ struct MineFleetPrintCoTenancyEngineTests {
             try LocationFootprint.upsert {
                 LocationFootprint(
                     location: hubLocation, devices: 3,
-                    resources: BrainCeiling.aggregateSpendFloor * 2,
+                    resources: 1_000_000,
                     resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
                 )
             }.execute(db)
+            try LocationInventory.insert { railClearingRows(at: hubLocation, fetchedAt: now) }.execute(db)
         }
         let opCounter = LockIsolated(0)
 
@@ -669,10 +672,11 @@ struct MineFleetPrintCompletionGuardTests {
             try LocationFootprint.upsert {
                 LocationFootprint(
                     location: hubLocation, devices: 2,
-                    resources: BrainCeiling.aggregateSpendFloor * 2,
+                    resources: 1_000_000,
                     resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
                 )
             }.execute(db)
+            try LocationInventory.insert { railClearingRows(at: hubLocation, fetchedAt: now) }.execute(db)
         }
 
         await withDependencies {
@@ -766,7 +770,7 @@ struct MineFleetPrintFreshEvidenceTests {
         let snapshot = world(
             devices: printedFleet(omitting: "ami_transport_controller", updatedAt: stale)
                 + [hub(updatedAt: stale), carrier(updatedAt: stale)],
-            footprints: census(1)
+            inventories: [hubLocation: railShortStock(fetchedAt: now)]
         )
         let directive = printRun(stepStartedAt: now.addingTimeInterval(-5))
 
@@ -816,11 +820,12 @@ private func seedPrintRun(
         try LocationFootprint.upsert {
             LocationFootprint(
                 location: hubLocation, devices: rows.count,
-                resources: BrainCeiling.aggregateSpendFloor * 2,
+                resources: 1_000_000,
                 resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
             )
         }
         .execute(db)
+        try LocationInventory.insert { railClearingRows(at: hubLocation, fetchedAt: now) }.execute(db)
     }
 }
 

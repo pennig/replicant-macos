@@ -59,8 +59,8 @@ struct BrainWhyEventChoiceTests {
             limits: BrainLimits(
                 actionsRemaining: 54, actionsLimit: 60, actionsFloor: 6,
                 readsRemaining: 108, readsLimit: 120, readsFloor: 12,
-                hubStock: 41_000, hubStockFetchedAt: epoch,
-                spendFloor: 35_078, rateLimitedAt: nil
+                hubStock: BrainCeiling.reserveFloors.mapValues { $0 * 10 }, hubStockFetchedAt: epoch,
+                reserveFloors: BrainCeiling.reserveFloors, rateLimitedAt: nil
             ),
             survey: .idle(reason: "none"),
             observedAt: epoch,

@@ -94,7 +94,7 @@ private func run(
 /// covered in `RelayRunTests`/`BrainCeilingTests`.
 private func healthyCensus() -> [String: LocationFootprint] {
     [hubLocation: LocationFootprint(
-        location: hubLocation, devices: 1, resources: BrainCeiling.aggregateSpendFloor * 2,
+        location: hubLocation, devices: 1, resources: 1_000_000,
         resourceSites: 0, locationEvents: 0, replicants: 0, fetchedAt: now
     )]
 }
@@ -104,7 +104,9 @@ private func world(devices: [Device], peers: [Directive] = [], dispatched: [Game
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: [:], log: [],
         dispatchedOperations: Dictionary(dispatched.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }),
-        systems: [:], siteAssays: [:], footprints: healthyCensus(), peers: peers, now: now
+        systems: [:], siteAssays: [:], footprints: healthyCensus(),
+        inventories: railClearingInventory(at: hubLocation, fetchedAt: now),
+        peers: peers, now: now
     )
 }
 

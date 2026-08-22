@@ -100,11 +100,11 @@ private func census(_ resources: Int, at location: String = hubLocation, fetched
     )]
 }
 
-/// Comfortably above `BrainCeiling.aggregateSpendFloor`, so the reserve rail is
-/// armed and silent — these tests are about the OTHER decisions, and a world the
-/// rail vetoes would never reach them.
+/// A hub holding plenty, so the reserve rail is armed and silent — these tests
+/// are about the OTHER decisions, and a world the rail vetoes would never
+/// reach them.
 private func healthyCensus(fetchedAt: Date = now) -> [String: LocationFootprint] {
-    census(BrainCeiling.aggregateSpendFloor * 2, fetchedAt: fetchedAt)
+    census(1_000_000, fetchedAt: fetchedAt)
 }
 
 /// Theatres derived the same way `WorldSnapshot.read` does — off `devices` and
@@ -123,6 +123,7 @@ private func world(
     devices: [Device],
     openOperations: [String: GameModels.Operation] = [:],
     footprints: [String: LocationFootprint]? = nil,
+    inventories: [String: LocationStock]? = nil,
     at instant: Date = now
 ) -> WorldSnapshot {
     let resolvedFootprints = footprints ?? healthyCensus()
@@ -130,6 +131,7 @@ private func world(
         devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, last in last }),
         openOperations: openOperations, log: [], dispatchedOperations: [:],
         systems: [:], siteAssays: [:], footprints: resolvedFootprints,
+        inventories: inventories ?? railClearingInventory(at: hubLocation, fetchedAt: instant),
         theatres: theatres(devices: devices, footprints: resolvedFootprints),
         peers: [], now: instant
     )
@@ -305,9 +307,8 @@ struct HubRecognitionSeamTests {
             try Device.insert { hub() }.execute(db)
             try Device.insert { liveRelay("REL0", at: hubLocation) }.execute(db)
             try Device.insert { carrier(location: hubLocation) }.execute(db)
-            try LocationFootprint.insert { census(
-                BrainCeiling.aggregateSpendFloor * 2, at: hubLocation
-            )[hubLocation]! }.execute(db)
+            try LocationFootprint.insert { census(1_000_000, at: hubLocation)[hubLocation]! }.execute(db)
+            try LocationInventory.insert { railClearingRows(at: hubLocation, fetchedAt: now) }.execute(db)
             // Off any candidate depot: in `WorldSnapshot`'s whole-table read
             // but not `WorldView`'s narrowed query — a real read difference.
             try LocationFootprint.insert {
@@ -431,7 +432,7 @@ struct RestockRunTests {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
-            footprints: census(1)
+            inventories: [hubLocation: railShortStock(fetchedAt: now)]
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
@@ -448,7 +449,7 @@ struct RestockRunTests {
         let stale = now.addingTimeInterval(-(RelayRun.pollInterval + 60))
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
-            footprints: healthyCensus(fetchedAt: stale)
+            inventories: railClearingInventory(at: hubLocation, fetchedAt: stale)
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
@@ -466,7 +467,7 @@ struct RestockRunTests {
         let stale = now.addingTimeInterval(-(RelayRun.pollInterval + 60))
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
-            footprints: healthyCensus(fetchedAt: stale)
+            inventories: railClearingInventory(at: hubLocation, fetchedAt: stale)
         )
 
         guard case let .refreshFootprint(_, thenStall) =
@@ -489,7 +490,7 @@ struct RestockRunTests {
         let stale = now.addingTimeInterval(-(RelayRun.pollInterval + 60))
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
-            footprints: healthyCensus(fetchedAt: stale)
+            inventories: railClearingInventory(at: hubLocation, fetchedAt: stale)
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait,
@@ -505,7 +506,7 @@ struct RestockRunTests {
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
             openOperations: openOp("AF1", kind: .print),
-            footprints: healthyCensus(fetchedAt: stale)
+            inventories: railClearingInventory(at: hubLocation, fetchedAt: stale)
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot)
@@ -522,7 +523,8 @@ struct RestockRunTests {
         let directive = restockRun(targets: ["VEGA", "ALTAIR"])
         let snapshot = world(
             devices: [hub(), liveRelay("REL0", at: hubLocation)],
-            footprints: census(BrainCeiling.aggregateSpendFloor * 2, at: "SOMEWHERE-ELSE")
+            footprints: census(1_000_000, at: "SOMEWHERE-ELSE"),
+            inventories: railClearingInventory(at: "SOMEWHERE-ELSE", fetchedAt: now)
         )
 
         #expect(RestockRun().nextAction(directive: directive, world: snapshot) == .wait)
@@ -551,7 +553,10 @@ struct RestockRunTests {
                  nextStep: RestockRun.Step.stocking.rawValue
              )),
             ("reserve short", restockRun(targets: ["VEGA"]),
-             world(devices: [hub(), liveRelay("REL0", at: hubLocation)], footprints: census(1)), .wait),
+             world(
+                 devices: [hub(), liveRelay("REL0", at: hubLocation)],
+                 inventories: [hubLocation: railShortStock(fetchedAt: now)]
+             ), .wait),
         ]
 
         for (label, directive, snapshot, expected) in cases {
@@ -735,7 +740,7 @@ struct RestockEngineTests {
                 try LocationFootprint.insert {
                     LocationFootprint(
                         location: hubLocation, devices: 1,
-                        resources: BrainCeiling.aggregateSpendFloor * 2,
+                        resources: 1_000_000,
                         resourceSites: 0, locationEvents: 0, replicants: 0,
                         fetchedAt: censusFetchedAt
                     )
@@ -763,6 +768,10 @@ struct RestockEngineTests {
                 attempts.withValue { $0 += 1 }
                 throw Boom()
             }
+            // The depot sweep is the other half of the same refresh, and an
+            // offline network takes both — a succeeding sweep would feed the
+            // rail and let the print out under the failure this test drives.
+            $0.locationsClient.body = { _ in throw Boom() }
         } operation: {
             let core = DirectiveEngineCore(machines: [RestockRun()], tick: .seconds(5))
             await core.evaluateOnce(directiveID: "R1")
@@ -813,9 +822,10 @@ struct RestockEngineTests {
                 attempts.withValue { $0 += 1 }
                 return [hubLocation: LocationCounts(
                     locationEvents: 0, devices: 1, resourceSites: 0,
-                    resources: BrainCeiling.aggregateSpendFloor * 2, replicants: 0
+                    resources: 1_000_000, replicants: 0
                 )]
             }
+            $0.locationsClient.body = { railClearingBody($0) }
         } operation: {
             let core = DirectiveEngineCore(machines: [RestockRun()], tick: .seconds(5))
             await core.evaluateOnce(directiveID: "R1")
@@ -849,6 +859,7 @@ struct RestockEngineTests {
                 attempts.withValue { $0 += 1 }
                 return [:]
             }
+            $0.locationsClient.body = { railClearingBody($0) }
         } operation: {
             let core = DirectiveEngineCore(machines: [RestockRun()], tick: .seconds(5))
             await core.evaluateOnce(directiveID: "R1")

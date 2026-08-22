@@ -608,7 +608,7 @@ private func seedSecondTheatre(_ db: Database) throws {
     try seedRelay(db, code: "REL2", location: secondTheatreSystem)
     try seedStar(db, designation: secondTheatreSystem, x: 300, y: 300, z: 300)
     try seedPrintHub(db, code: "HUB2", location: secondTheatreHubLocation)
-    try seedHubStockpile(db, location: secondTheatreHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
+    try seedHubStockpile(db, location: secondTheatreHubLocation, resources: 1_000_000)
 }
 
 @Suite("Brain — ensureSalvage")
@@ -737,7 +737,7 @@ struct BrainEnsureSalvageTests {
                 try WorldView.read(from: db, now: salvageEnsureNow)
             },
             directives: [],          // read BEFORE either insert, and never refreshed
-            log: [:], hubFootprint: nil
+            log: [:], hubStocks: [:]
         )
         let theatre = try #require(stale.view.theatres.first { $0.isOperational })
         // Each call names a DIFFERENT vessel. With one vessel the reservation

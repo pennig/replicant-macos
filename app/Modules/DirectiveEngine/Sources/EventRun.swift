@@ -17,10 +17,10 @@ public struct EventRun: MissionStepMachine {
     public let kind = DirectiveKind.eventRun
 
     /// The reserve rail, injected as `RelayRun`/`MineFleetPrint` inject it.
-    public let reserveFloor: Int?
+    public let reserveFloors: [String: Double]?
 
-    public init(reserveFloor: Int? = BrainCeiling.aggregateSpendFloor) {
-        self.reserveFloor = reserveFloor
+    public init(reserveFloors: [String: Double]? = BrainCeiling.reserveFloors) {
+        self.reserveFloors = reserveFloors
     }
 
     /// This mission's step vocabulary, as `Directive.step` holds it (D6).
@@ -170,8 +170,8 @@ public struct EventRun: MissionStepMachine {
         }
         // The rail is the ceiling on the WHOLE run, resources included, so it
         // sits ahead of the first spend rather than only ahead of the prints.
-        let rail = PrintRail(reserveFloor: reserveFloor)
-        if rail.footprintCensusIsStale(world) {
+        let rail = PrintRail(reserveFloors: reserveFloors)
+        if rail.stockCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.preflight.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }
@@ -365,8 +365,8 @@ public struct EventRun: MissionStepMachine {
         if wanted.isEmpty { return .advanceStep(nextStep: Step.loading.rawValue) }
         let deadline = Self.printDeadline(for: wanted, in: world)
 
-        let rail = PrintRail(reserveFloor: reserveFloor)
-        if rail.footprintCensusIsStale(world) {
+        let rail = PrintRail(reserveFloors: reserveFloors)
+        if rail.stockCensusIsStale(world) {
             return .refreshFootprint(nextStep: Step.printing.rawValue, thenStall: nil)
         }
         if rail.printStockIsShort(at: depot, world) { return .wait }

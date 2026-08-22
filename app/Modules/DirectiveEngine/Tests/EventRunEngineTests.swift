@@ -42,6 +42,7 @@ struct EventRunEngineTests {
                 try Blueprint.insert { blueprint }.execute(db)
             }
             try Replicant.insert { EventRunFixtures.courierReplicant() }.execute(db)
+            try LocationInventory.insert { EventRunFixtures.depotInventory(fetchedAt: now) }.execute(db)
             try LocationFootprint.insert { EventRunFixtures.depotFootprint(fetchedAt: now) }
                 .execute(db)
             try TheatrePin.insert { TheatrePin(location: "HUB-1", createdAt: now) }.execute(db)
@@ -367,10 +368,9 @@ struct EventRunEngineTests {
             // The real `refreshFootprint` over a scripted census, so the reserve
             // rail stays fed as the clock moves instead of vetoing every round.
             $0.locationsClient.footprint = {
-                ["HUB-1": LocationCounts(
-                    devices: 2, resources: BrainCeiling.aggregateSpendFloor * 2
-                )]
+                ["HUB-1": LocationCounts(devices: 2, resources: 1_000_000)]
             }
+            $0.locationsClient.body = { railClearingBody($0) }
             $0.commandGovernor = benchGovernor(database, clock: clock, into: orders)
         } operation: {
             let core = DirectiveEngineCore(machines: [EventRun()], tick: .seconds(5))

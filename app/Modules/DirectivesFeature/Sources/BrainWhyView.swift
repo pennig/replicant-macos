@@ -713,23 +713,39 @@ public struct BrainWhy: Equatable, Sendable {
     /// shared by the flat pressure line above and each theatre's own stock
     /// line, so the two can never quote the rail differently.
     private static func stockDetail(_ limits: BrainLimits, at observedAt: Date) -> String {
-        let floor = count(limits.spendFloor)
         switch limits.hubStockStanding(at: observedAt) {
         case .unread:
-            return "no census reading — printing vetoed until one lands"
+            return "no per-type reading — printing vetoed until one lands"
         case let .stale(age):
-            // Name the AGE, not the figure's size: an operator told a healthy
-            // -looking number is vetoed would go hunting for a shortage that
-            // does not exist. Same reasoning as `printStockShortDiagnosis`.
-            return """
-            \(limits.hubStock.map(count) ?? "?") units, but the census reading is \(aged(age)) \
-            — printing vetoed until it refreshes
-            """
-        case .belowFloor:
-            return "\(limits.hubStock.map(count) ?? "?") units, below the \(floor) reserve floor — printing vetoed"
+            // Name the AGE, not the figures: an operator told a healthy-looking
+            // reading is vetoed would go hunting for a shortage that does not
+            // exist. Same reasoning as `printStockShortDiagnosis`.
+            return "the reading is \(aged(age)) — printing vetoed until it refreshes"
+        case let .belowFloor(shortTypes):
+            return "\(shortTypes.map { held($0, limits) }.joined(separator: ", ")) — printing vetoed"
         case .clear:
-            return "\(limits.hubStock.map(count) ?? "?") units against a \(floor) reserve floor"
+            guard let tightest = tightestType(limits) else { return "every type clears its reserve floor" }
+            return "clear, tightest is \(held(tightest, limits))"
         }
+    }
+
+    /// One type's holding against its own floor, e.g. `conductive 226 of 600`.
+    private static func held(_ type: String, _ limits: BrainLimits) -> String {
+        let stock = Int((limits.hubStock?[type] ?? 0).rounded(.down))
+        let floor = Int((limits.reserveFloors[type] ?? 0).rounded(.up))
+        return "\(type) \(count(stock)) of \(count(floor))"
+    }
+
+    /// The type with the least headroom as a MULTIPLE of its own floor — the
+    /// one that will veto first; raw units would name whichever type is merely
+    /// cheapest to stock. Ties break on name, so two equally-covered types
+    /// cannot render differently between two evaluations of one reading.
+    private static func tightestType(_ limits: BrainLimits) -> String? {
+        limits.reserveFloors
+            .filter { $0.value > 0 }
+            .map { (type: $0.key, headroom: (limits.hubStock?[$0.key] ?? 0) / $0.value) }
+            .min { ($0.headroom, $0.type) < ($1.headroom, $1.type) }?
+            .type
     }
 
     /// Coarse, because the precision is not the point: an operator needs to

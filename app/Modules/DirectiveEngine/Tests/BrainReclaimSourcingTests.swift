@@ -90,7 +90,7 @@ private func seedReclaimWorld(
     try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
     try seedSystemDetail(db, system: "SOL", scanned: true)
     try seedPrintHub(db, code: "HUB1", location: growHubLocation)
-    try seedHubStockpile(db, location: growHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
+    try seedHubStockpile(db, location: growHubLocation, resources: 1_000_000)
     for code in carriers {
         try seedDevice(db, code: code, type: "heaven_vessel", location: growHubLocation)
     }
@@ -412,7 +412,7 @@ struct BrainReclaimSourcingTests {
             try seedRelay(db, code: "REL_SOL", location: "SOL")
             try seedRelay(db, code: "REL_SPUR", location: "SPUR-1")
             try seedPrintHub(db, code: "HUB1", location: growHubLocation)
-            try seedHubStockpile(db, location: growHubLocation, resources: BrainCeiling.aggregateSpendFloor * 2)
+            try seedHubStockpile(db, location: growHubLocation, resources: 1_000_000)
             try seedDevice(db, code: "V1", type: "heaven_vessel", location: growHubLocation)
             try seedReplicant(db, code: "REP0", star: "SOL", hostedDeviceCode: "V1")
             try seedStar(db, designation: "SOL", x: 0, y: 0, z: 0)
