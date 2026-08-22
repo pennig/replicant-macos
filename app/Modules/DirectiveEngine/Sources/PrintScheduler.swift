@@ -119,12 +119,9 @@ enum PrintScheduler {
                 claimed[type, default: 0] += op.printedQuantity ?? 1
             }
             // A batch's jobs 2…N are untyped adopted rows, so only the bench
-            // names them. `operation_one_active_per_device` is what makes the
-            // platen attributable even when a co-tenant has queued behind.
+            // names them.
             var declared: [String: Int] = [:]
-            if live.first(where: { $0.status == .active })?.directiveID == owner,
-               let platen = bench.device.printingSnapshot?.deviceType
-            {
+            if let platen = platenType(of: bench.device, ownedBy: owner, among: live) {
                 declared[platen, default: 0] += 1
             }
             if live.allSatisfy({ $0.directiveID == owner }) {
@@ -136,6 +133,36 @@ enum PrintScheduler {
                 total[type, default: 0] += max(claimed[type] ?? 0, declared[type] ?? 0)
             }
         }
+    }
+
+    /// What `owner` has ON A PLATEN at `depot`, by device type. These are the
+    /// jobs that have STARTED, and so have already drawn their components; a
+    /// queued job has not, which is what its `waiting_for` block still lists.
+    static func printing(
+        for owner: String, at depot: String, in world: WorldSnapshot
+    ) -> [String: Int] {
+        benches(at: depot, in: world).reduce(into: [String: Int]()) { total, bench in
+            let live = openOps(for: bench.device.deviceCode, in: world)
+                .filter { $0.kind == OperationKind.print.rawValue }
+            guard let platen = platenType(of: bench.device, ownedBy: owner, among: live)
+            else { return }
+            total[platen, default: 0] += 1
+        }
+    }
+
+    /// The type on the platen when it is `owner`'s to claim: the owner holds the
+    /// bench's one active op, and that op does not name a DIFFERENT device.
+    /// `Reconciler.apply` promotes an op by KIND alone, so a typed op naming
+    /// something else proves the promotion picked the wrong row.
+    private static func platenType(
+        of device: Device, ownedBy owner: String, among live: [GameModels.Operation]
+    ) -> String? {
+        guard let platen = device.printingSnapshot?.deviceType,
+              let active = live.first(where: { $0.status == .active }),
+              active.directiveID == owner,
+              (active.printedDeviceType ?? platen) == platen
+        else { return nil }
+        return platen
     }
 
     /// The bench's own account of what is queued BEHIND the platen, by device

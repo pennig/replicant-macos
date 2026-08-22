@@ -432,6 +432,29 @@ struct PrintSchedulerOnOrderTests {
         #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world).isEmpty)
     }
 
+    /// `Reconciler.apply` picks the op to promote by KIND alone, so a bench
+    /// holding two queued prints can promote THIS owner's while the co-tenant's
+    /// job is the one that actually started. The typed op names a different
+    /// device than the platen, which is what gives the mispromotion away.
+    @Test("a promoted op naming another device does not claim the platen")
+    func promotedOpNamingAnotherDeviceDoesNotClaimThePlaten() {
+        let world = snapshot(
+            [bench("B1", printing: "orbital_farm")],
+            queued: [
+                "B1": [
+                    op(on: "B1", owner: "D-7", deviceType: "mining_drone", id: "OP-1"),
+                    op(
+                        on: "B1", owner: "OTHER", status: .enqueued,
+                        deviceType: "orbital_farm", id: "OP-2",
+                        startedAt: now.addingTimeInterval(1)
+                    )
+                ]
+            ]
+        )
+
+        #expect(PrintScheduler.onOrder(for: "D-7", at: depot, in: world) == ["mining_drone": 1])
+    }
+
     /// A dispatch lands before the printer's next poll, so the bench reports an
     /// empty platen while the order is real. The typed op's quantity holds.
     @Test("a fresh batch counts its quantity before the bench snapshot catches up")
