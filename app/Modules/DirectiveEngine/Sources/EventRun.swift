@@ -223,8 +223,10 @@ public struct EventRun: MissionStepMachine {
     /// Every print the option still needs, prerequisites first: the top level
     /// netted against what stands free at `depot` under this run's tag, the
     /// remainder expanded, then the component levels netted from the same pool.
+    /// A type in `onOrder` stays outstanding but does not expand.
     static func missingTree(
-        for option: EventPlan.Option, at depot: String, in world: WorldSnapshot, tag: FleetTag
+        for option: EventPlan.Option, at depot: String, in world: WorldSnapshot,
+        tag: FleetTag, onOrder: [String: Int]
     ) -> Outstanding {
         // One pool, spent once: a type can be both a top-level requirement and
         // a sibling's component, and must not be counted for both.
@@ -252,19 +254,35 @@ public struct EventRun: MissionStepMachine {
             )
         }
 
+        // A device on order consumed its bill when it was dispatched, so only
+        // what is NOT in flight expands. It stays outstanding either way, or the
+        // caller reads an empty tree and leaves while the print is still running.
+        var inFlight: [String: Int] = [:]
+        var toExpand: [String: Int] = [:]
+        for (type, count) in outstanding {
+            let held = min(onOrder[type] ?? 0, count)
+            if held > 0 { inFlight[type] = held }
+            if count - held > 0 { toExpand[type] = count - held }
+        }
+
         let expansion = BlueprintClosure.expand(
-            outstanding, bills: world.blueprintBills, components: world.blueprintComponents
+            toExpand, bills: world.blueprintBills, components: world.blueprintComponents
         )
         var jobs: [BlueprintClosure.Job] = []
         for job in expansion.jobs {
             let used = min(remaining[job.deviceType] ?? 0, job.quantity)
             remaining[job.deviceType] = (remaining[job.deviceType] ?? 0) - used
-            guard job.quantity - used > 0 else { continue }
+            let held = inFlight.removeValue(forKey: job.deviceType) ?? 0
+            guard job.quantity - used + held > 0 else { continue }
             jobs.append(
                 BlueprintClosure.Job(
-                    deviceType: job.deviceType, quantity: job.quantity - used, depth: job.depth
+                    deviceType: job.deviceType, quantity: job.quantity - used + held,
+                    depth: job.depth
                 )
             )
+        }
+        jobs += inFlight.sorted(by: { $0.key < $1.key }).map {
+            BlueprintClosure.Job(deviceType: $0.key, quantity: $0.value, depth: 0)
         }
         return Outstanding(jobs: jobs, unprintable: expansion.unprintable)
     }
@@ -327,7 +345,10 @@ public struct EventRun: MissionStepMachine {
         }
 
         let tag = Self.fleetTag(forTheatre: depot)
-        let outstanding = Self.missingTree(for: option, at: depot, in: world, tag: tag)
+        let onOrder = PrintScheduler.onOrder(for: directive.id, at: depot, in: world)
+        let outstanding = Self.missingTree(
+            for: option, at: depot, in: world, tag: tag, onOrder: onOrder
+        )
         guard outstanding.unprintable.isEmpty else {
             return .stall(
                 .eventOptionBlueprintMissing,
@@ -376,9 +397,9 @@ public struct EventRun: MissionStepMachine {
 
         // `missingTree` counts only what STANDS at the depot, so a job already
         // on order still reads as wanted.
-        for (type, onOrder) in PrintScheduler.onOrder(for: directive.id, at: depot, in: world) {
+        for (type, held) in onOrder {
             guard let count = wanted[type] else { continue }
-            wanted[type] = count > onOrder ? count - onOrder : nil
+            wanted[type] = count > held ? count - held : nil
         }
 
         let ctx = StepContext(directive: directive, world: world, step: directive.step)
