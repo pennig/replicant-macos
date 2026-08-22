@@ -3,9 +3,10 @@
 Automation-brain Task 20 (`BrainCeiling`, `DirectiveEngine/Sources/BrainCeiling.swift`):
 arms the `R` reserve-floor rail that vetoes an FTL-relay print which would drop
 the hub below the stock the rest of the fleet needs. Confirmed live 2026-08-03.
-**Updated after review** with a corrected binding-type analysis and a
-conservative (not naive-sum) aggregate proxy — see the two sections marked
-below; the naive-sum version briefly shipped was a real gap, caught before
+**Updated after review** with a corrected binding-type analysis, and again on
+2026-08-22 when the aggregate proxy was retired for the per-type check it
+always stood in for — see the sections marked below; the naive-sum version
+briefly shipped was a real gap, caught before
 merge.
 
 ## Verified facts (probed live, not the plan's assumptions)
@@ -102,63 +103,72 @@ completeness) used elsewhere in this codebase: those protect against
 *overstating depletion* in a read-only view; this protects the fleet's actual
 resources against a real, irreversible spend.
 
-## CORRECTED: the aggregate proxy `RelayRun` actually arms
+## RETIRED 2026-08-22: the aggregate proxy, and what replaced it
 
-`RelayRun` cannot call `printPermitted(hubStock:)` yet — today's
-`LocationFootprint` carries one TOTAL holdings count, no per-type breakdown
-(brain-resource-hub-model, ticket 06's per-type stockpile record is a later
-task; `printStockIsShort` is the one place that switches to calling
-`printPermitted` directly once it lands). The first-shipped proxy for this,
-`totalReserveFloor` (**the naive sum of the six per-type floors, ≈1,850**),
-was a real gap caught in review: the bill spends in fixed, skewed proportions
-while STOCK is skewed the OTHER way (structural's stock ALONE, 27,436, is
-~15× the naive sum), so a flat-sum floor cannot fire before the binding type
-(conductive) is already exhausted under any realistic mix — on the live account, conductive
-hits its own floor at relay ≈107, by which point TOTAL stock is still
-≈35,000, ~18× the naive sum. **`printPermitted` had no production caller** at
-that point — the entire per-type deliverable was dead code.
+For most of this rail's life `RelayRun` could not call
+`printPermitted(hubStock:)`, because `LocationFootprint` carries one TOTAL
+holdings count and no per-type breakdown. The stand-in was
+`BrainCeiling.aggregateSpendFloor` — the TOTAL reading at which a reference
+hub's binding type would sit at its own floor, **35,078**, derived from a
+2026-08-03 snapshot of a 74,649-unit hub. `aggregateSpendFloor`,
+`referenceHubStock` and `relaysUntilBindingTypeFloors` are all **deleted**;
+the numbers survive here because a reader will meet 35,078 in old logs and in
+`.scratch/` plans.
 
-Fixed: `BrainCeiling.aggregateSpendFloor` (renamed from `totalReserveFloor` —
-the old name claimed to be `R` itself, which it never was) is now derived as
-the TOTAL stock at the moment a reference mix's binding type would hit its OWN
-floor: `totalReferenceStock − relaysUntilBindingTypeFloors × totalBill`,
-rounded UP. Total stock drains by exactly `totalBill` (370) per print
-regardless of mix, so this is provably the total reading at which the binding
-type sits AT its floor under the reference snapshot (`BrainCeiling.
-referenceHubStock`, the live 2026-08-03 measurement) — the coarse rail fires
-no LATER than the true per-type rail would, the safe direction for a proxy to
-be wrong in. Current value: **35,078** (pinned exactly in
-`BrainCeilingTests.aggregateSpendFloorIsPinnedToItsDerivedValue`, so any
-future recalibration of `K` or the reference snapshot shows up as a diff).
-Still only a proxy — if the live mix drifts far from the reference snapshot,
-the guarantee weakens — which is exactly why it is named for what it is
-(`aggregateSpendFloor`) rather than `R`.
+**Why the proxy had to go, and why lowering `K` was never the lever.** The
+floor was calibrated against ONE hub's total but applied per LOCATION, against
+whatever depot was printing. With one depot the two coincided. With three they
+do not: on 2026-08-22 `AINALRAM-BELT-1` held 1,008,942 units, `TIANEFU-9-L4`
+7,123 and `OMEROPE-BELT-1` 1,994, so a 35,078 floor shut every theatre but the
+first. And 35,078 is mostly mix skew, not reserve policy — recomputing it
+across `K` gives 33,228 at `K=0` and 40,628 at `K=20`. Setting the reserve to
+literally zero relays moves the wall 5%. Refreshing `referenceHubStock` to the
+live mix makes it *worse*: the floor scales with the snapshot, so a
+million-unit hub yields a ~470,000 floor.
 
-**Operational-wall note.** 35,078 is ≈47% of the hub's live total (74,649).
-Because the check is TOTAL-only, ANY drawdown below that line vetoes ALL
-relay printing regardless of per-type health — including a non-print
-consumer moving stock around (e.g. a Haul Run relocating structural, which
-alone is 27,436, more than a third of the whole hub). This is the
-conservative direction on purpose (see above), but it is a real, plausible
-operational wall the brain can hit well before any single type is actually
-short, until the per-type stockpile record (ticket 06) lands and
-`printStockIsShort` can call `printPermitted(hubStock:)` directly instead of
-this proxy.
+**What replaced it.** `PrintRail` now reads a per-location, per-type stock
+reading and calls `BrainCeiling.printPermitted(hubStock:floors:)` — the check
+that had existed since Task 20 with no production caller. The per-type data
+was already there: `LocationInventory` (table, migration, `LocationsClient`
+writer) shipped for the mine planner, and `GET locations/{designation}`
+returns a per-type `inventory` array. Only the rail was never rewired.
+
+Checked against the live readings, the per-type rail opens `TIANEFU-9-L4`
+(every type clears its floor at a 7,123-unit total) and still refuses
+`OMEROPE-BELT-1` (conductive 226, rares 33 and silicates 348 all under). Both
+are pinned in `PrintRailTests`; the TIANEFU one is the test that catches a
+revert to a total-only comparison.
+
+**Two things this change had to carry, neither obvious.**
+
+1. `DeadlineScheduler` sweeps depot inventories **hourly**, while the rail's
+   `hubFreshness` is **5 minutes**. A fail-closed per-type rail on an hourly
+   feed vetoes ~92% of the time, and the mission's own `.refreshFootprint`
+   action writes TOTALS only — so it would have re-asked for the same refresh
+   every tick, forever, the same unbounded loop round 2 of this note caught.
+   `DirectiveEngine.resolveFootprintRefresh` now also sweeps depot
+   inventories.
+2. That sweep must derive its depots the way `WorldView.read` derives its own
+   candidates (print hubs, pins, `system_hub` locations). Filtering to
+   RECOGNISED OPERATIONAL theatres sweeps nothing in a world whose theatre
+   readiness is itself waiting on the stock the read would fetch.
+
+`WorldCore.init(inventories:)` takes no default, deliberately: the first cut
+gave it `= [:]`, `WorldCore.read` computed the value and never passed it, and
+it compiled clean and failed twelve engine tests at runtime.
 
 ## Arming the print rail
 
-`PrintRail.reserveFloor: Int?` — and the `reserveFloor` each of the six print
-sites injects into it — defaults to `BrainCeiling.aggregateSpendFloor`
-instead of `nil`, so the rail is live in production. The injection seam (`Int?`)
-is unchanged, so an explicit `nil` still disarms the rail entirely for tests
-that need to isolate a different code path — see
-`unarmedRailNeverVetoesEvenOnUnknownStock`.
+`PrintRail.reserveFloors: [String: Double]?` — and the `reserveFloors` each of
+the six print sites injects into it — defaults to `BrainCeiling.reserveFloors`
+instead of `nil`, so the rail is live in production. The injection seam is
+unchanged in shape, so an explicit `nil` still disarms the rail entirely for
+tests isolating a different code path — see `anUnarmedRailNeverVetoes`.
 
-`PrintRail.printStockIsShort` fails closed on a MISSING footprint row for the
-hub's location, once armed (previously: absence read as "not short" and
-permitted the print) — but **in practice `acquire` no longer reaches that
-branch as silence, only as positive evidence**: it gates on
-`footprintCensusIsStale(_:)` FIRST.
+`PrintRail.printStockIsShort` fails closed on a MISSING per-type reading for
+the printing depot, once armed — but **in practice `acquire` reaches that
+branch only as positive evidence, never as silence**: it gates on
+`stockCensusIsStale(_:)` FIRST.
 
 **Round-2 correction — the freshness gate must be table-wide, not
 per-location.** The first fix gated on `world.footprints[location]?.fetchedAt`

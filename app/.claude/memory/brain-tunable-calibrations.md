@@ -1,6 +1,6 @@
 ---
 name: brain-tunable-calibrations
-description: "The arithmetic behind the automation brain's two hand-tuned constants — Brain.reclaimRangeLY (2 relay hops / 15 ly, the reclaim-vs-print detour cutoff, closing brain-tendmesh-worthiness's deferred 'build-time distance cutoff') and Brain.retryBudget (3 auto-retries per stall episode). Both were calibrated at build time against measured live figures and neither derivation was recorded anywhere but the source comments; this note is where a re-calibration starts. The third brain rail constant, BrainCeiling.aggregateSpendFloor, has its own note."
+description: "The arithmetic behind the automation brain's two hand-tuned constants — Brain.reclaimRangeLY (2 relay hops / 15 ly, the reclaim-vs-print detour cutoff, closing brain-tendmesh-worthiness's deferred 'build-time distance cutoff') and Brain.retryBudget (3 auto-retries per stall episode). Both were calibrated at build time against measured live figures and neither derivation was recorded anywhere but the source comments; this note is where a re-calibration starts. The third brain rail constant, BrainCeiling.reserveRelays, has its own note."
 metadata:
   type: project
 ---
@@ -12,9 +12,9 @@ something else. Their calibration arguments lived only in source comments until
 this note; the comments now carry the *rules* the constants must satisfy, and
 the *numbers* live here. See [[brain-relay-reserve-floor]] for the third
 (`BrainCeiling.reserveRelays` — `K` = 5, the one knob on that type, marked
-`// CALIBRATE`), which already has its own record. Note that
-`BrainCeiling.aggregateSpendFloor` (35,078) is NOT a fourth hand-tuned constant:
-it is DERIVED from `K` and the reference hub mix, and moves whenever `K` does.
+`// CALIBRATE`), which already has its own record. `K` is now the ONLY tunable
+on that type: the derived `aggregateSpendFloor` and its reference snapshot were
+deleted on 2026-08-22 when the rail moved to the per-type check.
 
 ## `Brain.reclaimRangeLY` = `2 * SalvageTargetPlanner.relayRangeLY` = 15 ly
 
@@ -54,8 +54,8 @@ favourable. The bound is pessimistic twice over: the factor of two is only
 attained when the source lies directly *behind* the carrier.
 
 **The resource side breaks the tie in reclaim's favour**, which is why 15 rather
-than something tighter. `BrainCeiling.aggregateSpendFloor` sits at **~47% of the
-live hub's total stock** ([[brain-relay-reserve-floor]]), so units are the
+than something tighter. Under the 2026-08-03 reference mix the unspendable
+share of hub stock sat at **~47%** ([[brain-relay-reserve-floor]]), so units are the
 scarcer half of the bill by some margin; a reclaim costing a few extra minutes
 and no units is a good trade almost everywhere inside this range.
 

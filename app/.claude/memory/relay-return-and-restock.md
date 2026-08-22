@@ -96,7 +96,8 @@ Two other limits bind first, in this order:
    brain writes `targets` from live grow demand, so on today's world the target
    count is the binding term and the cap is slack.
 2. **The reserve floor** — `PrintRail.printStockIsShort` vetoes against
-   `BrainCeiling.aggregateSpendFloor` (35,078, ~47% of live hub stock), which
+   `BrainCeiling.reserveFloors`, the per-type reserve (retired 2026-08-22 from the
+   coarse 35,078 total-stock proxy), which
    fires long before 3,700 units of parked stock is the fleet's problem.
 
 So the cap exists for one case only: a world with dozens of reachable grow
