@@ -268,8 +268,13 @@ actor DirectiveEngineCore {
         deliveries[directiveID] = delivery
         return Task { [weak self] in
             for await tick in ticks where !Task.isCancelled {
+                logger.debug("executor \(directiveID, privacy: .public): evaluating")
                 await self?.evaluateOnce(directiveID: directiveID, tick: tick)
             }
+            // `reconcile` respawns only where `executors[id] == nil`, and a
+            // RETURNED task is not nil — so a row whose loop ends here is
+            // never driven again until the process restarts.
+            logger.notice("executor \(directiveID, privacy: .public): tick stream ended — no longer evaluating")
         }
     }
 

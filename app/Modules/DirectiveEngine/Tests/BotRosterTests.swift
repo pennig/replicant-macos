@@ -99,6 +99,52 @@ private func rosterBot(
     }
 }
 
+// MARK: - The recall's own arrival outranks the flat deadline
+
+/// A bot cruising home with a server-reported arrival at `arrivesIn`.
+private func inboundBot(_ code: String, arrivesIn seconds: TimeInterval) -> Device {
+    repairDevice(
+        code, type: "service_bot", location: nil, stowedIn: nil,
+        directives: ["patrol", "service"], currentDirective: "service",
+        currentDirectiveStatus: "active", tags: [salvageTag],
+        travelArrival: repairFixtureNow.addingTimeInterval(seconds)
+    )
+}
+
+@Suite struct BotRecallArrivalTests {
+    /// A recall is a cruise of unbounded length, so a bot whose OWN arrival is
+    /// still ahead must outrun `recallDeadline` rather than stalling mid-flight.
+    @Test func aCruiseLongerThanTheDeadlineIsWaitedOutRatherThanStalled() {
+        let w = repairWorld(devices: [
+            rosterVessel,
+            inboundBot("BOT1", arrivesIn: 9 * 60),
+            rosterBot("BOT2", location: nil, stowedIn: "VESSEL"),
+        ])
+        let d = rosterDirective(
+            step: SalvageRun.Step.confirmingBotStow.rawValue, botCodes: ["BOT1", "BOT2"],
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-(BotPhase.recallDeadline + 60))
+        )
+        #expect(SalvageRun().nextAction(directive: d, world: w)
+            != .stall(.serviceBotNotRecovered))
+    }
+
+    /// `recallCeiling` is what keeps that extension bounded: an arrival that
+    /// never arrives still reaches the backstop.
+    @Test func anArrivalThatNeverArrivesStillStallsAtTheCeiling() {
+        let w = repairWorld(devices: [
+            rosterVessel,
+            inboundBot("BOT1", arrivesIn: 9 * 60),
+            rosterBot("BOT2", location: nil, stowedIn: "VESSEL"),
+        ])
+        let d = rosterDirective(
+            step: SalvageRun.Step.confirmingBotStow.rawValue, botCodes: ["BOT1", "BOT2"],
+            stepStartedAt: repairFixtureNow.addingTimeInterval(-(BotPhase.recallCeiling + 60))
+        )
+        #expect(SalvageRun().nextAction(directive: d, world: w)
+            == .stall(.serviceBotNotRecovered))
+    }
+}
+
 // MARK: - The departure gate
 
 @Suite struct BotRosterDepartureTests {

@@ -34,7 +34,13 @@ struct BotPhase: Equatable, Sendable {
     /// How long the run holds while bots repair.
     static let repairDeadline: TimeInterval = 20 * 60
     /// How long a recall may go unconfirmed before the run refuses to leave.
+    /// A recall whose own arrival is still ahead outruns this; `recallCeiling`
+    /// is that extension's bound.
     static let recallDeadline: TimeInterval = 20 * 60
+    /// The ceiling on `recallDeadline`'s extension while a bot is demonstrably
+    /// still cruising home. A liveness backstop for an ETA that never arrives,
+    /// not an estimate of how long a cruise takes.
+    static let recallCeiling: TimeInterval = 2 * 60 * 60
     /// Dispatch rounds one loop may spend. Read off the log, because the
     /// confirm leg re-stamps `stepStartedAt` on every hop.
     static let dispatchRounds = 6
@@ -261,13 +267,17 @@ struct BotPhase: Equatable, Sendable {
         // Wait a hop out rather than commanding a device in transit
         // ([[salvage-controller-recall-race]]); the deadline bounds the wait.
         if out.contains(where: { $0.location == nil && $0.stowedInDeviceCode == nil }) {
-            if ctx.elapsed > Self.recallDeadline { return .action(.stall(.serviceBotNotRecovered)) }
+            if ctx.elapsed > Self.recallDeadline, !Self.stillInbound(out, ctx) {
+                return .action(.stall(.serviceBotNotRecovered))
+            }
             if let probe = probe(out, ctx) { return .action(probe) }
             return .action(.wait)
         }
         if rounds(ctx) > Self.dispatchRounds { return .action(.stall(.serviceBotNotRecovered)) }
         if RepairFleet.openRecall(for: next.deviceCode, in: ctx.world) != nil {
-            if ctx.elapsed > Self.recallDeadline { return .action(.stall(.serviceBotNotRecovered)) }
+            if ctx.elapsed > Self.recallDeadline, !Self.stillInbound(out, ctx) {
+                return .action(.stall(.serviceBotNotRecovered))
+            }
             return .action(.wait)
         }
         return .action(.dispatch(
@@ -278,7 +288,6 @@ struct BotPhase: Equatable, Sendable {
 
     private func confirmRecall(_ vessel: Device, _ ctx: StepContext) -> StepResult {
         if ctx.elapsed < Self.probeDelay { return .action(.wait) }
-        if ctx.elapsed > Self.recallDeadline { return .action(.stall(.serviceBotNotRecovered)) }
         let owed = owed(vessel, ctx)
         if let lost = stranded(owed, vessel) { return strandStall(lost) }
         guard let location = vessel.location else {
@@ -291,8 +300,10 @@ struct BotPhase: Equatable, Sendable {
         }
         let out = outstanding(vessel, location, ctx)
         if out.isEmpty { return .finished }
-        // A recall cruises the bot home, so wait out its own arrival time.
-        if let arrival = Self.recallArrival(out), arrival > ctx.now { return .action(.wait) }
+        // A recall cruises the bot home, so wait out its own arrival time —
+        // ahead of the flat deadline, which a long cruise would otherwise trip.
+        if Self.stillInbound(out, ctx) { return .action(.wait) }
+        if ctx.elapsed > Self.recallDeadline { return .action(.stall(.serviceBotNotRecovered)) }
         if out.contains(where: { !ctx.isFresh($0) }) {
             let lastLook = out.map(\.updatedAt).min() ?? .distantPast
             if ctx.now.timeIntervalSince(lastLook) < Self.probeInterval { return .action(.wait) }
@@ -304,5 +315,14 @@ struct BotPhase: Equatable, Sendable {
     /// The latest arrival among the recalls still in flight.
     static func recallArrival(_ out: [Device]) -> Date? {
         out.compactMap(\.activityDeadline).max()
+    }
+
+    /// Whether a bot in `out` is demonstrably still cruising home: its own
+    /// arrival is ahead and the step is inside `recallCeiling`. Positive
+    /// evidence, so it may outrun `recallDeadline` — silence may not.
+    static func stillInbound(_ out: [Device], _ ctx: StepContext) -> Bool {
+        guard ctx.elapsed <= Self.recallCeiling else { return false }
+        guard let arrival = recallArrival(out) else { return false }
+        return arrival > ctx.now
     }
 }

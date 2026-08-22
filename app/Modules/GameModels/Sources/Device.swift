@@ -191,9 +191,12 @@ public extension Device {
     var refusesPrintJobs: Bool { Self.printRefusingStatuses.contains(statusBase) }
 
     /// A print hub the server will presently accept `enqueue_print` for. A hub
-    /// keeps advertising the command while packed or in flight, so `isPrintHub`
-    /// alone never rules one out — only its status does.
-    var acceptsPrintJobs: Bool { isPrintHub && !refusesPrintJobs }
+    /// keeps advertising the command while packed or in flight, so status alone
+    /// never rules one out; the TYPE gate does, because a component fabricator
+    /// advertises the command and is consumed by the print that needs it.
+    var acceptsPrintJobs: Bool {
+        isPrintHub && Self.printBenchTypes.contains(deviceType) && !refusesPrintJobs
+    }
 }
 
 // MARK: - Tags
@@ -254,6 +257,12 @@ extension Device {
     static let printRefusingStatuses: Set<String> = [
         "compacted", "travelling", "cruising", "surging", "stowed", "out_of_range",
     ]
+
+    /// The device types that are a standing print bench. Every other printer the
+    /// fleet holds is a COMPONENT: it advertises `enqueue_print`, carries no
+    /// queue, and is consumed by the print that needs it — after which the server
+    /// answers a command against it with "Not your device".
+    static let printBenchTypes: Set<String> = ["autofactory"]
 
     /// Whether this device can act as the *source* of a replication. The backend
     /// gates `replicate` on the `matrix` feature, which an `empty_replicant_matrix`

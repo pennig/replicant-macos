@@ -86,13 +86,29 @@ private func printingRow() -> Directive {
 @Suite("EventRun — printing adopts the scheduler")
 struct EventRunPrintSchedulerTests {
 
-    /// A depot's bench capability is `acceptsPrintJobs && !isCarrierHull`, so
-    /// any print-capable vessel qualifies — not only a device typed
-    /// `autofactory`.
-    @Test("a print vessel that is not an autofactory is a bench")
-    func printVesselIsABench() {
-        let vessel = bench("B1", type: "fabricator_barge", commands: ["enqueue_print"])
-        let world = worldPrinting(depot: depot, devices: [vessel], wanting: ["ftl_beacon": 1])
+    /// A depot's bench capability is `acceptsPrintJobs && !isCarrierHull`, and
+    /// `acceptsPrintJobs` gates on `Device.printBenchTypes`: a component printer
+    /// advertises `enqueue_print` and is consumed by the print that needs it, so
+    /// a job sent to one is refused once it has been.
+    @Test("a print-capable device that is not a bench type is passed over")
+    func componentPrinterIsNotABench() {
+        let component = bench("A-COMPONENT", type: "structural_fabricator")
+        let world = worldPrinting(depot: depot, devices: [component], wanting: ["ftl_beacon": 1])
+
+        if case .dispatch = EventRun().nextAction(directive: printingRow(), world: world) {
+            #expect(Bool(false), "a component printer must never take a dispatch")
+        }
+    }
+
+    /// …and the autofactory beside it does take the job, so the gate narrows the
+    /// bench set rather than emptying it.
+    @Test("an autofactory beside a component printer takes the job")
+    func autofactoryBesideAComponentPrinterTakesTheJob() {
+        let world = worldPrinting(
+            depot: depot,
+            devices: [bench("A-COMPONENT", type: "structural_fabricator"), bench("B1")],
+            wanting: ["ftl_beacon": 1]
+        )
 
         guard case let .dispatch(_, deviceCode, _, _) =
             EventRun().nextAction(directive: printingRow(), world: world)

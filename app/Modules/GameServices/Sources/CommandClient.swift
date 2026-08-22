@@ -286,22 +286,22 @@ extension CommandClient: DependencyKey {
 
                 case let .badRequest(response):
                     let reason = errorMessage(response.body)
-                    logger.warning("dispatch \(opID, privacy: .public): rejected (400) — \(reason, privacy: .public)")
+                    logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public) [\(opID, privacy: .public)]: rejected (400) — \(reason, privacy: .public)")
                     await finish(opID, as: .rejected, reason: reason, at: date.now, database: database)
                     return .rejected(reason)
                 case let .forbidden(response):
                     let reason = errorMessage(response.body)
-                    logger.warning("dispatch \(opID, privacy: .public): rejected (403) — \(reason, privacy: .public)")
+                    logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public) [\(opID, privacy: .public)]: rejected (403) — \(reason, privacy: .public)")
                     await finish(opID, as: .rejected, reason: reason, at: date.now, database: database)
                     return .rejected(reason)
                 case let .notFound(response):
                     let reason = errorMessage(response.body)
-                    logger.warning("dispatch \(opID, privacy: .public): rejected (404) — \(reason, privacy: .public)")
+                    logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public) [\(opID, privacy: .public)]: rejected (404) — \(reason, privacy: .public)")
                     await finish(opID, as: .rejected, reason: reason, at: date.now, database: database)
                     return .rejected(reason)
                 case let .default(statusCode, _):
                     let reason = "Server error (\(statusCode))."
-                    logger.warning("dispatch \(opID, privacy: .public): \(reason, privacy: .public)")
+                    logger.warning("dispatch \(kind.rawValue, privacy: .public) → \(deviceCode, privacy: .public) [\(opID, privacy: .public)]: \(reason, privacy: .public)")
                     await finish(opID, as: .failed, reason: reason, at: date.now, database: database)
                     return .failed(reason)
                 case .created:

@@ -257,4 +257,17 @@ struct AcceptsPrintJobsTests {
     func capabilityStillGates() {
         #expect(device("D1", type: "mining_drone").acceptsPrintJobs == false)
     }
+
+    /// A component printer advertises `enqueue_print` and is consumed by the
+    /// print that needs it, after which the server answers a job against it
+    /// with "Not your device". Capability alone must not make it a bench.
+    @Test(
+        "a component printer advertising the command is still not a bench",
+        arguments: ["structural_fabricator", "orbital_foundry", "heaven_vessel"]
+    )
+    func componentPrintersAreNotBenches(type: String) {
+        let printer = device("C1", type: type, status: "idle", commands: ["enqueue_print"])
+        #expect(printer.isPrintHub)
+        #expect(printer.acceptsPrintJobs == false)
+    }
 }
