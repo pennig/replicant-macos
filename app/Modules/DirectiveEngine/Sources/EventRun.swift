@@ -254,18 +254,17 @@ public struct EventRun: MissionStepMachine {
             )
         }
 
-        // A print draws its components when it STARTS, so only what is on a
-        // platen skips expansion.
+        // A print draws its components when it STARTS, so what is on a platen
+        // is `covered` at whatever depth it sits, and only its roots come back.
         var inFlight: [String: Int] = [:]
-        var toExpand: [String: Int] = [:]
         for (type, count) in outstanding {
             let held = min(started[type] ?? 0, count)
             if held > 0 { inFlight[type] = held }
-            if count - held > 0 { toExpand[type] = count - held }
         }
 
         let expansion = BlueprintClosure.expand(
-            toExpand, bills: world.blueprintBills, components: world.blueprintComponents
+            outstanding, bills: world.blueprintBills, components: world.blueprintComponents,
+            covered: started
         )
         var jobs: [BlueprintClosure.Job] = []
         for job in expansion.jobs {

@@ -45,30 +45,41 @@ public enum BlueprintClosure {
     /// Expand `wanted` through `components`, costing each node from `bills`. A
     /// device with no bill, and a device already on the current path, are both
     /// recorded in `unprintable` and their subtrees abandoned.
+    /// `covered` is a spend-once pool of units that already exist: they are
+    /// neither costed nor built, and nothing below them is either.
     public static func expand(
         _ wanted: [String: Int],
         bills: [String: ResourceCost],
         components: [String: [String: Int]],
-        printTimes: [String: Int] = [:]
+        printTimes: [String: Int] = [:],
+        covered: [String: Int] = [:]
     ) -> Expansion {
         var resources = ResourceCost()
         var quantities: [String: Int] = [:]
         var depths: [String: Int] = [:]
         var unprintable: Set<String> = []
+        var pool = covered
 
         func visit(_ type: String, _ quantity: Int, _ depth: Int, _ path: Set<String>) {
             guard !path.contains(type) else { unprintable.insert(type); return }
+            // A unit that already exists drew its own components when it was
+            // built, so the subtree under it is not wanted either.
+            let spent = min(pool[type] ?? 0, quantity)
+            pool[type] = (pool[type] ?? 0) - spent
+            let build = quantity - spent
+            guard build > 0 else { return }
             guard let bill = bills[type] else { unprintable.insert(type); return }
-            resources.add(bill.scaled(by: quantity))
-            quantities[type, default: 0] += quantity
+            resources.add(bill.scaled(by: build))
+            quantities[type, default: 0] += build
             depths[type] = max(depths[type] ?? 0, depth)
             let onward = path.union([type])
-            for (child, count) in components[type] ?? [:] {
-                visit(child, quantity * count, depth + 1, onward)
+            // Sorted so the pool is spent in a fixed order across a run.
+            for (child, count) in (components[type] ?? [:]).sorted(by: { $0.key < $1.key }) {
+                visit(child, build * count, depth + 1, onward)
             }
         }
 
-        for (type, quantity) in wanted where quantity > 0 {
+        for (type, quantity) in wanted.sorted(by: { $0.key < $1.key }) where quantity > 0 {
             visit(type, quantity, 0, [])
         }
 

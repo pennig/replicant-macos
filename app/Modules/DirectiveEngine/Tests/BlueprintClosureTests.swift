@@ -40,6 +40,61 @@ struct BlueprintClosureTests {
         "processing_array": ["compute_core": 5],
     ]
 
+    /// A unit already built prunes its OWN sub-bill, not merely itself — the
+    /// netting has to reach every depth, since a caller nets the flat job list
+    /// afterwards and cannot tell a grandchild from a root. The live catalogue
+    /// is one level deep today, so this two-level shape is synthetic.
+    @Test("a covered component does not expand its own components")
+    func coveredComponentPrunesItsSubBill() {
+        let bills: [String: ResourceCost] = [
+            "orbital_foundry": ResourceCost(structural: 500),
+            "structural_fabricator": ResourceCost(structural: 40),
+            "compute_core": ResourceCost(silicates: 55)
+        ]
+        let components: [String: [String: Int]] = [
+            "orbital_foundry": ["structural_fabricator": 2],
+            "structural_fabricator": ["compute_core": 5]
+        ]
+
+        let out = BlueprintClosure.expand(
+            ["orbital_foundry": 1], bills: bills, components: components,
+            covered: ["structural_fabricator": 1]
+        )
+
+        #expect(
+            out.jobs == [
+                BlueprintClosure.Job(deviceType: "compute_core", quantity: 5, depth: 2),
+                BlueprintClosure.Job(deviceType: "structural_fabricator", quantity: 1, depth: 1),
+                BlueprintClosure.Job(deviceType: "orbital_foundry", quantity: 1, depth: 0)
+            ]
+        )
+        // 500 for the foundry and 40 for the one fabricator left to build; the
+        // covered fabricator is not costed either.
+        #expect(out.resources.structural == 540)
+    }
+
+    /// One pool for the whole tree: two consumers of the same component share
+    /// the covered unit rather than each claiming one.
+    @Test("a covered unit is spent once, not once per consumer")
+    func coveredPoolIsSpentOnce() {
+        let bills: [String: ResourceCost] = [
+            "orbital_foundry": ResourceCost(structural: 500),
+            "stellar_forge": ResourceCost(structural: 300),
+            "fusion_barge": ResourceCost(structural: 60)
+        ]
+        let components: [String: [String: Int]] = [
+            "orbital_foundry": ["fusion_barge": 1],
+            "stellar_forge": ["fusion_barge": 1]
+        ]
+
+        let out = BlueprintClosure.expand(
+            ["orbital_foundry": 1, "stellar_forge": 1], bills: bills, components: components,
+            covered: ["fusion_barge": 1]
+        )
+
+        #expect(out.jobs.first { $0.deviceType == "fusion_barge" }?.quantity == 1)
+    }
+
     @Test("a blueprint with no components expands to itself")
     func flat() {
         let out = BlueprintClosure.expand(["mining_drone": 2], bills: bills, components: components)
