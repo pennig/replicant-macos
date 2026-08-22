@@ -288,6 +288,26 @@ struct EventRunInFlightBillTests {
         #expect(params.quantity == 1)
     }
 
+    /// A print draws its components when it STARTS, so a batch's jobs 2…N have
+    /// drawn nothing yet — `waiting_for` is what a queued job still needs. Only
+    /// the platen job's bill is spent, and the rest must still be printed.
+    @Test("a batch job still queued keeps its bill in the tree")
+    func batchJobStillQueuedKeepsItsBillInTheTree() {
+        let working = bench("B1", printing: "orbital_foundry", capacity: 10)
+        let world = worldPrintingTree(
+            devices: [working, bench("B2"), standingBeacon()],
+            open: ["B1": op(on: "B1", owner: "d1", deviceType: "orbital_foundry", quantity: 2)],
+            wanting: ["orbital_foundry": 2]
+        )
+
+        guard case let .dispatch(_, deviceCode, params, _) =
+            EventRun().nextAction(directive: printingRow(), world: world)
+        else { return #expect(Bool(false), "expected a dispatch") }
+        #expect(deviceCode == "B2")
+        #expect(params.deviceType == "fusion_barge")
+        #expect(params.quantity == 1)
+    }
+
     /// The step must not read "nothing to print" as "ready to fly": the
     /// requirement stays outstanding while its print runs, or the convoy
     /// leaves the depot without it.

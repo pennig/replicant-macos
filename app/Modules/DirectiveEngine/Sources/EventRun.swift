@@ -223,10 +223,10 @@ public struct EventRun: MissionStepMachine {
     /// Every print the option still needs, prerequisites first: the top level
     /// netted against what stands free at `depot` under this run's tag, the
     /// remainder expanded, then the component levels netted from the same pool.
-    /// A type in `onOrder` stays outstanding but does not expand.
+    /// A type in `started` stays outstanding but does not expand.
     static func missingTree(
         for option: EventPlan.Option, at depot: String, in world: WorldSnapshot,
-        tag: FleetTag, onOrder: [String: Int]
+        tag: FleetTag, started: [String: Int]
     ) -> Outstanding {
         // One pool, spent once: a type can be both a top-level requirement and
         // a sibling's component, and must not be counted for both.
@@ -254,13 +254,12 @@ public struct EventRun: MissionStepMachine {
             )
         }
 
-        // A device on order consumed its bill when it was dispatched, so only
-        // what is NOT in flight expands. It stays outstanding either way, or the
-        // caller reads an empty tree and leaves while the print is still running.
+        // A print draws its components when it STARTS, so only what is on a
+        // platen skips expansion.
         var inFlight: [String: Int] = [:]
         var toExpand: [String: Int] = [:]
         for (type, count) in outstanding {
-            let held = min(onOrder[type] ?? 0, count)
+            let held = min(started[type] ?? 0, count)
             if held > 0 { inFlight[type] = held }
             if count - held > 0 { toExpand[type] = count - held }
         }
@@ -347,7 +346,8 @@ public struct EventRun: MissionStepMachine {
         let tag = Self.fleetTag(forTheatre: depot)
         let onOrder = PrintScheduler.onOrder(for: directive.id, at: depot, in: world)
         let outstanding = Self.missingTree(
-            for: option, at: depot, in: world, tag: tag, onOrder: onOrder
+            for: option, at: depot, in: world, tag: tag,
+            started: PrintScheduler.printing(for: directive.id, at: depot, in: world)
         )
         guard outstanding.unprintable.isEmpty else {
             return .stall(
