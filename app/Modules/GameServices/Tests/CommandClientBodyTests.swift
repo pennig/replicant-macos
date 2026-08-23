@@ -3,6 +3,7 @@
 //  Replicould — GameServices tests
 //
 
+import API
 import Testing
 import Utils
 @testable import GameServices
@@ -21,5 +22,30 @@ struct EnqueuePrintBodyTests {
         let params = CommandParams(deviceType: "ftl_relay")
         #expect(params.json["quantity"] == nil)
         #expect(params.json["tags"] == nil)
+    }
+}
+
+@Suite("enqueue_print flatpack")
+struct EnqueuePrintFlatpackTests {
+    @Test("a flatpacked print carries the flag and reaches the enqueue body")
+    func flatpackRidesTheBody() throws {
+        let params = CommandParams(deviceType: "climate_processor", quantity: 2, flatpack: true)
+        #expect(params.json["flatpack"]?.boolValue == true)
+
+        guard case let .json(payload) = try CommandClient.printBody(params),
+              case let .enqueuePrint(schema) = payload
+        else { return #expect(Bool(false), "expected an enqueue_print body") }
+        #expect(schema.flatpack == true)
+    }
+
+    @Test("an ordinary print leaves flatpack off the wire entirely")
+    func flatpackOmittedWhenUnset() throws {
+        let params = CommandParams(deviceType: "ftl_beacon", quantity: 1)
+        #expect(params.json["flatpack"] == nil)
+
+        guard case let .json(payload) = try CommandClient.printBody(params),
+              case let .enqueuePrint(schema) = payload
+        else { return #expect(Bool(false), "expected an enqueue_print body") }
+        #expect(schema.flatpack == nil)
     }
 }

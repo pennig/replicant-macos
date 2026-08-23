@@ -88,6 +88,10 @@ public struct WorldSnapshot: Equatable, Sendable {
     /// Device type → how many seconds one unit takes to print. Absent means the
     /// catalogue has never been read for that type, never "instant".
     public let blueprintPrintTimes: [String: Int]
+    /// Device types whose blueprint reports the `modular` feature, mirroring
+    /// `WorldCore`. A print of one of these carries `flatpack`, because only a
+    /// compacted device can be attached to a carrier.
+    public let modularDeviceTypes: Set<String>
     /// Every recognised theatre, mirroring `WorldView.theatres` — the same
     /// `TheatreRegistry` call, so the two views cannot disagree.
     public let theatres: [Theatre]
@@ -138,6 +142,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         blueprintBills: [String: ResourceCost] = [:],
         blueprintComponents: [String: [String: Int]] = [:],
         blueprintPrintTimes: [String: Int] = [:],
+        modularDeviceTypes: Set<String> = [],
         theatres: [Theatre] = [],
         locationEvents: [String: LocationEvent] = [:],
         replicantHostDevices: Set<String> = [],
@@ -159,6 +164,7 @@ public struct WorldSnapshot: Equatable, Sendable {
         self.blueprintBills = blueprintBills
         self.blueprintComponents = blueprintComponents
         self.blueprintPrintTimes = blueprintPrintTimes
+        self.modularDeviceTypes = modularDeviceTypes
         self.theatres = theatres
         self.locationEvents = locationEvents
         self.replicantHostDevices = replicantHostDevices
@@ -245,6 +251,7 @@ public struct WorldSnapshot: Equatable, Sendable {
             blueprintBills: core.blueprintBills,
             blueprintComponents: core.blueprintComponents,
             blueprintPrintTimes: core.blueprintPrintTimes,
+            modularDeviceTypes: core.modularDeviceTypes,
             theatres: core.theatres,
             locationEvents: core.locationEvents,
             replicantHostDevices: core.replicantHostDevices,

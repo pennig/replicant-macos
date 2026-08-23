@@ -27,6 +27,9 @@ public struct CommandParams: Sendable, Equatable {
     public var quantity: Int?         // enqueue_print — units to print
     /// enqueue_print — tags applied to the printed device (wire key `tags`).
     public var printTags: [String]?
+    /// enqueue_print — print the device already compacted, which only a modular
+    /// type can be. nil leaves the key off the wire, where the default is false.
+    public var flatpack: Bool?
     /// set_directive — the directive's optional configuration object (e.g. a
     /// survey controller's `{planets, moons, recall}`). Loosely typed since the
     /// shape varies per directive; nil/empty omits it.
@@ -50,6 +53,7 @@ public struct CommandParams: Sendable, Equatable {
         index: Int? = nil,
         quantity: Int? = nil,
         printTags: [String]? = nil,
+        flatpack: Bool? = nil,
         configuration: [String: JSONValue]? = nil,
         devices: [String]? = nil,
         resources: [String: Int]? = nil
@@ -65,6 +69,7 @@ public struct CommandParams: Sendable, Equatable {
         self.index = index
         self.quantity = quantity
         self.printTags = printTags
+        self.flatpack = flatpack
         self.configuration = configuration
         self.devices = devices
         self.resources = resources
@@ -83,6 +88,7 @@ public struct CommandParams: Sendable, Equatable {
         if let index { dict["index"] = .number(Double(index)) }
         if let quantity { dict["quantity"] = .number(Double(quantity)) }
         if let printTags { dict["tags"] = .array(printTags.map(JSONValue.string)) }
+        if let flatpack { dict["flatpack"] = .bool(flatpack) }
         if let configuration, !configuration.isEmpty { dict["configuration"] = .object(configuration) }
         if let devices, !devices.isEmpty { dict["devices"] = .array(devices.map(JSONValue.string)) }
         if let resources, !resources.isEmpty {

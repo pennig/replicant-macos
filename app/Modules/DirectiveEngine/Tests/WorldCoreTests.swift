@@ -88,6 +88,7 @@ import UniverseModels
         #expect(core.blueprintBills == world.blueprintBills)
         #expect(core.blueprintComponents == world.blueprintComponents)
         #expect(core.blueprintPrintTimes == world.blueprintPrintTimes)
+        #expect(core.modularDeviceTypes == world.modularDeviceTypes)
         #expect(core.theatres == world.theatres)
         #expect(!core.theatres.isEmpty)
         #expect(core.locationEvents == world.locationEvents)
@@ -100,5 +101,39 @@ import UniverseModels
         #expect(!core.theatreRecords.isEmpty)
         #expect(!core.meshSystems.isEmpty)
         #expect(!core.replicants.isEmpty)
+    }
+}
+
+@Suite struct WorldCoreModularTypes {
+    private func blueprint(_ type: String, features: [String]) -> Blueprint {
+        Blueprint(
+            deviceType: type, shortDescription: "", fullDescription: "",
+            printTime: 600, features: features, directives: [],
+            resources: ResourceCost(structural: 200), stowCapacity: 0, cargoCapacity: 0,
+            attachCapacity: 0, queueSize: 0, strength: 1, currentHubs: nil
+        )
+    }
+
+    /// The catalogue's own `modular` feature is the whole test for whether a
+    /// print may be flatpacked, so the read must carry it and nothing else.
+    @Test func namesOnlyTheTypesTheCatalogueCallsModular() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try Blueprint.insert { blueprint("climate_processor", features: ["cruise", "modular"]) }
+                .execute(db)
+            try Blueprint.insert { blueprint("sensor_array", features: ["cruise", "census"]) }
+                .execute(db)
+        }
+
+        let core = try await database.read { db in try WorldCore.read(from: db) }
+        #expect(core.modularDeviceTypes == ["climate_processor"])
+    }
+
+    /// An unread catalogue reports no modular types rather than defaulting to
+    /// all of them — the direction that leaves a print unchanged.
+    @Test func anEmptyCatalogueNamesNothing() async throws {
+        let database = try GameDatabase.bootstrap()
+        let core = try await database.read { db in try WorldCore.read(from: db) }
+        #expect(core.modularDeviceTypes.isEmpty)
     }
 }

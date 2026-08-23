@@ -14,7 +14,7 @@ extension CommandClient {
         guard let deviceType = params.deviceType else { throw CommandError.missingParameter("device_type") }
         return .json(.enqueuePrint(.init(
             command: "enqueue_print", deviceType: deviceType,
-            quantity: params.quantity, tags: params.printTags
+            quantity: params.quantity, tags: params.printTags, flatpack: params.flatpack
         )))
     }
 

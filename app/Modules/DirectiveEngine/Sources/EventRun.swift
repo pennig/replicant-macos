@@ -400,9 +400,14 @@ public struct EventRun: MissionStepMachine {
         )
         guard let chosen = PrintScheduler.choose(job, at: depot, in: world) else { return noProgress }
 
+        // The payload rides the carrier's attach grid, which takes a modular
+        // device only compacted — so its print is the one that asks for it.
         return .dispatch(
             kind: .print, deviceCode: chosen.device.deviceCode,
-            params: CommandParams(deviceType: type, quantity: quantity, printTags: [tag.string]),
+            params: CommandParams(
+                deviceType: type, quantity: quantity, printTags: [tag.string],
+                flatpack: world.modularDeviceTypes.contains(type) ? true : nil
+            ),
             nextStep: Step.printing.rawValue
         )
     }

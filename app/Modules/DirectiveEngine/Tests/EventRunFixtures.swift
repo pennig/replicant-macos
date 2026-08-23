@@ -222,7 +222,8 @@ enum EventRunFixtures {
         log: [DirectiveLogEntry] = [], hosts: Set<String> = ["COURIER"],
         blueprintBills: [String: ResourceCost] = [:],
         blueprintComponents: [String: [String: Int]] = [:],
-        blueprintPrintTimes: [String: Int] = [:]
+        blueprintPrintTimes: [String: Int] = [:],
+        modularDeviceTypes: Set<String> = []
     ) -> WorldSnapshot {
         WorldSnapshot(
             devices: Dictionary(devices.map { ($0.deviceCode, $0) }, uniquingKeysWith: { _, l in l }),
@@ -248,6 +249,7 @@ enum EventRunFixtures {
             blueprintBills: blueprintBills,
             blueprintComponents: blueprintComponents,
             blueprintPrintTimes: blueprintPrintTimes,
+            modularDeviceTypes: modularDeviceTypes,
             theatres: [
                 Theatre(depot: "HUB-1", system: "HUB", origin: .derived,
                         readiness: .operational, stock: stock)

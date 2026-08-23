@@ -1103,6 +1103,79 @@ private struct StubTransport: ClientTransport {
     }
 }
 
+@Suite("enqueue_print on the wire")
+struct EnqueuePrintWireTests {
+    /// The event convoy's payload is printed compacted so the carrier can attach
+    /// it, which is worth nothing unless `flatpack` survives the bridge into the
+    /// generated schema and out onto the request body.
+    @Test func flatpackReachesTheRequestBody() async throws {
+        let database = try GameDatabase.bootstrap()
+        let captured = LockIsolated<JSONValue?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in captured.setValue(try? JSONDecoder().decode(JSONValue.self, from: data)) },
+                    response: jsonResponse(200, #"{"status":"printing"}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = client
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "printing") }
+        } operation: {
+            _ = await CommandClient.liveValue.dispatch(
+                .print, "B1",
+                CommandParams(
+                    deviceType: "climate_processor", quantity: 2,
+                    printTags: ["auto:event:hub-1"], flatpack: true
+                )
+            )
+        }
+
+        let body = captured.value
+        #expect(body?["command"]?.stringValue == "enqueue_print")
+        #expect(body?["device_type"]?.stringValue == "climate_processor")
+        #expect(body?["flatpack"]?.boolValue == true)
+    }
+
+    /// …and a print that did not ask for it sends no `flatpack` key at all,
+    /// rather than an explicit false the server would have to interpret.
+    @Test func anOrdinaryPrintSendsNoFlatpackKey() async throws {
+        let database = try GameDatabase.bootstrap()
+        let captured = LockIsolated<JSONValue?>(nil)
+        let client = GameClient(make: {
+            Client(
+                serverURL: URL(string: "https://stub.invalid")!,
+                transport: CapturingTransport(
+                    onBody: { data in captured.setValue(try? JSONDecoder().decode(JSONValue.self, from: data)) },
+                    response: jsonResponse(200, #"{"status":"printing"}"#)
+                )
+            )
+        })
+
+        await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+            $0.uuid = .incrementing
+            $0.deviceRefresher = coordinatorBackedRefresher()
+            $0.gameClient = client
+            $0.devicesClient.read = { code in makeDevice(code: code, status: "printing") }
+        } operation: {
+            _ = await CommandClient.liveValue.dispatch(
+                .print, "B1", CommandParams(deviceType: "ftl_beacon", quantity: 1)
+            )
+        }
+
+        #expect(captured.value?["flatpack"] == nil)
+    }
+}
+
 /// A transport that hands the collected request body to `onBody` before returning
 /// a fixed response — lets a test assert what was actually sent on the wire.
 private struct CapturingTransport: ClientTransport {

@@ -40,6 +40,10 @@ public struct WorldCore: Equatable, Sendable {
     public let blueprintBills: [String: ResourceCost]
     public let blueprintComponents: [String: [String: Int]]
     public let blueprintPrintTimes: [String: Int]
+    /// Device types whose blueprint reports the `modular` feature — the only
+    /// ones that can be printed compacted, and so the only ones that can ride
+    /// a carrier's attach grid straight off the bench.
+    public let modularDeviceTypes: Set<String>
     public let theatres: [Theatre]
     public let locationEvents: [String: LocationEvent]
     public let replicantHostDevices: Set<String>
@@ -65,6 +69,7 @@ public struct WorldCore: Equatable, Sendable {
         blueprintBills: [String: ResourceCost],
         blueprintComponents: [String: [String: Int]],
         blueprintPrintTimes: [String: Int],
+        modularDeviceTypes: Set<String>,
         theatres: [Theatre],
         locationEvents: [String: LocationEvent],
         replicantHostDevices: Set<String>,
@@ -83,6 +88,7 @@ public struct WorldCore: Equatable, Sendable {
         self.blueprintBills = blueprintBills
         self.blueprintComponents = blueprintComponents
         self.blueprintPrintTimes = blueprintPrintTimes
+        self.modularDeviceTypes = modularDeviceTypes
         self.theatres = theatres
         self.locationEvents = locationEvents
         self.replicantHostDevices = replicantHostDevices
@@ -136,7 +142,7 @@ public struct WorldCore: Equatable, Sendable {
         let components = MeshGraph(positions: starPositions).components(of: mesh)
 
         let blueprintRows = try Blueprint.all
-            .select { ($0.deviceType, $0.resources, $0.components, $0.printTime) }
+            .select { ($0.deviceType, $0.resources, $0.components, $0.printTime, $0.features) }
             .fetchAll(db)
         let blueprintBills = Dictionary(
             blueprintRows.map { ($0.0, $0.1) }, uniquingKeysWith: { _, last in last }
@@ -147,6 +153,7 @@ public struct WorldCore: Equatable, Sendable {
         let blueprintPrintTimes = Dictionary(
             blueprintRows.map { ($0.0, $0.3) }, uniquingKeysWith: { _, last in last }
         )
+        let modularDeviceTypes = Set(blueprintRows.filter { $0.4.contains("modular") }.map(\.0))
 
         // Same `TheatreRegistry` call `WorldView.read` makes — two lists
         // of theatres in one process would be a real hazard.
@@ -181,6 +188,7 @@ public struct WorldCore: Equatable, Sendable {
             blueprintBills: blueprintBills,
             blueprintComponents: blueprintComponents,
             blueprintPrintTimes: blueprintPrintTimes,
+            modularDeviceTypes: modularDeviceTypes,
             theatres: theatres,
             locationEvents: locationEvents,
             replicantHostDevices: replicantHostDevices,
