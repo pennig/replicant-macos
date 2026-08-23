@@ -435,3 +435,42 @@ struct TheatreResolverRuleTests {
         #expect(stranded.owningTheatre(ofSystem: "C")?.depot == "DEPOT-A")
     }
 }
+
+// MARK: - The payload lease
+
+@Suite("Ownership — the payload lease")
+struct OwnershipPayloadTests {
+    private func plateAndPayload() -> [String: Device] {
+        fleet([
+            deviceFixture(code: "PLATE1", type: "surge_plate", location: "SOL-3", tags: ["fetch"]),
+            deviceFixture(code: "PAYLOAD1", type: "autofactory", location: "VEGA-2"),
+            deviceFixture(code: "OTHER", type: "autofactory", location: "VEGA-2"),
+        ])
+    }
+
+    private func fetchRun(payload: String?) -> Directive {
+        var run = directiveFixture(id: "D1", kind: .fetchRun, deviceCode: "PLATE1")
+        run.payloadCode = payload
+        return run
+    }
+
+    /// Leased from launch. Before the attach lands nothing drags the payload
+    /// in, so the seed is all that stands between it and a re-tasking.
+    @Test func aFetchRunReservesItsPayloadBeforeAnythingIsAttached() {
+        #expect(reserved([fetchRun(payload: "PAYLOAD1")], plateAndPayload()) == ["PLATE1", "PAYLOAD1"])
+    }
+
+    /// Cleared at detach, and the lease must end with it — otherwise a device
+    /// standing finished at its destination is invisible for the flight home.
+    @Test func clearingThePayloadCodeReleasesTheDevice() {
+        #expect(reserved([fetchRun(payload: nil)], plateAndPayload()) == ["PLATE1"])
+    }
+
+    /// The join is named, so "why is this held?" has an answer.
+    @Test func thePayloadsHolderNamesThePayloadJoin() {
+        let ownership = Ownership.resolve(
+            directives: [fetchRun(payload: "PAYLOAD1")], devices: plateAndPayload(), theatres: []
+        )
+        #expect(ownership.holder(of: "PAYLOAD1")?.via == .payload)
+    }
+}

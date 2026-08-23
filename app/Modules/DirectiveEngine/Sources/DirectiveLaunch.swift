@@ -104,7 +104,8 @@ extension Directive {
         case .haulRun: .haul
         case .mineRun, .mineFleetPrint: .mine
         case .eventRun: .event
-        case .relayRun, .restockRun, .eventCourierPrint: nil
+        // A fetch run reserves by device columns alone and writes no tag.
+        case .relayRun, .restockRun, .eventCourierPrint, .fetchRun: nil
         }
     }
 }
