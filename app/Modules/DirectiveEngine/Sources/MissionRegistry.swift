@@ -16,7 +16,7 @@ public enum MissionRegistry {
     /// Every mission the app can run.
     public static let machines: [any MissionStepMachine] = [
         SurveyRun(), SalvageRun(), HaulRun(), RelayRun(), RestockRun(), MineFleetPrint(),
-        MineRun(), EventRun(), EventCourierPrint(),
+        MineRun(), EventRun(), EventCourierPrint(), FetchRun(),
     ]
 
     /// The machine registered for `kind`, or nil when none is — which the

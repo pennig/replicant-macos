@@ -150,6 +150,7 @@ struct DirectiveLaunchTests {
             .surveyRun: "preflight", .salvageRun: "preflight", .haulRun: "preflight",
             .mineRun: "preflight", .eventRun: "preflight", .relayRun: "acquire",
             .restockRun: "stocking", .mineFleetPrint: "stocking", .eventCourierPrint: "printing",
+            .fetchRun: "preflight",
         ]
         for kind in DirectiveKind.allCases {
             let row = Directive.launch(.init(kind: kind, deviceCode: "D", theatre: theatre), id: "X", now: now)
