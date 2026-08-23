@@ -25,6 +25,10 @@ public enum MineRecipe {
     public static let carrierTag = FleetTag(goal: .carrier)
     public static let carrierDeviceType = "surge_carrier"
 
+    /// The device type that drives a mine's freighter. Matched on TYPE, since a
+    /// freshly printed controller carries no directive vocabulary yet.
+    public static let transportDeviceType = "ami_transport_controller"
+
     /// The nine that ride the carrier to the belt.
     public static let carried: [(deviceType: String, quantity: Int)] = [
         ("ami_mining_controller", 1),
@@ -36,7 +40,7 @@ public enum MineRecipe {
 
     /// The two that stay at the hub or move themselves.
     public static let selfMoving: [(deviceType: String, quantity: Int)] = [
-        ("ami_transport_controller", 1),
+        (transportDeviceType, 1),
         ("cargo_freighter", 1),
     ]
 

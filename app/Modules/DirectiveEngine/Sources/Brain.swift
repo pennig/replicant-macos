@@ -568,7 +568,10 @@ struct Brain: Sendable {
                         theatre: theatre,
                         targets: [belt],
                         returnToOrigin: true,
-                        originDesignation: theatre.system
+                        originDesignation: theatre.system,
+                        controllerCode: Self.mineTransportLease(
+                            at: theatre.depot, view: snapshot.view, directives: snapshot.directives
+                        )
                     ),
                     id: uuid().uuidString, now: now
                 )
@@ -1541,10 +1544,6 @@ struct Brain: Sendable {
         case idle(reason: String)
     }
 
-    /// The device type that drives a mine's freighter. Matched on TYPE, since a
-    /// freshly printed controller carries no directive vocabulary yet.
-    static let mineTransportType = "ami_transport_controller"
-
     /// This tick's mine-siting weights: open-event demand plus the standing
     /// print reserve, divided into depot stock.
     static func siteWeights(
@@ -1690,16 +1689,33 @@ struct Brain: Sendable {
         return "mine fleet incomplete — missing \(missing.joined(separator: ", "))"
     }
 
+    /// The transport controller a new mine run leases: the lowest-coded free
+    /// tagged one at `hub` no live row holds. Stamped at LAUNCH — the ferry goal
+    /// reads the same snapshot, so only a written row can hold it.
+    static func mineTransportLease(
+        at hub: String, view: WorldView, directives: [Directive]
+    ) -> String? {
+        let reserved = reservedDevices(directives: directives, devices: view.devices)
+        return view.devices.values
+            .filter {
+                $0.deviceType == MineRecipe.transportDeviceType && !reserved.contains($0.deviceCode)
+                    && MineRecipe.isUnassigned($0, hub: hub)
+            }
+            .min { $0.deviceCode < $1.deviceCode }?
+            .deviceCode
+    }
+
     /// The transport controller at `hub` to drain `belt` through: the one
     /// already ferrying it, else the lowest-coded free one. Both arms skip a
-    /// controller another live row holds, so `ensureOne` never declines it.
+    /// controller a live row holds — a row THIS tick wrote is not one of them,
+    /// and `ensureOne` declines that in-transaction.
     static func mineFerryController(
         for belt: String, at hub: String, view: WorldView, directives: [Directive]
     ) -> String? {
         let reserved = reservedDevices(directives: directives, devices: view.devices)
         let candidates = view.devices.values
             .filter {
-                $0.deviceType == mineTransportType && $0.carries(MineRecipe.fleetTag, policy: .exact)
+                $0.deviceType == MineRecipe.transportDeviceType && $0.carries(MineRecipe.fleetTag, policy: .exact)
                     && $0.location == hub && !reserved.contains($0.deviceCode)
             }
             .sorted { $0.deviceCode < $1.deviceCode }
@@ -1831,7 +1847,7 @@ struct Brain: Sendable {
                     surveyActive: survey?.currentDirective == MineRun.surveyDirective
                         && survey?.currentDirectiveStatus == "active",
                     ferryInForce: view.devices.values.contains {
-                        $0.deviceType == mineTransportType && $0.carries(MineRecipe.fleetTag, policy: .exact)
+                        $0.deviceType == MineRecipe.transportDeviceType && $0.carries(MineRecipe.fleetTag, policy: .exact)
                             && $0.currentDirectiveConfig?["collect"]?.stringValue == belt
                     }
                 )

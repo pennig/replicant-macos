@@ -23,6 +23,9 @@ private let mineHubSystem = "SOL"
 private let mineCarrier = "CARRIER1"
 private let mineBelt = "SOL-BELT-1"
 private let mineTransportType = "ami_transport_controller"
+private let mineSecondBelt = "SOL-BELT-2"
+/// The one transport controller `minePrintedFleet` stands at the hub.
+private let printedTransport = "\(mineTransportType)0"
 
 /// A mine-fleet device. `collect` writes the `ferry` config a transport
 /// controller carries once armed, which is what the ferry preference reads.
@@ -573,6 +576,55 @@ struct BrainMineFerryControllerTests {
     }
 }
 
+@Suite("Brain — the mine transport lease")
+struct BrainMineTransportLeaseTests {
+    @Test("the lowest-coded free controller at the hub is the one leased")
+    func theLowestCodedFreeControllerIsLeased() {
+        let view = mineWorldView(devices: [
+            mineDevice("TC-B", type: mineTransportType),
+            mineDevice("TC-A", type: mineTransportType),
+        ])
+        #expect(Brain.mineTransportLease(at: mineHub, view: view, directives: []) == "TC-A")
+    }
+
+    /// The ferry goal's own hold counts: `reservedDevices` is what both queries
+    /// read, so a controller one has taken is invisible to the other.
+    @Test("a controller another directive holds is skipped for the next code up")
+    func aReservedControllerIsSkipped() {
+        let view = mineWorldView(devices: [
+            mineDevice("TC-A", type: mineTransportType),
+            mineDevice("TC-B", type: mineTransportType),
+        ])
+        let holder = directiveFixture(
+            id: "H", kind: .haulRun, deviceCode: "TC-A", targets: [secondMineTheatreBelt]
+        )
+        #expect(Brain.mineTransportLease(at: mineHub, view: view, directives: [holder]) == "TC-B")
+    }
+
+    @Test("a controller already ferrying is not free to lease")
+    func anArmedControllerIsNotFree() {
+        let view = mineWorldView(devices: [
+            mineDevice("TC-A", type: mineTransportType, directive: "ferry", collect: mineBelt),
+            mineDevice("TC-B", type: mineTransportType),
+        ])
+        #expect(Brain.mineTransportLease(at: mineHub, view: view, directives: []) == "TC-B")
+    }
+
+    @Test("an untagged controller is not the mine fleet's to lease")
+    func anUntaggedControllerIsNotLeased() {
+        let view = mineWorldView(devices: [mineDevice("TC-A", type: mineTransportType, tags: [])])
+        #expect(Brain.mineTransportLease(at: mineHub, view: view, directives: []) == nil)
+    }
+
+    @Test("a controller standing away from the hub is not leased")
+    func aControllerElsewhereIsNotLeased() {
+        let view = mineWorldView(devices: [
+            mineDevice("TC-A", type: mineTransportType, location: secondMineTheatreHubLocation)
+        ])
+        #expect(Brain.mineTransportLease(at: mineHub, view: view, directives: []) == nil)
+    }
+}
+
 @Suite("Brain — the mine goal status")
 struct BrainMineStatusTests {
     @Test("a live running mine run reports launched with its belt as focus")
@@ -915,6 +967,56 @@ struct BrainEnsureMineTests {
         #expect(mine.status == .running)
         #expect(mine.roamCentre == nil)
         #expect(mine.originDesignation == mineHubSystem)
+    }
+
+    /// The run leases its transport controller at LAUNCH. Nothing else in the
+    /// row reserves one: the pair is self-moving, so no attach edge reaches it,
+    /// and the scoped row tag never matches a bare-tagged recipe member.
+    @Test func theMineRunOwnsItsTransportControllerFromLaunch() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedMineWorld(db)
+            for device in minePrintedFleet() + [mineCarrierDevice()] {
+                try seedMineDevice(db, device)
+            }
+        }
+
+        await mineTick(database)
+
+        let mine = try #require(try await mineDirectives(database).first)
+        #expect(mine.controllerCode == printedTransport)
+        let devices = try await database.read { db in try Device.all.fetchAll(db) }
+        let byCode = Dictionary(uniqueKeysWithValues: devices.map { ($0.deviceCode, $0) })
+        #expect(Brain.reservedDevices(directives: [mine], devices: byCode).contains(printedTransport))
+    }
+
+    /// `ensureMine` and `ensureMineFerries` read ONE snapshot, so the ferry goal
+    /// cannot see the install this tick just launched — only the row already
+    /// written to the database can hold the controller they both want.
+    @Test func aFerryForAnotherBeltCannotTakeTheRunsTransportController() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            try seedGrowableWorld(db, carriers: [], salvage: [:])
+            try seedSystemDetail(
+                db, system: mineHubSystem, scanned: true,
+                belts: [
+                    Belt(designation: mineBelt, density: "dense"),
+                    Belt(designation: mineSecondBelt, density: "dense"),
+                ]
+            )
+            try seedMineDevice(db, mineDevice("MC1", type: "ami_mining_controller", location: mineBelt))
+            for device in minePrintedFleet() + [mineCarrierDevice()] {
+                try seedMineDevice(db, device)
+            }
+        }
+
+        await mineTick(database)
+
+        let rows = try await mineDirectives(database)
+        let mine = try #require(rows.first { $0.kind == .mineRun })
+        #expect(mine.targets == [mineSecondBelt])
+        #expect(mine.controllerCode == printedTransport)
+        #expect(!rows.contains { $0.kind == .haulRun && $0.deviceCode == printedTransport })
     }
 
     @Test func aSecondTickWithTheRunStillLiveInsertsNothing() async throws {

@@ -153,15 +153,19 @@ public struct MineRun: MissionStepMachine {
         let sink = HaulRun.deliverySink(in: world, for: directive)
         let rows = Array(world.devices.values)
         let free = MineRecipe.unassignedFleet(at: sink, in: rows)
-        let controller = rows
+        let leased = directive.controllerCode
+            .flatMap { world.device($0) }
+            .flatMap { usableLease($0, at: sink, for: belt) ? $0 : nil }
+        let open = rows
             .filter {
-                $0.deviceType == "ami_transport_controller" && $0.carries(MineRecipe.fleetTag, policy: .exact)
+                $0.deviceType == MineRecipe.transportDeviceType
+                    && $0.carries(MineRecipe.fleetTag, policy: .exact)
                     && $0.location == sink
                     && $0.currentDirectiveConfig?["collect"]?.stringValue == belt
             }
             .min { $0.deviceCode < $1.deviceCode }
-            ?? free["ami_transport_controller"]?.first
-        guard let controller else { return nil }
+            ?? free[MineRecipe.transportDeviceType]?.first
+        guard let controller = leased ?? open else { return nil }
         let freighter = rows
             .filter {
                 $0.deviceType == "cargo_freighter" && $0.carries(MineRecipe.fleetTag, policy: .exact)
@@ -172,6 +176,18 @@ public struct MineRun: MissionStepMachine {
             ?? free["cargo_freighter"]?.first
         guard let freighter else { return nil }
         return (controller, freighter)
+    }
+
+    /// Whether the row the launch leased can still serve this run: at the sink,
+    /// tagged, and either free or already ferrying `belt`. A lease some other
+    /// hand has armed elsewhere falls back to open resolution rather than
+    /// having its directive overwritten.
+    private static func usableLease(_ device: Device, at sink: String, for belt: String) -> Bool {
+        device.deviceType == MineRecipe.transportDeviceType
+            && device.carries(MineRecipe.fleetTag, policy: .exact)
+            && device.location == sink
+            && (device.currentDirective == nil
+                || device.currentDirectiveConfig?["collect"]?.stringValue == belt)
     }
 
     /// The whole installed fleet: every carried slot filled at the belt, plus

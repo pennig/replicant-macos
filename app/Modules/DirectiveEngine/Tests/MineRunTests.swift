@@ -289,11 +289,12 @@ private func mineRunRow(
     stepStartedAt: Date = now.addingTimeInterval(-60),
     deviceCode: String = carrierCode,
     theatreDepot: String? = hubLocation,
-    returnToOrigin: Bool = false
+    returnToOrigin: Bool = false,
+    controllerCode: String? = nil
 ) -> Directive {
     Directive(
         id: "D1", kind: .mineRun, status: .running, deviceCode: deviceCode,
-        controllerCode: nil, roamCentre: nil, fleetTag: MineRecipe.fleetTag.string, sourceRelayCode: nil,
+        controllerCode: controllerCode, roamCentre: nil, fleetTag: MineRecipe.fleetTag.string, sourceRelayCode: nil,
         targets: targets, targetIndex: 0, step: step, stepStartedAt: stepStartedAt,
         returnToOrigin: returnToOrigin, originDesignation: nil, attentionReason: nil,
         createdAt: now.addingTimeInterval(-600), updatedAt: now, theatreDepot: theatreDepot
@@ -864,6 +865,82 @@ struct MineRunTests {
                     params: CommandParams(devices: ["M06", "M07"]),
                     nextStep: MineRun.Step.confirmingAdopt.rawValue
                 )
+        )
+    }
+
+    /// Two free pairs stand at the shared sink. Without a lease the run takes
+    /// the lowest code; the launch's stamp is what points it at the other one.
+    @Test("the leased transport controller wins over a lower-coded free row")
+    func transportHonoursTheLease() {
+        let snapshot = world(
+            devices: beltFleet(adoptedBy: adoptedByController) + transportPair() + sparePair()
+                + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(MineRun.transport(of: mineRunRow(), in: snapshot)?.controller.deviceCode == transportCode)
+        #expect(
+            MineRun.transport(of: mineRunRow(controllerCode: "TC2"), in: snapshot)?
+                .controller.deviceCode == "TC2"
+        )
+    }
+
+    /// A lease some other hand armed elsewhere is not this run's to overwrite,
+    /// so resolution falls through rather than commandeering the row.
+    @Test("a leased controller ferrying another belt falls back to open resolution")
+    func aHijackedLeaseFallsBack() {
+        let hijacked = mineRow(
+            "TC2", type: MineRecipe.transportDeviceType, tags: [MineRecipe.fleetTag.string],
+            location: HaulRun.deliveryLocation,
+            directive: (
+                name: HaulTargetPlanner.ferry, status: "active",
+                config: ["collect": .string("VEGA-BELT-9"), "deliver": .string(HaulRun.deliveryLocation)]
+            )
+        )
+        let snapshot = world(
+            devices: beltFleet(adoptedBy: adoptedByController) + transportPair() + [hijacked]
+                + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(
+            MineRun.transport(of: mineRunRow(controllerCode: "TC2"), in: snapshot)?
+                .controller.deviceCode == transportCode
+        )
+    }
+
+    /// The run's own arming leaves the lease collecting this belt, so a
+    /// re-evaluation after arm still reaches for the row it leased — even with
+    /// a lower-coded row the open resolution would otherwise prefer.
+    @Test("a leased controller already ferrying this belt is still the lease")
+    func anArmedLeaseIsStillHonoured() {
+        let ferrying = { (code: String) in
+            mineRow(
+                code, type: MineRecipe.transportDeviceType, tags: [MineRecipe.fleetTag.string],
+                location: HaulRun.deliveryLocation,
+                directive: (
+                    name: HaulTargetPlanner.ferry, status: "active",
+                    config: [
+                        "collect": .string(targetBelt),
+                        "deliver": .string(HaulRun.deliveryLocation),
+                    ]
+                )
+            )
+        }
+        let freeFreighter = mineRow(
+            freighterCode, type: "cargo_freighter", tags: [MineRecipe.fleetTag.string],
+            location: HaulRun.deliveryLocation
+        )
+        let snapshot = world(
+            devices: beltFleet(adoptedBy: adoptedByController)
+                + [ferrying(transportCode), ferrying("TC2"), freeFreighter]
+                + [mineCarrier(location: targetBelt), beltRelay]
+        )
+
+        #expect(
+            MineRun.transport(of: mineRunRow(), in: snapshot)?.controller.deviceCode == transportCode
+        )
+        #expect(
+            MineRun.transport(of: mineRunRow(controllerCode: "TC2"), in: snapshot)?
+                .controller.deviceCode == "TC2"
         )
     }
 
