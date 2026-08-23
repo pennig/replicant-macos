@@ -17,6 +17,10 @@ struct ReturnHome: Equatable, Sendable {
     enum Destination: Equatable, Sendable {
         case theatreDepot
         case origin
+        /// The theatre the resolver picks for `system` — same mesh component
+        /// preferred, nearest as fallback, operational only. Names a LOCATION,
+        /// so it matches exactly like `.theatreDepot`.
+        case nearestTo(system: String)
     }
 
     /// The hulls to bring home, in the order they should be moved.
@@ -66,6 +70,9 @@ struct ReturnHome: Equatable, Sendable {
         switch destination {
         case .theatreDepot: ctx.world.theatreDepot(for: ctx.directive)
         case .origin: ctx.directive.originDesignation
+        // Resolved against live readiness every evaluation, so unlike
+        // `.theatreDepot` it has no claimed-theatre state to wait out.
+        case let .nearestTo(system): ctx.world.theatreResolver.owningTheatre(ofSystem: system)?.depot
         }
     }
 }

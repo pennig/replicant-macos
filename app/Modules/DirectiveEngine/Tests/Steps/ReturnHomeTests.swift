@@ -9,6 +9,7 @@ import Foundation
 import GameModels
 import GameServices
 import Testing
+import UniverseModels
 
 @testable import DirectiveEngine
 
@@ -117,5 +118,74 @@ struct ReturnHomeTests {
             kind: .travel, deviceCode: "F1",
             params: CommandParams(destination: depot), nextStep: "returning"
         )))
+    }
+}
+
+// MARK: - A destination resolved from a system
+
+/// SOL at the origin, VEGA 10 away, RIGEL 100. Pinned absolutely so a ranking
+/// assertion cannot pass by coincidence.
+private let positions: [String: Position] = [
+    "SOL": Position(x: 0, y: 0, z: 0),
+    "VEGA": Position(x: 10, y: 0, z: 0),
+    "RIGEL": Position(x: 100, y: 0, z: 0),
+]
+
+private func theatre(
+    _ depot: String, system: String, readiness: Theatre.Readiness = .operational
+) -> Theatre {
+    Theatre(depot: depot, system: system, origin: .derived, readiness: readiness, stock: 1_000)
+}
+
+private func geometricCtx(_ device: Device, _ directive: Directive, theatres: [Theatre]) -> StepContext {
+    StepContext(
+        directive: directive,
+        world: WorldSnapshot(
+            devices: [device.deviceCode: device], openOperations: [:],
+            starPositions: positions, theatres: theatres, now: now
+        ),
+        step: "returning"
+    )
+}
+
+@Suite("Return home — nearestTo")
+struct ReturnHomeNearestToTests {
+    /// The theatre comes from the NAMED system, not the row's launch stamp — a
+    /// long flight is enough for those two to be different places.
+    @Test("resolves from the named system, not the row stamp")
+    func resolvesFromTheNamedSystemNotTheRowStamp() {
+        let home = ReturnHome(deviceCodes: ["C1"], destination: .nearestTo(system: "VEGA"))
+        let result = home.next(geometricCtx(
+            carrier(at: "RIGEL-4"),
+            row(theatreDepot: "RIGEL-1"),
+            theatres: [theatre("RIGEL-1", system: "RIGEL"), theatre("VEGA-1", system: "VEGA")]
+        ))
+        #expect(result == .action(.dispatch(
+            kind: .travel, deviceCode: "C1",
+            params: CommandParams(destination: "VEGA-1"), nextStep: "returning"
+        )))
+    }
+
+    /// Standing at the resolved depot is finished, exactly like `.theatreDepot`.
+    @Test("standing at the resolved depot is finished")
+    func standingAtTheResolvedDepotIsFinished() {
+        let home = ReturnHome(deviceCodes: ["C1"], destination: .nearestTo(system: "VEGA"))
+        let result = home.next(geometricCtx(
+            carrier(at: "VEGA-1"), row(theatreDepot: nil),
+            theatres: [theatre("VEGA-1", system: "VEGA")]
+        ))
+        #expect(result == .finished)
+    }
+
+    /// A claimed theatre is not a place to park a hull, so it resolves to
+    /// nothing rather than to the only theatre there is.
+    @Test("a non-operational theatre is no destination")
+    func aNonOperationalTheatreIsNoDestination() {
+        let home = ReturnHome(deviceCodes: ["C1"], destination: .nearestTo(system: "VEGA"))
+        let result = home.next(geometricCtx(
+            carrier(at: "RIGEL-4"), row(theatreDepot: nil),
+            theatres: [theatre("VEGA-1", system: "VEGA", readiness: .claimed(missing: [.noStock]))]
+        ))
+        #expect(result == .noSubject)
     }
 }
