@@ -108,6 +108,38 @@ import Testing
         #expect(belt.devices.first?.deviceCode == "AB12CD34")
     }
 
+    @Test func scannedPlanetDecodesThroughTheGeneratedPath() throws {
+        // The production path for a planet hydrate — generated decode, reinterpret,
+        // map — on a payload captured live at `locations/ATHEEMIN-2`. Other tests
+        // decode `RawLocation` directly and cannot see strict-decode drift.
+        let generated = try JSONDecoder().decode(
+            Components.Schemas.AppSchemasLocationsLocationResponseSchema.self,
+            from: Data(Self.scannedPlanetJSON.utf8))
+        let raw = try LocationDecoding.reinterpret(generated, as: RawLocation.self)
+        let detail = try #require(raw.bodyDetail())
+        guard case .planet(let planet) = detail else { Issue.record("expected planet"); return }
+        #expect(planet.recon == .scanned)
+        #expect(planet.physical?.radiusEarth == 0.943)
+        #expect(planet.physical?.hasAtmosphere == false)   // the Bool form reads as presence
+        #expect(planet.physical?.atmosphere == nil)        // …not as a density label
+        #expect(planet.moons.map(\.designation) == ["ATHEEMIN-2-1"])
+        #expect(planet.moonCount == 1)
+    }
+
+    @Test func aSurveyScanKeepsAtmosphereAsADensityLabel() throws {
+        // The other half of the same field: a scanned body's physical block from a
+        // survey digest reports a label, which must survive as one.
+        let json = """
+        {"location":"TEST-1","location_type":"planet","scanned":true,
+         "planet":{"designation":"TEST-1","type":"Ocean World","atmosphere":"crushing",
+                   "radius_earth":1.1}}
+        """
+        let detail = try #require(try decode(json).bodyDetail())
+        guard case .planet(let planet) = detail else { Issue.record("expected planet"); return }
+        #expect(planet.physical?.atmosphere == "crushing")
+        #expect(planet.physical?.hasAtmosphere == nil)
+    }
+
     @Test func unscannedPlanetBodyDetailStaysVisited() throws {
         // The location endpoint is presence-gated, so it returns a body we're
         // sitting in even when `scanned: false` (estimated type, no physical
@@ -119,6 +151,30 @@ import Testing
         #expect(planet.recon == .visited)
         #expect(planet.typeEstimated == true)
         #expect(planet.physical == nil)          // no physical block until scanned
+    }
+
+    @Test func planetBodyDetailKeepsItsDeclaredMoonCount() throws {
+        // An unscanned planet declares `moon_count` inside `planet{}` and sends no
+        // moon roster, so the count must come off the declaration, not the roster.
+        let raw = try decode(Self.unscannedPlanetJSON)
+        let detail = try #require(raw.bodyDetail())
+        guard case .planet(let planet) = detail else { Issue.record("expected planet"); return }
+        #expect(planet.moons.isEmpty, "the endpoint sends no roster")
+        #expect(planet.moonCount == 1)
+        #expect(planet.moonCountEstimated == true)
+    }
+
+    @Test func hydratingAPlanetDoesNotEraseItsMoonCount() throws {
+        // The merge as the catalog runs it: a star-level roster that knows
+        // SAFANA-1 has one moon, then the planet hydrate on top of it.
+        let cached = StarSystem(
+            designation: "SAFANA", systemScanned: true,
+            planets: [Planet(designation: "SAFANA-1", recon: .visited, moonCount: 1,
+                             moonCountEstimated: true)]
+        )
+        let raw = try decode(Self.unscannedPlanetJSON)
+        let merged = cached.applying(try #require(raw.bodyDetail()))
+        #expect(merged.planets.first?.moonCount == 1)
     }
 
     @Test func unscannedMoonBodyDetailStaysVisited() throws {
@@ -650,6 +706,30 @@ extension UniverseModelsTests {
       "inventory": [ { "quantity": 153, "resource_type": "rares" } ],
       "belt": { "density": "moderate", "inner_radius_au": 2.1, "outer_radius_au": 3.3,
                 "designation": "SOL-BELT-1", "resources": { "carbon": "moderate" } }
+    }
+    """
+
+    // Captured live `locations/ATHEEMIN-2`: a scanned planet. `atmosphere` is a
+    // Bool, and the moon roster arrives as a sibling of `planet`.
+    static let scannedPlanetJSON = """
+    {
+      "location": "ATHEEMIN-2", "location_type": "planet",
+      "moons": [
+        { "scanned": true, "type": "Captured Asteroid", "location_type": "Captured Asteroid",
+          "designation": "ATHEEMIN-2-1", "inventory": [], "name": null }
+      ],
+      "planet": {
+        "designation": "ATHEEMIN-2", "name": null, "type": "Volcanic",
+        "location_type": "Volcanic", "scanned": true,
+        "tags": ["hellworld", "tectonically_active", "volcanic"],
+        "mass_earth": 2.935, "radius_earth": 0.943, "density_gcc": 19.29,
+        "surface_gravity": 3.3, "surface_temp_c": 153, "surface_temp_k": 426,
+        "rotation_period_hours": 493.2, "orbital_period_days": 543.34,
+        "orbital_distance_au": 1.4, "axial_tilt_deg": 14.2,
+        "in_habitable_zone": false, "life_stage": "none",
+        "rings": false, "magnetic_field": false, "atmosphere": false
+      },
+      "resource_sites": [], "devices": [], "inventory": []
     }
     """
 

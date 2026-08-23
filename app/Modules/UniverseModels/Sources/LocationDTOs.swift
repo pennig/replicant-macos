@@ -242,6 +242,26 @@ struct RawMoon: Decodable {
     var salvage: [RawSalvage]?
 }
 
+/// `atmosphere` is a density LABEL in a scan's physical block ("thin", "crushing")
+/// but a presence FLAG in `GET locations/{designation}` (`"atmosphere": false`) —
+/// the same meaning a moon block spells `has_atmosphere`.
+enum RawAtmosphere: Decodable {
+    case label(String)
+    case present(Bool)
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let label = try? container.decode(String.self) {
+            self = .label(label)
+        } else {
+            self = .present(try container.decode(Bool.self))
+        }
+    }
+
+    var label: String? { if case .label(let l) = self { l } else { nil } }
+    var present: Bool? { if case .present(let p) = self { p } else { nil } }
+}
+
 /// Physical block for a scanned planet or moon (`planet{}` / `moon{}`).
 struct RawBodyPhysical: Decodable {
     var designation: String?
@@ -254,7 +274,9 @@ struct RawBodyPhysical: Decodable {
     var surfaceGravity: Double?
     var surfaceTempC: Double?
     var surfaceTempK: Double?
-    var atmosphere: String?
+    var atmosphere: RawAtmosphere?
+    var moonCount: Int?
+    var moonCountEstimated: Bool?
     var magneticField: Bool?
     var rings: Bool?
     var rotationPeriodHours: Double?
@@ -485,13 +507,13 @@ extension RawBodyPhysical {
         BodyPhysical(
             massEarth: massEarth, radiusEarth: radiusEarth, densityGcc: densityGcc,
             surfaceGravity: surfaceGravity, surfaceTempC: surfaceTempC, surfaceTempK: surfaceTempK,
-            atmosphere: atmosphere, magneticField: magneticField, rings: rings,
+            atmosphere: atmosphere?.label, magneticField: magneticField, rings: rings,
             rotationPeriodHours: rotationPeriodHours, orbitalPeriodDays: orbitalPeriodDays,
             orbitalPeriodHours: orbitalPeriodHours,
             axialTiltDeg: axialTiltDeg, tags: tags ?? [], speciesName: speciesName,
             tidallyLocked: tidallyLocked,
             orbitalDistanceKm: orbitalDistanceKm, hasSubsurfaceOcean: hasSubsurfaceOcean,
-            hasAtmosphere: hasAtmosphere
+            hasAtmosphere: hasAtmosphere ?? atmosphere?.present
         )
     }
 }
@@ -622,10 +644,14 @@ extension RawLocation {
                     inventory: (m.inventory ?? []).compactMap(\.domain)
                 )
             }
+            // An unscanned planet declares `moon_count` and sends no roster, so the
+            // roster's length alone would erase a count the catalog already holds.
+            let declaredMoons = p.moonCount.map { max($0, moonDomains.count) } ?? moonDomains.count
             let planetDomain = Planet(
                 designation: designation, name: p.name, type: p.type, typeEstimated: !isScanned,
                 orbitalDistanceAu: p.orbitalDistanceAu, inHabitableZone: p.inHabitableZone ?? false,
-                lifeStage: p.lifeStage, recon: bodyRecon, moonCount: moonDomains.count,
+                lifeStage: p.lifeStage, recon: bodyRecon, moonCount: declaredMoons,
+                moonCountEstimated: p.moonCountEstimated ?? false,
                 physical: isScanned ? p.physical : nil, moons: moonDomains, sites: sites, salvage: salvageSites,
                 devices: devs, inventory: inv, events: events
             )
