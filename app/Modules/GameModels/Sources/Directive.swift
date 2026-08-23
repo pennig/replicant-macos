@@ -405,6 +405,11 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// never auto-removed. A recovery obligation, NOT a lease: it reserves
     /// nothing. Contract in `.claude/memory/bot-roster-departure-gate.md`.
     @Column(as: [String].JSONRepresentation.self) public var botCodes: [String]
+    /// The device a Fetch Run is collecting. A lease from launch: nothing drags
+    /// it in before it is attached, so the brain could otherwise re-task the
+    /// payload out from under a plate already flying to collect it. Cleared at
+    /// detach, so the device is free the moment it stands at its destination.
+    public var payloadCode: String?
     /// The ordered queue of star-system designations still to visit.
     ///
     /// For a continuous run this is append-only HISTORY rather than a plan: the
@@ -469,7 +474,8 @@ public struct Directive: Identifiable, Equatable, Sendable {
         updatedAt: Date,
         theatreDepot: String? = nil,
         freighterCodes: [String] = [],
-        botCodes: [String] = []
+        botCodes: [String] = [],
+        payloadCode: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -493,6 +499,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.theatreDepot = theatreDepot
         self.freighterCodes = freighterCodes
         self.botCodes = botCodes
+        self.payloadCode = payloadCode
     }
 
     /// Progress through the queue, for the list row's "m/n" readout. Counts
@@ -857,6 +864,16 @@ public extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "botCodes" TEXT NOT NULL DEFAULT '[]'
+            """
+        ).execute(db)
+    }
+
+    /// A Fetch Run's payload lease. Nullable with no default — every other kind
+    /// leaves it unset, and "no payload" is a real state rather than a blank.
+    static let addPayloadCode = SchemaMigration("Add 'payloadCode' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "payloadCode" TEXT
             """
         ).execute(db)
     }

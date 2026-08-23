@@ -296,4 +296,32 @@ struct ExecutorRestampTests {
             #expect(entries.map(\.kind) == [.stepStarted])
         }
     }
+
+    /// The payload lease survives a step move it has nothing to do with. Proves
+    /// the migration and the round trip; what proves `commit`'s column list is
+    /// `releasePayloadClearsTheColumnAndAdvancesTheStep`, which changes it.
+    @Test func aPayloadLeaseSurvivesAnUnrelatedStepMove() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            var row = mission(step: "confirming")
+            row.payloadCode = "PAYLOAD1"
+            try Directive.insert { row }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([.advanceStep(nextStep: "settling")])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(t1)
+            $0.uuid = .incrementing
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.payloadCode == "PAYLOAD1")
+            #expect(directive?.step == "settling")
+        }
+    }
 }
