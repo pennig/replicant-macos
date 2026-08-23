@@ -157,4 +157,22 @@ struct DirectiveLaunchTests {
             #expect(row.step == expected[kind], "\(kind.rawValue)")
         }
     }
+
+    /// `Launch.payloadCode` defaults to nil, which is exactly what would hide a
+    /// forgotten assignment in `launch`. Assert the WRITTEN ROW, not the value
+    /// that went in.
+    @Test func launchingAFetchRunWritesThePayloadLeaseAndBothStops() {
+        let row = Directive.launch(
+            .init(
+                kind: .fetchRun, deviceCode: "PLATE1", theatre: theatre,
+                targets: ["VEGA-2", "SOL-3"], payloadCode: "PAYLOAD1"
+            ),
+            id: "F1", now: now
+        )
+        #expect(row.payloadCode == "PAYLOAD1")
+        #expect(row.targets == ["VEGA-2", "SOL-3"])
+        #expect(row.step == FetchRun().firstStep)
+        // No tag: this kind reserves by device columns alone.
+        #expect(row.fleetTag == nil)
+    }
 }
