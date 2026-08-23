@@ -324,4 +324,32 @@ struct ExecutorRestampTests {
             #expect(directive?.step == "settling")
         }
     }
+
+    /// The clear has to survive `commit`, which names its columns explicitly —
+    /// a `payloadCode` missing from that list discards this write with no error.
+    @Test func releasePayloadClearsTheColumnAndAdvancesTheStep() async throws {
+        let database = try GameDatabase.bootstrap()
+        try await database.write { db in
+            var row = mission(step: "confirmingDetach")
+            row.payloadCode = "PAYLOAD1"
+            try Directive.insert { row }.execute(db)
+        }
+        let core = DirectiveEngineCore(
+            machines: [ScriptedMachine([.releasePayload(nextStep: "homing")])],
+            tick: .seconds(5)
+        )
+        try await withDependencies {
+            $0.defaultDatabase = database
+            $0.date = .constant(t1)
+            $0.uuid = .incrementing
+        } operation: {
+            await core.evaluateOnce(directiveID: "D1")
+            let directive = try await database.read { db in
+                try Directive.where { $0.id.eq("D1") }.fetchOne(db)
+            }
+            #expect(directive?.payloadCode == nil)
+            #expect(directive?.step == "homing")
+            #expect(directive?.stepStartedAt == t1)
+        }
+    }
 }

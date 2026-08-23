@@ -136,6 +136,14 @@ enum DirectiveExecutor {
             )
             return true
 
+        case let .releasePayload(nextStep):
+            logger.info("directive \(directive.id, privacy: .public) releases its payload")
+            await move(
+                directive, to: nextStep, controllerCode: directive.controllerCode,
+                releasesPayload: true
+            )
+            return true
+
         case let .claimRelay(deviceCode, nextStep):
             logger.info("directive \(directive.id, privacy: .public) claims relay \(deviceCode, privacy: .public)")
             await move(
@@ -388,6 +396,7 @@ enum DirectiveExecutor {
         deviceCode: String? = nil,
         claimedRelayCode: String? = nil,
         botCodes: [String]? = nil,
+        releasesPayload: Bool = false,
         restamp: Bool = true
     ) async {
         @Dependency(\.date) var date
@@ -401,6 +410,9 @@ enum DirectiveExecutor {
         // Same contract as the relay claim: nil means "unchanged". Enrolment is
         // the only writer, and it never shrinks the roster.
         if let botCodes { updated.botCodes = botCodes }
+        // A flag rather than an optional: nil already means "unchanged" here,
+        // so clearing the lease needs a signal an optional cannot carry.
+        if releasesPayload { updated.payloadCode = nil }
         if restamp { updated.stepStartedAt = date.now }
         updated.updatedAt = date.now
         let entries = restamp || nextStep != directive.step

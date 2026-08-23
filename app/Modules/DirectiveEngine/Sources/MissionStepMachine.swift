@@ -36,6 +36,10 @@ public enum MissionAction: Equatable, Sendable {
     /// `nextStep`. `deviceCodes` is the FULL new roster and must only ever grow —
     /// see `.claude/memory/bot-roster-departure-gate.md`.
     case enrolBots(deviceCodes: [String], nextStep: String)
+    /// Clear `Directive.payloadCode`, then move to `nextStep`. The payload's
+    /// lease ends where the run's obligation to it does — at detach, not at run
+    /// end, so a delivered device is allocatable while the hull flies home.
+    case releasePayload(nextStep: String)
     /// Re-read `locations/{star}`, persist it, then move to `nextStep`. Best-effort:
     /// the endpoint 403s for a system the census has never marked explored, and the
     /// engine swallows that — a stale cache only costs the machine one evaluation.
