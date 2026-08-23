@@ -99,6 +99,7 @@ public enum GameDatabase {
         Directive.dropFreighterCode,
         Directive.addBotCodes,
         Star.addStarHasWard,
+        Directive.addPayloadCode,
     ]
 
     /// Builds a migrator from `entries`. The parameter exists so tests can

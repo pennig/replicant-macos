@@ -30,6 +30,8 @@ extension Directive {
         /// A mine ferry's belt. Scopes the tag to that BELT rather than the
         /// theatre; every other `.haulRun` leaves it nil.
         public var belt: String?
+        /// The device a fetch run is collecting. Nil for every other kind.
+        public var payloadCode: String?
 
         public init(
             kind: DirectiveKind,
@@ -42,7 +44,8 @@ extension Directive {
             controllerCode: String? = nil,
             freighterCodes: [String] = [],
             sourceRelayCode: String? = nil,
-            belt: String? = nil
+            belt: String? = nil,
+            payloadCode: String? = nil
         ) {
             self.kind = kind
             self.deviceCode = deviceCode
@@ -55,6 +58,7 @@ extension Directive {
             self.freighterCodes = freighterCodes
             self.sourceRelayCode = sourceRelayCode
             self.belt = belt
+            self.payloadCode = payloadCode
         }
     }
 
@@ -80,7 +84,8 @@ extension Directive {
             createdAt: now,
             updatedAt: now,
             theatreDepot: launch.theatre?.depot,
-            freighterCodes: launch.freighterCodes
+            freighterCodes: launch.freighterCodes,
+            payloadCode: launch.payloadCode
         )
     }
 
@@ -104,7 +109,8 @@ extension Directive {
         case .haulRun: .haul
         case .mineRun, .mineFleetPrint: .mine
         case .eventRun: .event
-        case .relayRun, .restockRun, .eventCourierPrint: nil
+        // A fetch run reserves by device columns alone and writes no tag.
+        case .relayRun, .restockRun, .eventCourierPrint, .fetchRun: nil
         }
     }
 }

@@ -32,6 +32,9 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
     /// Stands up the convoy's replicant courier: print a container, replicate
     /// into the spare matrix, stow it aboard.
     case eventCourierPrint
+    /// One device moved from where it stands to a location the user named, on
+    /// a surge plate. User-launched; the brain never starts one.
+    case fetchRun
 
     /// The list row's label, e.g. "Survey Run".
     public var title: String {
@@ -45,6 +48,7 @@ public enum DirectiveKind: String, Codable, Equatable, Sendable, CaseIterable, Q
         case .mineRun: "Mine Run"
         case .eventRun: "Event Run"
         case .eventCourierPrint: "Event Courier Print"
+        case .fetchRun: "Fetch Run"
         }
     }
 }
@@ -193,6 +197,12 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
     /// The option's outstanding resources do not fit the convoy's freighter, and
     /// the run carries exactly one. Detail names the units against the hold.
     case eventLoadExceedsHold
+    /// No unleased surge plate carrying the `fetch` tag has a free attach slot,
+    /// so a Fetch Run has no hull to fly.
+    case noFetchPlateAvailable
+    /// Another directive holds the device this Fetch Run was launched to
+    /// collect. `detail` names the holding row.
+    case fetchPayloadLeased
 
     /// The stall panel's headline.
     public var displayName: String {
@@ -229,6 +239,8 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
         case .eventOptionBlueprintMissing: "Blueprint not unlocked"
         case .eventOptionNotChosen: "Event option not chosen"
         case .eventLoadExceedsHold: "Load exceeds the freighter's hold"
+        case .noFetchPlateAvailable: "No fetch plate available"
+        case .fetchPayloadLeased: "Device held by another run"
         }
     }
 
@@ -306,6 +318,10 @@ public enum DirectiveAttentionReason: String, Codable, Equatable, Sendable, Case
             "The event offers more than one buildable option and none is picked, so the run has no payload to work toward. Pick one under Missions, then retry. Unlocking a blueprint mid-run can reopen a choice the run started with only one answer to."
         case .eventLoadExceedsHold:
             "The option still needs more resource units than the convoy's one cargo freighter can hold, so no single collection reaches it. A run carries one freighter and makes one trip, so this option is out of reach until it does otherwise — pick an option the hold can take under Missions, or cancel the run."
+        case .noFetchPlateAvailable:
+            "No free surge plate carries the \"fetch\" tag with an attach slot to spare. Tag a plate from the device inspector, or wait for a running fetch to release one, then retry."
+        case .fetchPayloadLeased:
+            "Another directive is using the device this run was launched to collect. Let that run finish or cancel it, then retry."
         }
     }
 }
@@ -340,7 +356,10 @@ public extension DirectiveAttentionReason {
              .serviceBotStranded,
              .miningDirectivePaused, .miningControllerNotRecovered, .mineFleetIncomplete,
              .eventCriteriaUnmet, .awaitingCourierReplication, .eventOptionBlueprintMissing,
-             .eventLoadExceedsHold:
+             .eventLoadExceedsHold,
+             // Both are the operator's: a plate needs tagging, or another run
+             // needs to finish. A retry the brain drives would just re-stall.
+             .noFetchPlateAvailable, .fetchPayloadLeased:
             return .escalate
         case .eventOptionNotChosen:
             return .decisionRequest
@@ -405,6 +424,11 @@ public struct Directive: Identifiable, Equatable, Sendable {
     /// never auto-removed. A recovery obligation, NOT a lease: it reserves
     /// nothing. Contract in `.claude/memory/bot-roster-departure-gate.md`.
     @Column(as: [String].JSONRepresentation.self) public var botCodes: [String]
+    /// The device a Fetch Run is collecting. A lease from launch: nothing drags
+    /// it in before it is attached, so the brain could otherwise re-task the
+    /// payload out from under a plate already flying to collect it. Cleared at
+    /// detach, so the device is free the moment it stands at its destination.
+    public var payloadCode: String?
     /// The ordered queue of star-system designations still to visit.
     ///
     /// For a continuous run this is append-only HISTORY rather than a plan: the
@@ -469,7 +493,8 @@ public struct Directive: Identifiable, Equatable, Sendable {
         updatedAt: Date,
         theatreDepot: String? = nil,
         freighterCodes: [String] = [],
-        botCodes: [String] = []
+        botCodes: [String] = [],
+        payloadCode: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -493,6 +518,7 @@ public struct Directive: Identifiable, Equatable, Sendable {
         self.theatreDepot = theatreDepot
         self.freighterCodes = freighterCodes
         self.botCodes = botCodes
+        self.payloadCode = payloadCode
     }
 
     /// Progress through the queue, for the list row's "m/n" readout. Counts
@@ -857,6 +883,16 @@ public extension Directive {
         try #sql(
             """
             ALTER TABLE "directives" ADD COLUMN "botCodes" TEXT NOT NULL DEFAULT '[]'
+            """
+        ).execute(db)
+    }
+
+    /// A Fetch Run's payload lease. Nullable with no default — every other kind
+    /// leaves it unset, and "no payload" is a real state rather than a blank.
+    static let addPayloadCode = SchemaMigration("Add 'payloadCode' to 'directives'") { db in
+        try #sql(
+            """
+            ALTER TABLE "directives" ADD COLUMN "payloadCode" TEXT
             """
         ).execute(db)
     }

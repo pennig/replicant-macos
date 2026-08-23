@@ -78,6 +78,14 @@ enum DirectiveTargetsSection: Equatable {
             // `targetIndex` never advances here, so a delivery mark would sit
             // unchecked against demand that is genuinely being met.
             return directive.targets.isEmpty ? .empty : .demand(directive.targets)
+        case .fetchRun:
+            // A pickup and a destination, in that order. `targetIndex` never
+            // advances, so the pickup is marked from the queue's shape instead.
+            guard directive.targets.count == 2 else { return .empty }
+            return .queue([
+                Stop(position: 0, designation: directive.targets[0], delivered: true),
+                Stop(position: 1, designation: directive.targets[1], delivered: false),
+            ])
         case .surveyRun, .salvageRun, .relayRun, .mineFleetPrint, .mineRun, .eventRun,
              .eventCourierPrint:
             break

@@ -77,6 +77,7 @@ import Testing
         "Drop 'freighterCode' from 'directives'",
         "Add 'botCodes' to 'directives'",
         "Add 'hasWard' to 'stars'",
+        "Add 'payloadCode' to 'directives'",
     ]
 
     @Test func manifestMatchesTheFrozenList() {

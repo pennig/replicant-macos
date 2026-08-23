@@ -152,6 +152,11 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
     public var headlineDesignation: String? {
         switch self {
         case let .custom(directive, haulTarget):
+            // A fetch run's queue is a pickup and a destination, not a route,
+            // so `currentTarget` would name where the device is leaving from.
+            if directive.kind == .fetchRun {
+                return directive.targets.count == 2 ? directive.targets[1] : nil
+            }
             guard directive.kind == .haulRun else { return directive.currentTarget }
             // A pinned row names the pile it is pinned to whether or not its
             // ferry has taken the config yet; the subtitle carries that half.
@@ -219,6 +224,9 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                 let wanted = directive.targets.count
                 return wanted == 0 ? "Stocked" : "Stocking for \(wanted) target\(wanted == 1 ? "" : "s")"
             }
+            // Two pinned stops, not a queue: `targetIndex` never advances, so
+            // the m/n readout below would sit at "0/2" for the whole run.
+            if directive.kind == .fetchRun { return "Fetching" }
             // A continuous run EXTENDS its queue instead of completing it, so
             // `targetIndex == targets.count` for the whole window between
             // finishing one system and planning the next — and "n/n" reads as a
@@ -232,7 +240,7 @@ public enum DirectiveRow: Equatable, Identifiable, Sendable {
                 case .surveyRun, .relayRun:
                     return "\(directive.targetIndex) surveyed"
                 case .haulRun, .restockRun, .mineFleetPrint, .mineRun, .eventRun,
-                     .eventCourierPrint:
+                     .eventCourierPrint, .fetchRun:
                     // Handled above, or never roams — no queue to walk here.
                     return nil
                 }

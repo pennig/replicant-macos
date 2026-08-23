@@ -15,7 +15,7 @@ public struct Ownership: Sendable, Equatable {
     /// How a directive reached a device: the four seeds off its own columns,
     /// then the three edges the closure walks.
     public enum Via: String, Sendable, Equatable {
-        case deviceCode, controllerCode, freighterLease, fleetTag, stow, attach, adoption
+        case deviceCode, controllerCode, freighterLease, payload, fleetTag, stow, attach, adoption
     }
 
     /// One directive's claim on one device. `theatreDepot` is the holding row's
@@ -187,6 +187,9 @@ extension Ownership {
         // Seeded, never dragged: an event convoy's freighters each fly their own
         // leg, so no stow or attach edge reaches them from the carrier.
         for freighter in directive.freighterCodes { claim(freighter, .freighterLease) }
+        // Seeded, never dragged: before the attach lands there is no edge from
+        // the plate that reaches the device it is flying to collect.
+        if let payload = directive.payloadCode { claim(payload, .payload) }
         if let tag = directive.fleetTag.flatMap(FleetTag.init(parsing:)) {
             for device in fleet where device.carries(tag, policy: .exact) {
                 claim(device.deviceCode, .fleetTag)

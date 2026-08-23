@@ -100,6 +100,9 @@ public struct DirectivesFeature {
         /// The new-Haul-Run launcher. Also its own presentation — there is no
         /// picker to fold into `newDirective`, only a report-and-launch dialog.
         @Presents public var newHaulRun: NewHaulRunFeature.State?
+        /// The new-Fetch-Run launcher. Its own presentation for the same reason
+        /// as the others — its eligibility rule is `FetchRun`'s, not a vessel's.
+        @Presents public var newFetchRun: NewFetchRunFeature.State?
         /// The Print Mine Fleet launcher — a dialog rather than its own reducer,
         /// since the only choice is which depot, and only when several offer one.
         @Presents public var printMineFleetDialog: ConfirmationDialogState<Action.PrintMineFleet>?
@@ -186,6 +189,8 @@ public struct DirectivesFeature {
         case newSalvageRunTapped
         /// Open the new-Haul-Run launcher.
         case newHaulRunTapped
+        /// Open the new-Fetch-Run launcher.
+        case newFetchRunTapped
         /// Open the Print Mine Fleet confirm dialog (or the already-running one).
         case printMineFleetTapped
         /// The depots a mine fleet may be printed at, the preferred one first.
@@ -225,6 +230,7 @@ public struct DirectivesFeature {
         case newDirective(PresentationAction<NewDirectiveFeature.Action>)
         case newSalvageRun(PresentationAction<NewSalvageRunFeature.Action>)
         case newHaulRun(PresentationAction<NewHaulRunFeature.Action>)
+        case newFetchRun(PresentationAction<NewFetchRunFeature.Action>)
 
         @CasePathable
         public enum PrintMineFleet: Equatable, Sendable {
@@ -261,6 +267,9 @@ public struct DirectivesFeature {
             }
             .ifLet(\.$newHaulRun, action: \.newHaulRun) {
                 NewHaulRunFeature()
+            }
+            .ifLet(\.$newFetchRun, action: \.newFetchRun) {
+                NewFetchRunFeature()
             }
             .ifLet(\.$printMineFleetDialog, action: \.printMineFleetDialog)
             .ifLet(\.$eventCourierDialog, action: \.eventCourierDialog)
@@ -338,6 +347,10 @@ public struct DirectivesFeature {
 
             case .newHaulRunTapped:
                 state.newHaulRun = NewHaulRunFeature.State()
+                return .none
+
+            case .newFetchRunTapped:
+                state.newFetchRun = NewFetchRunFeature.State()
                 return .none
 
             case .printMineFleetTapped:
@@ -541,6 +554,13 @@ public struct DirectivesFeature {
                 return selectionChanged(&state)
 
             case .newHaulRun:
+                return .none
+
+            case let .newFetchRun(.presented(.delegate(.created(directive)))):
+                state.selectedRowID = "custom:\(directive.id)"
+                return selectionChanged(&state)
+
+            case .newFetchRun:
                 return .none
             }
         }
