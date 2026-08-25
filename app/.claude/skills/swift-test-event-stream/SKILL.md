@@ -1,6 +1,6 @@
 ---
 name: swift-test-event-stream
-description: Query the results of `swift test` programmatically using Swift Testing's JSON event stream (`--event-stream-output-path`) combined with `--filter` and `jq`. Use this skill whenever the task involves extracting, counting, summarizing, or gating on Swift test results — parsing failures out of a test run, building a CI check, finding slow tests, detecting crashed tests, producing a report from a Swift package's test suite, or comparing runs. Reach for it especially if you are about to scrape or regex `swift test` console output, since that output is not a stable interface and the event stream is. Also applies when the user mentions swift-testing's JSON ABI, event stream, `--event-stream-version`, `--experimental-event-stream-output`, or asks why `swift test` results are hard to parse — and when event stream output appears truncated, overwritten, or to be missing test targets, which is a known trap this skill explains.
+description: Query the results of `swift test` programmatically using Swift Testing's JSON event stream (`--event-stream-output-path`) combined with `--filter` and `jq`. Use this skill whenever the task involves extracting, counting, summarizing, or gating on Swift test results — parsing failures out of a test run, building a CI check, finding slow tests, detecting crashed tests, producing a report from a Swift package's test suite, or comparing runs. Reach for it especially if you are about to scrape or regex `swift test` console output, since that output is not a stable interface and the event stream is. Also applies when the user mentions swift-testing's JSON ABI, event stream, `--event-stream-version`, `--experimental-event-stream-output`, or asks why `swift test` results are hard to parse — and when a multi-target package's stream appears truncated, to be missing test targets, or to contain many `runStarted`/`runEnded` pairs, which are the traps this skill explains.
 ---
 
 # Querying `swift test` results via the Swift Testing event stream
@@ -15,7 +15,7 @@ This skill covers only Swift Testing. XCTest emits nothing into this stream.
 swift test \
   --disable-xctest \
   --filter 'CartTests' \
-  --event-stream-version 0 \
+  --event-stream-version 6.4 \
   --event-stream-output-path .build/events.jsonl
 ```
 
@@ -27,7 +27,7 @@ Legacy aliases `--experimental-event-stream-output` and `--experimental-event-st
 
 **Always pass `--disable-xctest`** unless the package genuinely has XCTest targets that need to run. Otherwise SwiftPM emits "no matching tests" noise that has nothing to do with the stream.
 
-**Always pin `--event-stream-version`.** Omitting it selects "the current supported non-experimental version," which floats across toolchains and will silently change field availability under a script. Pick a version deliberately using the table below.
+**Always pin `--event-stream-version`.** Omitting it selects "the current supported non-experimental version," which floats across toolchains and will silently change field availability under a script. Pick a version deliberately using the table below. The pin is validated — an unrecognized value fails the run with exit 1 and `Event stream version <v> is experimental. Use --experimental-event-stream-version to enable it.` — so a typo cannot silently fall back to a different schema.
 
 ## Filtering
 
@@ -49,62 +49,41 @@ Filtering a parameterized test selects the whole function, not individual cases.
 
 ## One output path, many test processes
 
-**This silently produces wrong results. Check for it before trusting any output from a multi-target package.**
+Under the `swiftbuild` backend each test target becomes its own test product and its own binary, and SwiftPM forwards the entire command line — `--event-stream-output-path` included — to every one of those processes. So a package with N test targets has N processes writing to one file. That single fact produced one historical trap and produces one live one.
 
-Symptom: the event stream file contains only the last test target's events. Everything earlier in the run is missing, and nothing warns you.
+### Historical: the file was truncated (fixed in Swift 6.4)
 
-The cause is four behaviors composing badly:
+Swift Testing used to open the output path in truncating mode (`"wb"`), so the last process to run destroyed everything written before it. The stream held only one target's events, nothing warned you, and the exit code was 0.
 
-1. SwiftPM's default build system is now `swiftbuild` (`--build-system native` is deprecated).
-2. Under `swiftbuild`, each test target becomes its own test product and its own binary. The older `native` backend produced a single umbrella `<Package>PackageTests` bundle instead.
-3. SwiftPM runs one process per test product, forwarding the entire command line — including `--event-stream-output-path` — to every one of them.
-4. Swift Testing opens that path in truncating mode (`"wb"`). There is no append mode.
+**This is fixed as of Swift 6.4 — verified on Xcode 27.0 beta 6 (`27A5252f`): the writes accumulate, and one invocation produces one complete stream.** Measured on this repo's 28-test-target package: a whole-package run yielded all 28 modules with `testStarted` == `testEnded` == 4057, where the old behavior left a single module.
 
-So N test targets means N processes truncating the same file. The last writer wins.
-
-Detect it by counting distinct modules in the output and comparing against the package's test targets:
+On an older toolchain the truncation is still real. Detect it by counting distinct modules against the package's test targets:
 
 ```bash
 jq -r 'select(.kind=="test").payload.id | split(".")[0]' .build/events.jsonl | sort -u
 ```
 
-One module where several were expected confirms it.
+One module where several were expected confirms it. The workarounds, in descending preference: `--test-product <ProductName>` collapses a filtered run to a single process (a hidden option taking a *product* name, not a target name — an umbrella product reintroduces the problem); or run each product into its own file and `cat` them, since JSON Lines concatenates cleanly. `--build-system native` also sidesteps it by producing a single umbrella bundle, but it is deprecated and on Swift 6.4 it aborts with a bare `error: fatalError`, so do not reach for it.
 
-### Choosing a fix
+**None of that is needed on Swift 6.4.** Use plain `--filter` and let SwiftPM run every product.
 
-**When the task is already scoped with `--filter`, prefer `--test-product`.** A filtered run is usually aimed at tests that live in one target anyway, so naming that product collapses the run to a single process — which fixes the truncation and skips building and running the other products. The two options compose naturally: `--test-product` narrows to a binary, `--filter` narrows within it.
+### Live: one `runStarted`/`runEnded` pair per test product
 
-```bash
-swift test --test-product ModuleATests --filter 'CartTests' \
-  --disable-xctest --event-stream-version 0 \
-  --event-stream-output-path .build/events.jsonl
-```
+The consequence of the fix is that a single ordinary invocation now contains N run-lifecycle pairs, not one. A 28-target package emits 28 `runStarted` and 28 `runEnded` records into one file **even when `--filter` selects tests from a single target** — the other 27 products each run zero tests and still open and close a run.
 
-`--test-product` is a hidden option and takes a product name, not a target name. Passing an umbrella product name selects all of its members and reintroduces the problem.
+That breaks any gate written as "is there a `runEnded`?", because one surviving product satisfies it while the process that mattered died mid-suite. Assert the count instead — see "Run-completed gate" below.
 
-**`--build-system native`** also works and needs no knowledge of product names, which makes it the better choice for a whole-package run. It is deprecated, so treat it as a stopgap rather than something to bake into CI.
-
-**For a full run that must stay on `swiftbuild`,** run each product into its own file and concatenate. JSON Lines concatenates cleanly, and every aggregate recipe below keys off `testID`, which stays unique across modules:
-
-```bash
-for p in ModuleATests ModuleBTests; do
-  swift test --test-product "$p" --disable-xctest --event-stream-version 0 \
-    --event-stream-output-path ".build/events-$p.jsonl"
-done
-cat .build/events-*.jsonl > .build/events.jsonl
-```
-
-The one recipe this breaks is the run-completed gate: a concatenated stream has one `runStarted`/`runEnded` pair per product, so assert the `runEnded` count equals the product count rather than checking `any(...)`.
-
-A FIFO also works — opening a FIFO in truncating mode destroys nothing — but the reader must know how many writers to expect, since each process closing sends EOF. Reach for it only when live streaming is the actual goal.
+It also means `--filter` is broadcast to every product, so a typo'd or renamed suite produces N runs of zero tests, zero test records, **exit code 0**, and only a console `warning: No matching test cases were run`. Gate on a non-zero test-record count.
 
 ## Stream anatomy
 
 The output file is JSON Lines: one complete JSON object per line, no enclosing array. Every line has the same envelope:
 
 ```json
-{"version": "6.4", "kind": "test" | "event", "payload": { ... }}
+{"version": "6.4.0", "kind": "test" | "event", "payload": { ... }}
 ```
+
+`.version` reports the resolved patch version (`"6.4.0"`), not the string passed on the command line (`6.4`). Match on a prefix, not on equality.
 
 There are exactly two record kinds. Ignore any line whose `kind` you do not recognize — the format reserves the right to add more.
 
@@ -114,11 +93,15 @@ There are exactly two record kinds. Ignore any line whose `kind` you do not reco
 
 The critical structural fact: **events carry only a `testID`, never a name.** Display names, tags, and bug references live on the `test` records. Any human-readable output requires joining the two.
 
+**The lifecycle name lives at `.payload.kind`, not at the top level.** The top-level `.kind` is only ever `"test"` or `"event"`, so `select(.kind=="runEnded")` matches nothing — and an empty result reads as a clean run. Every recipe below keys off `.payload.kind` for this reason.
+
 Fields prefixed with an underscore (`_testCase`, `_comments`, `_backtrace`, `_error`, `_knownIssueComment`) appear in the JSON but are explicitly outside the schema. Read them opportunistically for diagnostics; never build a CI gate on them.
 
 ## Recipes
 
 All of these are verified working. Use `jq -s` (slurp) where a query needs the whole stream at once — joins and aggregations do; line-at-a-time filters do not.
+
+**Counting pitfall:** `jq 'select(...)' file | wc -l` counts pretty-printed *output lines*, not records, and inflates every count several-fold. Project to a scalar (`jq -r 'select(...).payload.kind'`) or pass `-c` before piping to `wc -l`.
 
 ### Failures only
 
@@ -165,6 +148,8 @@ jq -s '
 
 `unique` on the failing test IDs matters: one test can record several failing issues, and counting raw issue events inflates the failure count.
 
+`total` counts `testStarted`, which fires for `@Suite` records as well as `@Test` functions, so it runs above the console's tail line — on this repo, 4057 `testStarted` = 3557 functions + 500 suites. Both numbers are right; compare like with like, and split them on `select(.kind=="test").payload.kind` when the distinction matters.
+
 ### Slowest tests
 
 There is no duration field. Pair `testStarted` with `testEnded` on `instant.absolute`:
@@ -186,7 +171,7 @@ Use `instant.absolute` (monotonic seconds from a system epoch) for durations, no
 
 ### Crashed tests
 
-A test that traps produces `testStarted` with no terminal event, and the stream simply stops — no `testEnded`, no `issueRecorded`, no `runEnded`. This is the failure mode most likely to be missed, because a naive "any failing issues?" query reports a clean run on a process that died.
+A test that traps produces `testStarted` with no terminal event, and that product's stream simply stops — no `testEnded`, no `issueRecorded`, no `runEnded`. This is the failure mode most likely to be missed, because a naive "any failing issues?" query reports a clean run on a process that died. With every product sharing one file, the surviving siblings' records now surround the gap, which makes it easier to overlook rather than harder.
 
 Diff the started set against the terminated set:
 
@@ -200,14 +185,19 @@ jq -s -r '
 
 ### Run-completed gate
 
-Pair the crash check with an explicit completion check. These are different conditions and deserve different exit codes:
+Pair the crash check with an explicit completion check. These are different conditions and deserve different exit codes.
+
+**Count the `runEnded` records and compare against the number of test products.** One product dying still leaves its 27 siblings' `runEnded` records in the file, so an `any(...)` check passes on a broken run:
 
 ```bash
-jq -s -e 'any(.[]; .kind=="event" and .payload.kind=="runEnded")' .build/events.jsonl >/dev/null \
-  || echo "run did not complete — process died mid-suite"
+expected=$(grep -cE '^\s+\.testTarget' Package.swift)
+actual=$(jq -r 'select(.kind=="event" and .payload.kind=="runEnded").payload.kind' \
+         .build/events.jsonl | wc -l)
+[ "$actual" -eq "$expected" ] \
+  || echo "run incomplete: $actual/$expected products finished"
 ```
 
-`jq -e` sets exit status from the output value, so this composes directly into shell conditionals.
+If the run was narrowed with `--test-product`, compare against the number of products named instead. The same count is the right gate for a concatenated multi-file stream from an older toolchain, so the check is portable across both layouts.
 
 ### Live consumption
 
@@ -217,20 +207,22 @@ The stream is written incrementally, and SwiftPM's own tooling passes a FIFO as 
 tail -f .build/events.jsonl | jq --unbuffered -r 'select(.kind=="event").payload | select(.kind=="testEnded") | .testID'
 ```
 
+A FIFO also works as the output path — opening one in truncating mode destroys nothing — but the reader must know how many writers to expect, since each process closing sends EOF. Reach for it only when live streaming is the actual goal.
+
 ## Schema versions
 
-Pin deliberately. Newer versions add fields; they do not remove them.
+Pin deliberately. The schema itself only adds fields, but **non-schema underscore fields can and do disappear**: `_filePath` is present on `0` and `"6.3"` and gone on `"6.4"`. That is exactly why nothing should gate on an underscore-prefixed field.
 
-| Version | Adds | Swift |
-|---|---|---|
-| `0` | Baseline: test records, events, issues, messages | 6.0 |
-| `0` | Attachments (`valueAttached`) | 6.2 |
-| `"6.3"` | Issue `severity` and `isFailure`; `filePath` on source locations; test cancellation events | 6.3 |
-| `"6.4"` | `tags`, `bugs`, `timeLimit` on test function records | 6.4 |
+| Version | `.version` reports | Adds | Swift |
+|---|---|---|---|
+| `0` | `0` (number) | Baseline: test records, events, issues, messages; `_filePath` only | 6.0 |
+| `0` | `0` (number) | Attachments (`valueAttached`) | 6.2 |
+| `"6.3"` | `"6.3.0"` | Issue `severity` and `isFailure`; public `filePath` on source locations; test cancellation events | 6.3 |
+| `"6.4"` | `"6.4.0"` | `tags`, `bugs`, `timeLimit` on test records; `iteration` on `testStarted`/`testEnded`; drops `_filePath` | 6.4 |
 
 Note the type change: version `0` is a JSON number, later versions are semver strings. Compare with care.
 
-Choose `0` for maximum toolchain portability, accepting that warnings are indistinguishable from failures and `filePath` is unavailable (only `fileID`). Choose `"6.3"` or later when the analysis needs severity discrimination or absolute file paths — for instance when emitting CI annotations that must resolve to real files.
+**Default to `6.4` on this repo's toolchain.** It is the only version carrying `tags` — which the join recipe above prints — and the only one where `filePath` has no unstable underscore twin. Drop to `"6.3"` only to support a Swift 6.3 toolchain, and to `0` only for maximum portability, accepting that warnings become indistinguishable from failures and absolute paths are unavailable outside the out-of-schema `_filePath`.
 
 ## Attachments
 
@@ -246,13 +238,14 @@ and create the directory first.
 
 Before reporting results from this stream, verify:
 
-1. **Are all the expected test targets present?** Under the `swiftbuild` backend a multi-target package truncates the file down to its last product. Count distinct modules before reporting anything. See "One output path, many test processes" above.
-2. **Did the run complete?** Absence of `runEnded` means the process died. Never report "0 failures" on an incomplete stream.
+1. **Are all the expected test targets present?** Count distinct modules against the package's test targets. On Swift 6.4 a shortfall means a product crashed or was filtered away; on an older toolchain it means the file was truncated. See "One output path, many test processes" above.
+2. **Did every product's run complete?** Compare the `runEnded` count against the test-product count. A single `runEnded` is not evidence of a complete run on a multi-target package.
 3. **Are there started-but-never-ended tests?** These are crashes and will not appear as issues.
 4. **Are warnings being counted as failures?** Only on `"6.3"`+ can these be told apart; check `issue.isFailure`.
 5. **Is the failure count deduplicated by test ID?** One test can emit many issues.
-6. **Did the filter match anything at all?** A typo'd `--filter` regex produces a valid, empty run that looks like success. Confirm `testStarted` count is non-zero and consistent with expectation.
-7. **Was `--disable-xctest` appropriate?** If the package has XCTest targets, disabling them silently narrows the run.
+6. **Did the filter match anything at all?** A typo'd `--filter` regex produces a valid, empty run across every product that looks like success: exit 0, no test records, one console warning. Confirm the test-record count is non-zero and consistent with expectation.
+7. **Are the counts real?** `jq 'select(...)' | wc -l` counts pretty-printed lines, not records. Project to a scalar first.
+8. **Was `--disable-xctest` appropriate?** If the package has XCTest targets, disabling them silently narrows the run.
 
 ## Reporting
 
