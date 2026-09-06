@@ -26,11 +26,6 @@
             "type": "object",
             "description": "Errors",
             "additionalProperties": {}
-          },
-          "error": {
-            "type": "string",
-            "description": "Error message",
-            "nullable": true
           }
         },
         "additionalProperties": false
@@ -233,9 +228,9 @@
               "type": "string",
               "enum": [
                 "alert",
-                "progression",
+                "simulation",
                 "social",
-                "simulation"
+                "progression"
               ]
             },
             "nullable": true
@@ -540,6 +535,10 @@
             "nullable": true
           },
           "verified_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "blocked_until": {
             "type": "string",
             "nullable": true
           }
@@ -1187,10 +1186,6 @@
           "region": {
             "type": "string",
             "nullable": true
-          },
-          "name": {
-            "type": "string",
-            "nullable": true
           }
         },
         "additionalProperties": false
@@ -1767,16 +1762,8 @@
             "type": "string",
             "nullable": true
           },
-          "origin_name": {
-            "type": "string",
-            "nullable": true
-          },
           "destination": {
             "type": "string"
-          },
-          "destination_name": {
-            "type": "string",
-            "nullable": true
           },
           "distance_ly": {
             "type": "number",
@@ -2058,14 +2045,6 @@
           "scan": {
             "$ref": "#/components/schemas/app_schemas_devices_ScanInfoSchema"
           },
-          "compact": {
-            "type": "object",
-            "additionalProperties": {}
-          },
-          "unfurl": {
-            "type": "object",
-            "additionalProperties": {}
-          },
           "prospect": {
             "$ref": "#/components/schemas/app_schemas_devices_ProspectInfoSchema"
           },
@@ -2190,6 +2169,11 @@
               "type": "string"
             }
           },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {},
+            "nullable": true
+          },
           "hosting_replicant": {
             "type": "object",
             "additionalProperties": {},
@@ -2204,9 +2188,6 @@
           },
           "description": {
             "type": "string"
-          },
-          "owner": {
-            "$ref": "#/components/schemas/app_schemas_accounts_ReplicantBriefSchema"
           }
         },
         "additionalProperties": false
@@ -2246,6 +2227,13 @@
             "default": null,
             "description": "Device code to link to this device (e.g. an empty_replicant_matrix for a slingshot).",
             "nullable": true
+          },
+          "settings": {
+            "type": "object",
+            "default": null,
+            "description": "Device-type-specific operational settings (e.g. strength, direction).",
+            "additionalProperties": {},
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -2276,6 +2264,11 @@
           },
           "linked_device": {
             "type": "string",
+            "nullable": true
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {},
             "nullable": true
           }
         },
@@ -2367,36 +2360,14 @@
           "device_code": {
             "type": "string"
           },
-          "activated": {
-            "type": "string"
-          },
-          "deactivated": {
-            "type": "string"
-          },
-          "relay_active": {
-            "type": "boolean"
-          },
           "star": {
             "type": "string"
           },
           "location": {
             "type": "string"
           },
-          "location_type": {
-            "type": "string"
-          },
           "origin": {
             "type": "string"
-          },
-          "origin_name": {
-            "type": "string"
-          },
-          "travel_type": {
-            "type": "string"
-          },
-          "hub_bonus": {
-            "type": "boolean",
-            "nullable": true
           },
           "direction": {
             "type": "array",
@@ -2439,10 +2410,6 @@
           "total_distance_ly": {
             "type": "number"
           },
-          "arrival_time": {
-            "type": "string",
-            "nullable": true
-          },
           "progress_percent": {
             "type": "number"
           },
@@ -2461,29 +2428,14 @@
           "resource_type": {
             "type": "string"
           },
-          "new_resource": {
-            "type": "string"
-          },
           "availability": {
-            "type": "string",
-            "nullable": true
+            "type": "string"
           },
           "cycle_time_seconds": {
             "type": "integer"
           },
           "density": {
-            "type": "string",
-            "nullable": true
-          },
-          "site": {
             "type": "string"
-          },
-          "designation": {
-            "type": "string"
-          },
-          "salvage_type": {
-            "type": "string",
-            "nullable": true
           },
           "resources_mined": {
             "type": "integer"
@@ -2572,10 +2524,6 @@
           "ami_directive_status": {
             "type": "string"
           },
-          "controller": {
-            "type": "object",
-            "additionalProperties": {}
-          },
           "controlled_devices": {
             "type": "array",
             "items": {
@@ -2583,21 +2531,10 @@
               "additionalProperties": {}
             }
           },
-          "assigned_devices": {
-            "type": "object",
-            "additionalProperties": {}
-          },
           "attached_devices": {
             "type": "array",
             "items": {
               "type": "string"
-            }
-          },
-          "attached": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": {}
             }
           },
           "distance_ly": {
@@ -2609,14 +2546,10 @@
           "detached": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": {}
+              "type": "string"
             }
           },
           "carrier_code": {
-            "type": "string"
-          },
-          "replicant_code": {
             "type": "string"
           },
           "new_replicant_code": {
@@ -3814,82 +3747,6 @@
         },
         "additionalProperties": false
       },
-      "app_schemas_location_events_LocationEventResolutionResponseSchema": {
-        "type": "object",
-        "properties": {
-          "designation": {
-            "type": "string"
-          },
-          "event_status": {
-            "type": "string"
-          },
-          "rewards": {
-            "type": "object",
-            "additionalProperties": {}
-          },
-          "status": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "app_schemas_species_SpeciesEnvironmentSchema": {
-        "type": "object",
-        "properties": {
-          "biosphere": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            }
-          },
-          "gravity": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            }
-          },
-          "hydrosphere": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            }
-          },
-          "oxygen": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            }
-          },
-          "pressure": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            }
-          },
-          "tectonic": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            }
-          },
-          "temperature": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            }
-          },
-          "toxicity": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            }
-          }
-        },
-        "additionalProperties": false
-      },
       "app_schemas_species_SpeciesSchema": {
         "type": "object",
         "properties": {
@@ -3916,15 +3773,6 @@
           },
           "tech_affinity": {
             "type": "string"
-          },
-          "star_regions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "environment": {
-            "$ref": "#/components/schemas/app_schemas_species_SpeciesEnvironmentSchema"
           }
         },
         "additionalProperties": false
@@ -4598,6 +4446,30 @@
         ],
         "additionalProperties": false
       },
+      "app_schemas_device_commands_DetonateSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string",
+            "default": null,
+            "description": "Kuiper object designation to launch",
+            "nullable": true
+          },
+          "destination": {
+            "type": "string",
+            "default": null,
+            "description": "Planet/moon designation to target",
+            "nullable": true
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
       "app_schemas_device_commands_MessageSchema": {
         "type": "object",
         "properties": {
@@ -4746,96 +4618,6 @@
         "required": [
           "command"
         ],
-        "additionalProperties": false
-      },
-      "app_schemas_tutorials_TutorialStepSchema": {
-        "type": "object",
-        "properties": {
-          "completed": {
-            "type": "boolean"
-          },
-          "current": {
-            "type": "boolean"
-          },
-          "description": {
-            "type": "string"
-          },
-          "hint": {
-            "type": "string"
-          },
-          "key": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "app_schemas_tutorials_TutorialListItemSchema": {
-        "type": "object",
-        "properties": {
-          "available": {
-            "type": "boolean"
-          },
-          "completed": {
-            "type": "boolean"
-          },
-          "current_step": {
-            "type": "integer"
-          },
-          "description": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "order": {
-            "type": "integer"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "total_steps": {
-            "type": "integer"
-          }
-        },
-        "additionalProperties": false
-      },
-      "app_schemas_tutorials_TutorialListResponseSchema": {
-        "type": "object",
-        "properties": {
-          "tutorials": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/app_schemas_tutorials_TutorialListItemSchema"
-            }
-          }
-        },
-        "additionalProperties": false
-      },
-      "app_schemas_tutorials_TutorialDetailResponseSchema": {
-        "type": "object",
-        "properties": {
-          "completed": {
-            "type": "boolean"
-          },
-          "current_step": {
-            "type": "integer"
-          },
-          "description": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "steps": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/app_schemas_tutorials_TutorialStepSchema"
-            }
-          }
-        },
         "additionalProperties": false
       }
     },
@@ -6356,16 +6138,6 @@
               }
             }
           },
-          "201": {
-            "description": "Created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/app_schemas_devices_DeviceCommandResponseSchema"
-                }
-              }
-            }
-          },
           "default": {
             "$ref": "#/components/responses/DEFAULT_ERROR"
           }
@@ -6405,6 +6177,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/app_schemas_device_commands_DetachSchema"
+                  },
+                  {
+                    "$ref": "#/components/schemas/app_schemas_device_commands_DetonateSchema"
                   },
                   {
                     "$ref": "#/components/schemas/app_schemas_device_commands_EnqueuePrintSchema"
@@ -6471,7 +6246,8 @@
                     "deposit_resources": "#/components/schemas/app_schemas_device_commands_DepositResourcesSchema",
                     "dequeue_print": "#/components/schemas/app_schemas_device_commands_DequeuePrintSchema",
                     "detach": "#/components/schemas/app_schemas_device_commands_DetachSchema",
-                    "detonate": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "detect_object": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
+                    "detonate": "#/components/schemas/app_schemas_device_commands_DetonateSchema",
                     "enqueue_print": "#/components/schemas/app_schemas_device_commands_EnqueuePrintSchema",
                     "launch": "#/components/schemas/app_schemas_device_commands_NoParamSchema",
                     "message": "#/components/schemas/app_schemas_device_commands_MessageSchema",
@@ -8923,16 +8699,6 @@
     "/v1/locations/{location_code}/events/{designation}": {
       "post": {
         "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/app_schemas_location_events_LocationEventResolutionResponseSchema"
-                }
-              }
-            }
-          },
           "default": {
             "$ref": "#/components/responses/DEFAULT_ERROR"
           }
@@ -9231,16 +8997,6 @@
     "/v1/tutorials": {
       "get": {
         "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/app_schemas_tutorials_TutorialListResponseSchema"
-                }
-              }
-            }
-          },
           "default": {
             "$ref": "#/components/responses/DEFAULT_ERROR"
           }
@@ -9253,16 +9009,6 @@
     "/v1/tutorials/{slug}": {
       "get": {
         "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/app_schemas_tutorials_TutorialDetailResponseSchema"
-                }
-              }
-            }
-          },
           "default": {
             "$ref": "#/components/responses/DEFAULT_ERROR"
           }

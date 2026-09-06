@@ -13,10 +13,18 @@ Non-obvious bits:
   gameplay). Reputation apply = one transaction: null all, then per-key
   updates — so species missing from the payload return to unmet and unknown
   keys are no-ops. Refresh-only failures are log-only (no banner) by design.
-- **Spec drift patched (2026-07-24):** live species payloads carry an optional
-  `star_regions` array the spec omitted; added as a typed key to
-  `openapi-2.3.0-edits.json` (spec stays strict per policy). Re-apply after a
-  spec re-fetch.
+- **Spec drift patched twice, both still carried:** `star_regions`, an optional
+  array upstream omits (2026-07-24), and `environment` (2026-09-06), the v3
+  eight-key `[min, max]` block every species carries. `SpeciesSchema` is
+  `additionalProperties: false`, so the undeclared `environment` threw on every
+  load and **this screen was dead until the v3 sweep found it** — nothing else
+  reads `/v1/species`, so no other surface reported the break. Both patches live
+  at the tail of the schema in the active `-edits` file; see
+  [[openapi-spec-layout]] for how they were typed. Re-apply after a spec re-fetch.
+- **`environment` is the terraforming target ranges** — temperature, pressure,
+  oxygen, toxicity, hydrosphere, tectonic, biosphere, gravity — and is what makes
+  a species a terraforming *destination* rather than a reputation counterparty.
+  Nothing maps it into `Civilisation` yet.
 - `total_reputation` is spec'd `number` (generated `Double?`) but is whole
   points — mapped with `Int(...)`. Tier thresholds are undocumented; the UI
   shows the raw standing only.
