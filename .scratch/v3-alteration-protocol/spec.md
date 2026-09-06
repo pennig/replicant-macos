@@ -210,11 +210,115 @@ still hold an `ftl_beacon` — which may mean the season reset survey state.
 **Unverified; worth confirming before assuming the local cache is merely empty**
 (the app's sqlite file is 0 bytes, so the app itself has been reset).
 
-## Open questions for Matt
+## Decisions (2026-09-06, with Matt)
 
-1. Does terraforming get its own sidebar screen, or live inside Locations detail?
-2. Is the simulation feature worth building as a full screen (scenario list,
-   active runs, history, leaderboards), or a minimal "enter the training
-   scenario" path to unlock terraforming, with the competitive layer later?
-3. Do we play the impacts game (Kuiper detection, vector charges, trajectory
-   steering) this season, or terraform with devices only?
+The three questions this sweep raised resolved into one ordering, because each
+answer depends on measurements only the simulation can supply.
+
+### 1. Terraforming is driven by hand first, automated second
+
+A terraforming run is a control loop — read seven attributes, compare against a
+species' eight target ranges, adjust N device strengths — and that is what
+`DirectiveEngine` is for. It is **not** built as a directive yet, for one reason:
+the gains are unmeasured. The docs are explicit that greenhouse runaway is
+*causal*, firing at +1.0/tick at full strength once pressure passes 10 atm
+regardless of drift, and "very difficult to recover from". A controller written
+against guessed gains oscillates into exactly that.
+
+There is also a shape mismatch. All eight existing run machines are **step**
+machines — dispatch, confirm arrival, dispatch, confirm completion. Terraforming
+has no steps; it converges and never completes. `MissionStepMachine` is the wrong
+scaffolding, and the engine's outer tick loop is the right one. A `TerraformRun`
+needs new continuous-controller scaffolding, which is a second-pass job.
+
+**First pass:** a per-world control panel with its own sidebar item under the
+**Operations** section (which holds 5 of the sidebar's 13 items today; Simulations
+and Terraforming take it to 7, which the existing three-section grouping absorbs
+without redesign). Shows current / target / equilibrium per attribute, a 0.0–1.0
+strength control and a direction toggle per device, and anomaly warnings. The
+account cap of **5 terraform monitors** bounds this to a five-row dashboard, which
+is why it does not want to be scattered across five location rows nobody remembers
+to visit.
+
+**Also first pass, and independent:** the seven attributes plus `category` land in
+`PlanetInspector` / `MoonInspector` in `LocationDetailView`. Those are body facts,
+the view already dispatches per location type, and they are how you *choose* a
+world before committing to a multi-hour operation.
+
+**Second pass:** `TerraformRun`, written against constants measured in the sim.
+
+### 2. The simulation ships in full, leaderboards included
+
+Reframed from the original "full screen vs minimal unlock path", which was the
+wrong axis. The simulation is three things at once:
+
+- **A gate.** `terraforming_training_1` unlocks the terraforming components. There
+  is no path around it.
+- **A measurement instrument.** The training scenario runs a sped-up world where
+  tick cadence, drift strength against body mass, anomaly frequency and device
+  response curves are observable at zero risk to real devices. Every constant the
+  `TerraformRun` controller needs is in there. **This is what makes the sim a
+  prerequisite for automation rather than merely for device unlock.**
+- **An integration environment for `DirectiveEngine`.** A fresh galaxy with a
+  fresh loadout on a fast clock is the testbed the engine has never had. Most of
+  its serious defects were found by live fire — see `brain-salvage-build`,
+  `brain-mine-build`, `blueprint-components`. Caveat worth keeping honest: the sim
+  loadout has no autofactory and runs under a speed modifier, so absolute timings
+  do not transfer and it exercises the **bootstrap-shaped** runs (survey, mine,
+  haul) rather than event fulfilment, the relay mesh, or restock.
+
+Scope is full because the marginal cost is near zero: list / enter / active /
+history are all required to run the training scenario at all, and the competitive
+layer adds only two unauthenticated GETs and a ranking table. All five scenarios
+currently show **0 completions globally**.
+
+### 3. Impacts — patch the spec now, defer the feature
+
+The two halves decouple cleanly, so they are being taken at different times.
+
+**Now:** declare the eight undeclared keys on
+`app_schemas_devices_DeviceCommandResponseSchema` — `detect_target` for
+`detect_object`, and `approach_angle` / `approach_speed` / `composition` /
+`impact_eta` / `kuiper_object` / `mass_class` / `object_designation` for
+`detonate`. The schema is `additionalProperties: false`, so without this the first
+attempt throws *after* the server has acted and the op records `.failed`, which
+`CommandGovernor` reads as safe to re-POST. Same class as the `hub_bonus` throw
+that cost three hours on 2026-08-21.
+
+**Later:** the feature. The effect sizes justify eventually building it — a giant
+ice body at fast-and-steep delivers Hydro +100 against an aquifer tap's
++0.6/tick, roughly 167 ticks of the dedicated device in one throw — but
+`vector_charge` and `trajectory_deflector` are both absent from the blueprint list
+(simulation-locked), the 24-hour detection window is real logistics pressure, and
+the strategy guide describes a complete device-only path. `DiversionSnapshot` and
+`ActiveTaskCard` already model the defensive half, so the offensive case widens an
+existing model rather than adding one — it does not get cheaper by waiting, and it
+does not get more urgent either.
+
+## Build order that falls out
+
+1. **Simulation feature** — full, including leaderboards. Unblocks everything.
+2. **Run `terraforming_training_1`** — unlocks the components, and measures the
+   constants §1 is waiting on. Record what it measures back into this directory.
+3. **Body attributes** into `PlanetInspector` / `MoonInspector`. Independent of
+   1 and 2; can land in parallel.
+4. **Terraforming control panel** — device `settings` support (`strength`,
+   `direction`) plus the per-world readout.
+5. **`TerraformRun`** — the continuous controller, against measured gains.
+6. **Impacts** — feature only; the spec patch is separate and earlier.
+
+## Still unknown, and worth answering early
+
+- **A tick's wall-clock duration is documented nowhere.** All six terraforming
+  pages give rates per tick and none says what a tick is. It decides whether the
+  control panel is a live dashboard or a twice-a-day check, and whether a 6-tick
+  solar flare warning is ten minutes of notice or a day. Measurable in the
+  training sim, and worth measuring first.
+- **Whether equilibrium values reach the client at all.** The docs make
+  equilibrium central (device rates must beat drift; coupling scales with
+  deviation from it) but no probe has shown one on the wire. It may be on
+  `terraforming.status` rather than `GET /v1/locations/{code}`.
+- **`terraforming.status`'s payload.** Named on two docs pages, absent from the
+  event catalogue.
+- **Whether the season reset survey state.** Every body probed reports
+  `scanned: false`, including `SOL-3` where an `ftl_beacon` is still held.
