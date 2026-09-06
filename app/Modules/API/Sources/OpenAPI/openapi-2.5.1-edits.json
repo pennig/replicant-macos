@@ -2530,6 +2530,9 @@
           "scan_type": {
             "type": "string"
           },
+          "detect_target": {
+            "type": "string"
+          },
           "eta_seconds": {
             "type": "integer"
           },
@@ -2672,6 +2675,27 @@
             "items": {
               "type": "string"
             }
+          },
+          "approach_angle": {
+            "type": "number"
+          },
+          "approach_speed": {
+            "type": "number"
+          },
+          "composition": {
+            "type": "string"
+          },
+          "impact_eta": {
+            "type": "string"
+          },
+          "kuiper_object": {
+            "type": "string"
+          },
+          "mass_class": {
+            "type": "string"
+          },
+          "object_designation": {
+            "type": "string"
           }
         },
         "additionalProperties": false

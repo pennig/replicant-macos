@@ -105,4 +105,57 @@ struct DeviceCommandResponseDecodingTests {
         let absent = try decode(#"{"status": "travel_started"}"#)
         #expect(absent.hubBonus == nil)
     }
+
+    // A sensor array sweeping the outer system reports the belt it swept.
+    @Test func decodesDetectObjectStart() throws {
+        let response = try decode(
+            """
+            {
+              "completes_at": "2026-09-01T23:03:53+01:00",
+              "detect_target": "DELTA-KUIPER",
+              "device_code": "F652A584",
+              "eta_seconds": 3600,
+              "started_at": "2026-09-01T22:03:53+01:00",
+              "status": "detect_started"
+            }
+            """)
+
+        #expect(response.status == "detect_started")
+        #expect(response.detectTarget == "DELTA-KUIPER")
+        #expect(response.etaSeconds == 3600)
+    }
+
+    // A vector charge launching a Kuiper body reports the whole trajectory.
+    @Test func decodesDetonateLaunch() throws {
+        let response = try decode(
+            """
+            {
+              "approach_angle": 8.7,
+              "approach_speed": 0.79,
+              "composition": "carbonaceous",
+              "destination": "DELTA-3",
+              "device_code": "FC838B3F",
+              "impact_eta": "2026-09-02T21:03:55.524215",
+              "kuiper_object": "DELTA-KUIPER-001",
+              "mass_class": "large",
+              "object_designation": "DELTA-OBJ-3",
+              "status": "launched"
+            }
+            """)
+
+        #expect(response.status == "launched")
+        #expect(response.approachAngle == 8.7)
+        #expect(response.approachSpeed == 0.79)
+        #expect(response.composition == "carbonaceous")
+        #expect(response.kuiperObject == "DELTA-KUIPER-001")
+        #expect(response.massClass == "large")
+        #expect(response.objectDesignation == "DELTA-OBJ-3")
+    }
+
+    // No response property is `required`, so an explicit null decodes to nil and a
+    // non-nullable declaration is safe for keys we have never seen arrive null.
+    @Test func explicitNullDecodesToNilOnANonNullableKey() throws {
+        let response = try decode(#"{"status": "launched", "impact_eta": null}"#)
+        #expect(response.impactEta == nil)
+    }
 }
